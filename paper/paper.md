@@ -210,6 +210,10 @@ enc(qᵢ) = 10 + i            for qᵢ ∈ Q, qᵢ ≠ q_h
 enc(q_h) = 10 + |Q|         (halt state marker)
 ```
 
+The encoding function `enc` is injective on `Q ∪ Γ`: distinct states
+and tape symbols map to distinct cell types. This ensures that every
+TM configuration has a unique Cellaria representation.
+
 **Definition 2 (Cellaria grid configuration).** A 1×N grid `G` encodes
 the TM configuration `(q, tape, pos)` as follows:
 
@@ -217,6 +221,12 @@ the TM configuration `(q, tape, pos)` as follows:
   `G[pos] = enc(q)` and `G[pos+1] = enc(tape[pos])`.
 
 The pair `[enc(q), enc(tape[pos])]` forms the rule-matching pattern.
+
+For the encoding to be valid, the grid must have size at least
+`max(pos + 1)` where `pos` is the head position. Blank cells
+(`enc(⊔) = 0`) may extend beyond the tape to fill the remainder
+of the grid. This ensures that the rule `[enc(q), enc(a)]` always
+has a complete pattern match at `pos`.
 
 **Definition 3 (Rule construction).** For each transition `δ(q, a) = (q', a', d)`,
 construct a Cellaria rule `R(q, a)`:
@@ -240,8 +250,11 @@ shift_spec(R) = { direction: east, steps: 1 }
 shift_spec(H) = (no shift, empty group)
 ```
 
-For the halt transition `δ(q_h, a)`, no rule is generated (the head
-stops on empty marker `enc(q_h)`, which has no matching rule).
+For a halt transition `δ(q, a) = (q', a', H)`, set `q' = q_h`
+in the encoding. By Definition 1, `enc(q_h) = 10 + |Q|`. Since
+no rule is generated with `id[0] = enc(q_h)`, the head marker
+for the halt state has no matching rule. The system stabilizes
+when the head enters this state.
 
 **Definition 4 (Initial configuration).** Given TM input `w = a₀a₁...a_{m-1}`,
 the initial Cellaria grid is:
@@ -394,7 +407,7 @@ cell (type 0), no rule matches and the system halts.
 The inverse encoding (type 2 = 0, type 1 = 1) is used to make
 the output visually distinct from the input.
 
-### 3.5. Complexity Analysis
+### 3.5. Complexity of TM Simulation
 
 **Theorem 2 (Time preservation).** A Cellaria rule set constructed
 per Theorem 1 requires exactly one tick per TM step.
@@ -492,13 +505,15 @@ reads the output grid state and writes the next input state across
 the system boundary. The computation (the tag step itself) takes
 place entirely within the grid.
 
-If one wishes to avoid external orchestration, a meta-interpreter
-can be constructed within Cellaria: a Cellaria program that reads
-(step input) from the boundary, executes the tag step, and outputs
-(step result + halt signal) to the boundary. Such a meta-interpreter
-is a finite composition of the rules in Section 4.2 combined with
-boundary I/O rules. Its construction is straightforward but
-adds no new insight to the completeness proof; we omit it for brevity.
+Alternatively, if one wishes to avoid external orchestration entirely,
+one can construct a meta-interpreter within Cellaria: a subroutine
+composed of the tag-step rules that reads input from boundary,
+executes the step, and signals completion via output. This demonstrates
+that tag system computation is achievable without external control.
+Such a meta-interpreter is a finite composition of the rules in
+Section 4.2 combined with boundary I/O rules. Its construction is
+straightforward but adds no new insight to the completeness proof;
+we omit it for brevity.
 
 ### 4.5. Transitive Completeness
 
@@ -608,6 +623,29 @@ both theoretical and practical implications:
 - The model's determinism (Lemma 1) and the formal proof of
   conflict-free TM rules provide a foundation for verification
   of Cellaria programs.
+- An additional implication is the model's inherent parallelism.
+  Since Lemma 1 guarantees that rules do not conflict, multiple
+  non-overlapping matches can be applied simultaneously in a single
+  tick. This suggests that Cellaria is naturally suited for parallel
+  and distributed implementation, where each rule match can be
+  executed on a separate processor.
+
+### 5.6. Open Questions and Future Work
+
+Several directions remain open:
+
+1. **Non-determinism:** What is the expressiveness of Cellaria with
+   non-deterministic rule sets (overlapping patterns with equal
+   priority)?
+2. **Optimization:** Can Cellaria programs be compiled to efficient
+   machine code, e.g., for GPU execution?
+3. **Abstraction:** What higher-level programming languages can be
+   designed to translate naturally to Cellaria rules?
+4. **Spatial complexity:** What spatial lower bounds exist for
+   Cellaria programs? Can we prove that some computations inherently
+   require Ω(n) grid cells?
+5. **Variants:** What happens if we extend to 3D grids, or if we
+   permit diagonal shifts?
 
 ---
 
@@ -630,7 +668,12 @@ chained shift, and greedy arbitration. No global control, no shared memory,
 and no central scheduler is required.
 
 The result establishes that local reduction, as formalized by Cellaria,
-is a sufficient basis for universal computation.
+is a sufficient basis for universal computation. Moreover, this work
+demonstrates that local reduction is not merely sufficient but also
+efficient for universal computation: the TM-to-Cellaria translation
+preserves both time (one tick per step) and space (linear in tape size).
+This suggests that locality imposes no fundamental computational
+penalty.
 
 ---
 
@@ -747,6 +790,10 @@ Tick 4: [2, 1, 2, 2, 10, 2, 0, 0, ...]    write 0, move right
 Tick 5: [2, 1, 2, 2, 1, 10, 0, 0, ...]    write 1, move right
 Tick 6: [2, 1, 2, 2, 1, 10, 0, 0, ...]    halt (no match for [10, 0])
 ```
+
+At tick 6, the head is at position 5. The pattern `[10, 0]` (head
+followed by blank) does not match any rule (we only have `[10, 1]`
+and `[10, 2]`). The system enters a stable state with zero matches.
 
 Output: `2 1 2 2 1` = `0 1 0 0 1` (binary `01001` = bit-inverted `10110`).
 
