@@ -519,7 +519,7 @@ Tick 6: [0, 0, 2, 1, 2, ...]    stable: B A B ✓
 ### 4.4. Composition and Axiom 3 (Revised)
 
 One tag system step corresponds to one Cellaria run: from initial state
-(string + marker 10) to zero-match state. The result is the string
+to a stable configuration with no matching rules. The result is the string
 prepared for the next step.
 
 **Meta-Interpreter Construction:**
@@ -537,7 +537,7 @@ The composition of meta-interpreter rules with boundary I/O rules
 creates a feedback loop: output from tick N becomes input for tick N+1.
 By Axiom 3, this is permitted because I/O is external to the grid.
 
-**Theorem 4.1 (Tag System Composition).** A Cellaria meta-interpreter
+**Theorem 5 (Tag System Composition).** A Cellaria meta-interpreter
 constructed as above can execute an arbitrary finite sequence of tag
 system steps by repeated boundary feedback without modification to the
 rule set.
@@ -546,12 +546,13 @@ Thus, any tag system computation (which is a finite sequence of steps,
 or a potentially infinite sequence that terminates) is realised by
 Cellaria with external coordination through Axiom 3.
 
-**Corollary 4.2.** By Minsky's theorem, tag systems with `m = 2` are
+**Corollary 5.1.** By Minsky's theorem, tag systems with `m = 2` are
 Turing-complete. Therefore, Cellaria is Turing-complete.
 
 ### 4.5. Transitive Completeness
 
-1. Tag systems (m=2, binary alphabet) are Turing-complete [Minsky 1961].
+1. Tag systems (m=2) are Turing-complete [Minsky 1961]; for binary
+   alphabet, see Cocke and Minsky (1964).
 2. One tag system step is simulated by Cellaria (Section 4.2).
 3. Step composition is orchestrated through boundary I/O (Axiom 3).
 Therefore, Cellaria is Turing-complete.
@@ -706,8 +707,8 @@ is a sufficient basis for universal computation. Moreover, this work
 demonstrates that local reduction is not merely sufficient but also
 efficient for universal computation: the TM-to-Cellaria translation
 preserves both time (one tick per step) and space (linear in tape size).
-This suggests that locality imposes no fundamental computational
-penalty.
+This suggests that locality imposes no asymptotic computational
+penalty in space or time for the class of Turing machines.
 
 ---
 
