@@ -4,10 +4,9 @@ use cellaria::config::load_config;
 use cellaria::engine::{apply_matches, arbitrate, detect_matches, run_tick};
 use cellaria::Grid;
 use cellaria::VecStorage;
-use cellaria::types::{Cell, CellType, CellValue, OverflowAction, RuleId, AffectedRegion, RuleMatch, Direction};
+use cellaria::types::{Cell, CellType, CellValue, RuleMatch};
 
 fn bench_detect_matches(c: &mut Criterion) {
-    // Загружаем реальный конфиг с несколькими правилами
     let (grid, rule_index) = load_config("configs/collision.yaml").expect("bench: load_config failed");
 
     c.bench_function("detect_matches", |b| {
@@ -18,18 +17,13 @@ fn bench_detect_matches(c: &mut Criterion) {
 }
 
 fn bench_arbitrate(c: &mut Criterion) {
-    // Создаём 1000 RuleMatch'ей с разными приоритетами и конфликтующими координатами
     let mut matches = Vec::with_capacity(1000);
     for i in 0..1000 {
         matches.push(RuleMatch {
-            rule_id: RuleId(i),
-            priority: (i % 10) as u8,
-            age: (i as u64) % 100,
-            center: (i % 50, i / 50),
-            affected_region: AffectedRegion::LocalGroup {
-                group_cells: vec![(i % 50, i / 50)],
-                result_cells: vec![CellValue(CellType(1))],
-            },
+            x: (i % 50) as u32,
+            y: (i / 50) as u32,
+            pattern: vec![vec![(i % 10) as u8]],
+            rule_id: vec![CellType((i % 10) as u8)],
         });
     }
 
@@ -41,38 +35,25 @@ fn bench_arbitrate(c: &mut Criterion) {
 }
 
 fn bench_apply_matches(c: &mut Criterion) {
-    // Создаём решётку 10x10 и набор RuleMatch'ей
     let storage = VecStorage {
         cells: vec![Cell::default(); 100],
         width: 10,
         height: 10,
     };
     let mut grid = Grid::new(storage);
+    // Need a dummy rule_index for apply_matches
+    let rule_index = std::collections::HashMap::new();
 
     let accepted = vec![
         RuleMatch {
-            rule_id: RuleId(1),
-            priority: 10,
-            age: 0,
-            center: (0, 0),
-            affected_region: AffectedRegion::LocalGroup {
-                group_cells: vec![(0, 0), (0, 1)],
-                result_cells: vec![CellValue(CellType(1)), CellValue(CellType(2))],
-            },
+            x: 0, y: 0,
+            pattern: vec![vec![1]],
+            rule_id: vec![CellType(1)],
         },
         RuleMatch {
-            rule_id: RuleId(2),
-            priority: 5,
-            age: 0,
-            center: (5, 5),
-            affected_region: AffectedRegion::Chain {
-                group_cells: vec![(5, 5), (5, 6)],
-                result_cells: vec![CellValue(CellType(3)), CellValue(CellType(4))],
-                chain_cells: vec![(5, 5), (5, 6), (5, 7)],
-                direction: Direction::SOUTH,
-                fill_value: CellValue(CellType(0)),
-                overflow_action: OverflowAction::Discard,
-            },
+            x: 5, y: 5,
+            pattern: vec![vec![3]],
+            rule_id: vec![CellType(3)],
         },
     ];
 
@@ -83,9 +64,8 @@ fn bench_apply_matches(c: &mut Criterion) {
                 width: 10,
                 height: 10,
             });
-            // Переносим accepted внутрь, т.к. apply_matches не модифицирует accepted
             let acc = accepted.clone();
-            apply_matches(&mut g, &acc);
+            apply_matches(&mut g, &acc, &rule_index);
         })
     });
 }

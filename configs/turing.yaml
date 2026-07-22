@@ -10,7 +10,7 @@
 # Механика:
 #   Головка + символ под ней = цепочка из 2 ячеек [10, X].
 #   Правило заменяет символ (0↔1) и сдвигает цепочку на 1 вправо.
-#   Позади остаётся fill_value=0.
+#   Позади остаётся fill (тип 0).
 #   Когда головка доходит до пустой ячейки — нет правила для (10, 0) — остановка.
 #
 # Начальная лента: 1 0 1 1 0
@@ -39,31 +39,21 @@ grid:
 
 rules:
   # (Q0, 0) → (Q0, 1), East
-  - id: 1
+  - id: [10, 2]
     priority: 10
-    pattern:
-      - offset: [0, 0]
-        type: 10
-      - offset: [1, 0]
-        type: 2
-    result: [10, 1]
-    shift:
-      direction: East
-      chain_length: 2
-      fill_value: 0
-      overflow: discard
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - [-1, 0, 1]
 
   # (Q0, 1) → (Q0, 0), East
-  - id: 2
+  - id: [10, 1]
     priority: 10
-    pattern:
-      - offset: [0, 0]
-        type: 10
-      - offset: [1, 0]
-        type: 1
-    result: [10, 2]
-    shift:
-      direction: East
-      chain_length: 2
-      fill_value: 0
-      overflow: discard
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - [-1, 0, 2]

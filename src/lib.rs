@@ -12,12 +12,12 @@
 //!
 //! Исходный код разделён на модули по функциональному признаку:
 //!
-//! - [`types`](mod@types) — базовые типы данных (ячейка, правило, сдвиг, итд).
+//! - [`types`](mod@types) — базовые типы данных (ячейка, правило, сдвиг и т.д.).
 //! - [`storage`](mod@storage) — абстракция хранилища решётки и две реализации
 //!   ([`VecStorage`], [`ChunkStorage`]).
 //! - [`grid`](mod@grid) — обёртка [`Grid`] над хранилищем с унифицированным API.
 //! - [`engine`](mod@engine) — пять фаз тика симуляции
-//!   (input, detect, arbitrate, apply, flush).
+//!   (ввод, обнаружение, арбитраж, применение, сброс).
 //! - [`config`](mod@config) — загрузка правил и начального состояния из YAML.
 //! - [`rule_store`](mod@rule_store) — самомодифицирующееся хранилище правил.
 //! - [`error`](mod@error) — единый тип ошибки [`CellariaError`].
@@ -31,7 +31,7 @@
 //! ## Конфигурация
 //!
 //! Правила и начальное состояние загружаются из YAML-файлов через
-//! [`load_config`](config::load_config). Примеры конфигов находятся в директории `configs/`.
+//! [`load_config`](config::load_config). Примеры конфигов находятся в каталоге `configs/`.
 //!
 //! ## Примеры
 //!
@@ -44,10 +44,10 @@
 //! let initial = grid.get_cell(0, 0).unwrap().value.0 .0;
 //!
 //! // Один тик симуляции
-//! let accepted = run_tick(&mut grid, &rule_index);
+//! let (accepted, _outputs) = run_tick(&mut grid, &rule_index);
 //!
 //! // После тика состояние могло измениться
-//! println!("Initial: {}, matches: {}", initial, accepted.len());
+//! println!("Начальное: {}, совпадений: {}", initial, accepted.len());
 //! ```
 //!
 //! ```rust
@@ -91,9 +91,9 @@ pub mod rule_store;
 mod storage;
 pub mod types;
 
-// Явные re-exports публичного API
+// Явные реэкспорты публичного API
 pub use config::load_config;
-pub use engine::{apply_input, apply_matches, arbitrate, detect_matches, flush_output, run_tick, Engine};
+pub use engine::{run_tick, Engine};
 pub use error::CellariaError;
 pub use grid::{Grid, SimpleGrid};
 pub use rule_store::RuleStore;

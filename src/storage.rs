@@ -38,13 +38,17 @@ pub struct VecStorage {
     pub height: usize,
 }
 
+impl Default for VecStorage {
+    fn default() -> Self {
+        Self::new(1, 1)
+    }
+}
+
 impl VecStorage {
-    /// Создать новое хранилище фиксированного размера `width × height`
-    /// со всеми ячейками по умолчанию.
+    /// Создать новую решётку заданного размера со значениями по умолчанию.
     pub fn new(width: usize, height: usize) -> Self {
-        let default = Cell::default();
         Self {
-            cells: vec![default; width * height],
+            cells: vec![Cell::default(); width * height],
             width,
             height,
         }
@@ -248,7 +252,7 @@ impl GridStorage for ChunkStorage {
     }
 
     fn active_cells(&self) -> Box<dyn Iterator<Item = (usize, usize)> + '_> {
-        let default = self.default_cell.clone();
+        let default = &self.default_cell;
         Box::new(self.chunks.iter().flat_map(move |(&(cx, cy), chunk)| {
             chunk
                 .cells

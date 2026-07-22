@@ -1,3 +1,9 @@
+# IO-границы: вход (канал 0) и выход (канал 1).
+#
+# Демонстрирует работу с граничными буферами.
+# Правило [5] активируется, когда на ячейке (0,0) появляется тип 5,
+# затем сдвигается на восток.
+
 grid:
   width: 8
   height: 1
@@ -16,14 +22,11 @@ grid:
       max_queue: 16
 
 rules:
-  - id: 1
+  - id: [5]
     priority: 10
-    pattern:
-      - offset: [0, 0]
-        type: 5
-    result: [5]
-    shift:
-      direction: East
-      chain_length: 2
-      fill_value: 0
-      overflow: discard
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - [0, 0, 5]

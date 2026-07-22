@@ -17,6 +17,15 @@ pub struct Grid<S: GridStorage> {
     pub boundaries: HashMap<(usize, usize), BoundaryBuffer>,
 }
 
+impl<S: GridStorage + Default> Default for Grid<S> {
+    fn default() -> Self {
+        Self {
+            storage: S::default(),
+            boundaries: HashMap::new(),
+        }
+    }
+}
+
 impl<S: GridStorage> Grid<S> {
     /// Создать решётку с указанным хранилищем.
     pub fn new(storage: S) -> Self {
@@ -70,7 +79,6 @@ impl<S: GridStorage> Grid<S> {
     }
 
     /// Удалить граничный буфер по координатам.
-    #[allow(dead_code)]
     pub fn remove_boundary(&mut self, x: usize, y: usize) {
         self.boundaries.remove(&(x, y));
     }
@@ -88,8 +96,10 @@ impl<S: GridStorage> Grid<S> {
     }
 
     /// Получить канал для координаты, если это граничная ячейка.
-    pub fn get_channel(&self, x: usize, y: usize) -> Option<u32> {
-        self.boundaries.get(&(x, y)).map(|b| b.channel)
+    /// В текущей реализации канал определяется из конфигурации.
+    /// Для упрощения возвращаем `None` — логика каналов вынесена в RuleStore.
+    pub fn get_channel(&self, _x: usize, _y: usize) -> Option<u32> {
+        None
     }
 
     /// Все координаты граничных ячеек.
