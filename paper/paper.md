@@ -50,7 +50,10 @@ Formally, by "local reduction" in Cellaria we mean:
 (1) pattern matching over finite horizontal sequences of adjacent cells
     of arbitrary length,
 (2) asymmetric chained shift where only the center cell (the head) moves
-    and its origin is cleared to default,
+    a finite number of steps in one direction and its origin is cleared
+    to default; this preserves *locality of effect* (only two cells are
+    modified) while relaxing the classical *locality of speed* constraint
+    to permit distant jumps within a single tick,
 (3) priority-based greedy arbitration resolving overlapping matches
     deterministically.
 
@@ -75,6 +78,16 @@ differs fundamentally:
 
 Cellaria is closer to a rule-based rewriting system embedded in a grid
 than to a cellular automaton.
+
+This distinction is practically relevant. The proof of Turing
+completeness for the elementary cellular automaton Rule 110 [Cook 2004]
+relies on demonstrating that complex emergent structures (gliders,
+collisions) simulate a cyclic tag system — a tour de force of global
+analysis. In Cellaria, by contrast, the translation from a Turing
+machine is direct, modular, and constructive: each TM transition becomes
+exactly one Cellaria rule, with Lemma 1 guaranteeing conflict-free
+execution. This makes Cellaria programs amenable to compositional
+verification, a property notoriously difficult for cellular automata.
 
 ### 1.3. Why Not Turing Machines?
 
@@ -186,6 +199,22 @@ shift matches:
 Only the head moves. The rest of the pattern (the "tail") stays in place.
 This is asymmetrical: the head is the active element; the tail is passive
 context.
+
+**Remark (Locality of effect vs. locality of information speed).**
+A chained shift with `steps > 1` changes only two cells: the destination
+cell (which receives the head's type) and the origin cell (which is
+cleared). In this sense, the *effect* of the rule is strictly local:
+it touches only the endpoints of the shift. This is distinct from
+*locality of information speed* in classical cellular automata, where
+each cell can only influence its immediate neighbors per tick and
+information propagates at speed 1. Cellaria intentionally relaxes the
+speed constraint while preserving locality of effect: no rule inspects
+or modifies the intermediate cells between origin and destination.
+Theorem 1 then demonstrates that even with this relaxed notion of
+locality — where information can leap — no global control is required
+for universal computation. Characterising the exact boundary between
+locality of effect and locality of speed remains an open theoretical
+question.
 
 ### 2.5. Tick Cycle
 
@@ -429,6 +458,15 @@ for any grid state, at most one rule matches at each position,
 and no two matches overlap. The greedy arbitration algorithm
 accepts all matches.
 
+**Corollary 2 (Parallel execution).** Under the TM rule set constructed
+per Definition 3, Lemma 1 guarantees that no two rules match at
+overlapping positions. Therefore, all matches in a given tick are
+pairwise independent and can be applied in any order — or simultaneously
+in a single parallel pass over the grid — without affecting the final
+configuration. This provides a direct path to efficient parallel
+implementation on GPU or FPGA architectures, as the detect and apply
+phases for the TM simulation require no sequential arbitration.
+
 ### 3.4. Implementation: Bit Inversion
 
 The configuration `configs/turing.yaml` implements a bit-inverting TM
@@ -590,6 +628,9 @@ stronger, fully internal completeness result.
 
 **Corollary 5.1.** By Minsky's theorem, tag systems with `m = 2` are
 Turing-complete. Therefore, Cellaria is Turing-complete.
+*Note: this completeness path assumes external coordination via Axiom 3
+for step composition; Theorem 1 provides the stronger, fully internal
+result.*
 
 ### 4.5. Transitive Completeness
 
@@ -711,6 +752,11 @@ both theoretical and practical implications:
   by priority. Characterising exactly which rule sets admit fully parallel
   execution — and whether a static analysis can determine this — remains
   an open question.
+- The relaxation of locality of speed, while preserving locality of
+  effect, raises a fundamental question: what is the minimal speed of
+  information propagation necessary for universality in a locally-acting
+  system? Cellaria provides an upper bound: a single tick suffices for
+  any finite jump.
 
 ### 5.6. Open Questions and Future Work
 
@@ -740,10 +786,13 @@ boundary only, rules stored externally, and cleanup through rules.
 
 Two independent proofs demonstrate Turing completeness:
 
-1. **Theorem 1**: a constructive translation from any Turing machine
-   to Cellaria rules, with Lemma 1 guaranteeing conflict-free execution.
-2. **Section 4**: a reduction through tag systems (Minsky, m=2)
-   with explicit handling of Axiom 3 for step composition.
+1. **Theorem 1** provides a *strong, fully internal* completeness
+   result: the entire computation runs within the grid, requiring no
+   external intervention or I/O beyond the initial configuration.
+2. **Section 4** provides an *I/O-assisted* completeness proof via
+   tag systems (Minsky, m=2). While step composition here relies on
+   boundary I/O (Axiom 3), this proof path independently confirms that
+   tag system semantics are faithfully expressible in Cellaria.
 
 Both proofs rely solely on the primitive operations: pattern matching,
 chained shift, and greedy arbitration. No global control, no shared memory,
