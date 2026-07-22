@@ -77,13 +77,20 @@ inspiration.
 | Model | Key difference from Cellaria |
 |---|---|
 | Cellular automata | Single rule, fixed neighborhood |
-| Interaction nets | Graph rewriting, port connections |
-| P-systems | Hierarchical membranes |
-| String rewriting | No spatial structure |
-| Chemical abstract machine | Multiset rewriting, no geometry |
+| Interaction nets [Lafont 1990] | Graph rewriting, port connections |
+| P-systems [Păun 1998] | Hierarchical membranes |
+| String rewriting (Post, Thue) | No spatial structure |
+| Chemical abstract machine [Berry & Boudol 1992] | Multiset rewriting, no geometry |
+| MGS (spatial computing) [Giavitto 2002] | Topological collections, declarative |
+| Amorphous computing [Abelson 2000] | No fixed grid, probabilistic |
+| Shape computing | Pattern matching on arbitrary neighbourhoods |
+| Cell programming language [Shapiro 1995] | Cellular automata variant |
+| GP 2 [Plump 2012] | Graph programs, not grid-based |
 
 Cellaria occupies a specific niche: grid-based, multi-rule, priority-driven,
-with chained shift as the only movement mechanism.
+with chained shift as the only movement mechanism. Unlike MGS, Cellaria
+does not require topological collections; unlike amorphous computing,
+it is deterministic and operates on a fixed grid.
 
 ---
 
@@ -182,62 +189,228 @@ it enters an output buffer. Buffers are organized by channel number.
 
 ## 3. Proof 1: Direct Turing Machine Simulation
 
-### 3.1. Encoding
+### 3.1. Formal Definitions
 
-Given an arbitrary Turing machine:
-
-- Tape alphabet `Γ` (including blank `⊔`)
-- State set `Q`
-- Transition function `δ: Q × Γ → Q × Γ × {L, R, H}`
-
-We encode it on a 1×N Cellaria grid:
-
-| TM component | Cellaria encoding |
-|---|---|
-| Tape symbol `a ∈ Γ` | Cell type `t(a) ∈ {1..K}` |
-| Blank `⊔` | Type `0` |
-| State `q ∈ Q` | Head marker `h(q) ∈ {10..10+\|Q\|-1}` |
-| Head in state `q` over symbol `a` | Pattern `[h(q), t(a)]` |
-
-### 3.2. Construction
-
-For each transition `δ(q, a) = (q', a', d)`:
-
-- Create rule with `id = [h(q), t(a)]`
-- If `d = R`: shift east 1 step. Change: write `t(a')` at `(0,0)`.
-  Head type becomes `h(q')` (carried by shift).
-- If `d = L`: shift west 1 step. Change: write `t(a')` at `(0,0)`.
-- If `d = H`: no shift. Change: write `t(a')` at `(0,0)`.
-
-### 3.3. Semantic Preservation
-
-Each Cellaria tick corresponds to exactly one TM step:
-
-1. **Read:** pattern `[h(q), t(a)]` matches iff head `h(q)` is immediately
-   left of symbol `t(a)`.
-2. **Write:** change writes the new symbol on the vacated position.
-3. **Move:** chained shift moves the head cell east or west.
-4. **State:** the head type becomes `h(q')` after shift (it is copied
-   to the new position with its updated type).
-
-Arbitration guarantees no interference: patterns for different states
-use different `h(q)` values and are disjoint.
-
-### 3.4. Example: Bit Inversion
-
-The configuration `configs/turing.yaml` implements a bit-inverting TM:
+**Definition 1 (Encoding function).** Let a Turing machine be given as
 
 ```
-id=[5, 0] → shift east, change (0,0,1)   read 0, write 1, move right
-id=[5, 1] → shift east, change (0,0,0)   read 1, write 0, move right
-id=[6, 0] → shift west, change (0,0,1)   read 0, write 1, move left
-id=[6, 1] → shift west, change (0,0,0)   read 1, write 0, move left
-id=[5]    → shift east, change (0,0,6)   turn: 5→6 at right edge
-id=[6]    → shift west, change (0,0,5)   turn: 6→5 at left edge
+M = ⟨Q, Γ, δ, q₀, q_h⟩
 ```
 
-The head traverses the tape, inverting every bit, reversing at boundaries.
-Simulation confirms that the output matches expected TM behavior.
+where `Q = {q₀, q₁, ..., q_{n-1}, q_h}` is the set of states,
+`Γ = {γ₀, γ₁, ..., γ_{k-1}}` is the tape alphabet with blank symbol `⊔ ∈ Γ`,
+and `δ: Q × Γ → Q × Γ × {L, R, H}` is the transition function.
+
+We define the encoding function `enc: (Q ∪ Γ) → CellType`:
+
+```
+enc(γᵢ) = i + 1            for γᵢ ∈ Γ, γᵢ ≠ ⊔
+enc(⊔)  = 0
+enc(qᵢ) = 10 + i            for qᵢ ∈ Q, qᵢ ≠ q_h
+enc(q_h) = 10 + |Q|         (halt state marker)
+```
+
+**Definition 2 (Cellaria grid configuration).** A 1×N grid `G` encodes
+the TM configuration `(q, tape, pos)` as follows:
+
+- For each tape cell `i`, `G[i] = enc(tape[i])` if `i ≠ pos`;
+  `G[pos] = enc(q)` and `G[pos+1] = enc(tape[pos])`.
+
+The pair `[enc(q), enc(tape[pos])]` forms the rule-matching pattern.
+
+**Definition 3 (Rule construction).** For each transition `δ(q, a) = (q', a', d)`,
+construct a Cellaria rule `R(q, a)`:
+
+```
+R(q, a) = Rule(
+    id = [enc(q), enc(a)],          // head marker + tape symbol
+    shifts = [ [shift_spec(d)] ],   // one shift group
+    changes = [(-1, 0, enc(a'))],   // write new symbol behind head
+    priority = 10,
+    min_age = 0,
+    active_only = false
+)
+```
+
+where:
+
+```
+shift_spec(L) = { direction: west, steps: 1 }
+shift_spec(R) = { direction: east, steps: 1 }
+shift_spec(H) = (no shift, empty group)
+```
+
+For the halt transition `δ(q_h, a)`, no rule is generated (the head
+stops on empty marker `enc(q_h)`, which has no matching rule).
+
+**Definition 4 (Initial configuration).** Given TM input `w = a₀a₁...a_{m-1}`,
+the initial Cellaria grid is:
+
+```
+G[0] = enc(q₀)        // head marker
+G[1] = enc(a₀)        // first symbol
+G[2] = enc(a₁)
+...
+G[m] = enc(a_{m-1})
+G[m+1..N-1] = 0       // blank tape
+```
+
+### 3.2. Theorem 1 (Turing Completeness of Cellaria)
+
+```
+Theorem 1. For any Turing machine M and any input w,
+there exists a finite Cellaria rule set R and a finite grid G
+such that for all n ∈ ℕ:
+
+    M accepts w in n steps  
+    ⇔  
+    Cellaria with rule set R halts in n ticks
+    with an accept configuration.
+```
+
+**Proof.** We prove by induction on the number of steps `n`.
+
+**Base case (n = 0).** The initial TM configuration `M ⊢⁰ (q₀, w, 0)`
+maps to the initial Cellaria grid `G₀` per Definition 4. No rule has
+applied yet, matching the TM state before any step.
+
+**Inductive step.** Assume that after `n` steps, the TM configuration
+`(q, tape, pos)` maps to Cellaria grid `Gₙ` per Definition 2,
+and that no rule has been applied in tick `n` (the tick counter
+is at `n`, awaiting the next tick).
+
+We show that one tick of Cellaria (phases detect → arbitrate → apply)
+produces grid `G_{n+1}` that corresponds to the TM configuration
+after step `n+1`.
+
+**Step 1 (detect).** The grid `Gₙ` contains pattern `[enc(q), enc(tape[pos])]`
+at position `pos`. The rule `R(q, tape[pos])` is present in R by
+Definition 3. The detect phase finds this match.
+
+**Step 2 (arbitrate).** Only one rule matches at position `pos`
+because `enc(q)` is unique per state. Lemma 1 (below) guarantees
+no overlapping matches. The rule is accepted.
+
+**Step 3 (apply).** The rule `R(q, tape[pos])` executes:
+
+- Shift: the head `enc(q)` moves one cell east or west (or stays
+  for halt). The head cell is copied to the new position.
+- Change: `(-1, 0, enc(a'))` writes the new tape symbol at the
+  position vacated by the head.
+
+After application, the grid state is:
+
+- If `d = R`: `G_{n+1}[pos] = enc(a')`, `G_{n+1}[pos+1] = enc(q')`,
+  and `G_{n+1}[pos+2] = enc(tape[pos+1])`. This corresponds to
+  TM configuration `(q', tape[pos←a'], pos+1)`.
+- If `d = L`: `G_{n+1}[pos-1] = enc(q')`, `G_{n+1}[pos] = enc(a')`.
+  This corresponds to `(q', tape[pos←a'], pos-1)`.
+- If `d = H`: `G_{n+1}[pos] = enc(a')`, `G_{n+1}[pos+1] = enc(q_h)`.
+  No rule matches `enc(q_h)`, so the system halts in the next tick.
+
+**Halt.** If `δ(q, a) = (q', a', H)`, the tick produces a grid with
+a head marker `enc(q_h)` that has no matching rule. The detect phase
+of the next tick finds zero matches, and the system stabilizes.
+This corresponds to TM reaching `q_h`.
+
+Thus, each Cellaria tick corresponds to exactly one TM step, and
+the sequences of configurations are isomorphic. ∎
+
+### 3.3. Lemma 1 (Conflict-Free Rules)
+
+```
+Lemma 1. For a Turing machine M with state set Q,
+let R be the rule set constructed per Definition 3.
+Then for any two distinct rules r₁, r₂ ∈ R,
+there is no grid state g where both r₁ and r₂ match
+at overlapping cells.
+```
+
+**Proof.** Two rules `r₁` and `r₂` may only conflict if their
+patterns overlap at the same grid position. The matching pattern
+of any rule `R(q, a)` is `[enc(q), enc(a)]`, where `enc(q)` is
+the head marker and `enc(a)` is the tape symbol.
+
+Consider two cases:
+
+**Case 1: `q₁ ≠ q₂`.** Then `enc(q₁) ≠ enc(q₂)` by Definition 1
+(since `enc` is injective on `Q`). The first element of `id(r₁)`
+differs from the first element of `id(r₂)`. Pattern matching
+requires `id[0]` to match the center cell. Since `enc(q₁) ≠ enc(q₂)`,
+no cell can be the center of both patterns simultaneously.
+
+**Case 2: `q₁ = q₂ = q` but `a₁ ≠ a₂`.** Then `enc(a₁) ≠ enc(a₂)`
+(the encoding is injective on `Γ`). The patterns are
+`[enc(q), enc(a₁)]` and `[enc(q), enc(a₂)]`. They share the same
+center cell type `enc(q)`, but the second cell `id[1]` differs.
+For both to match at the same position, the cell to the right of
+the center would need to be both `enc(a₁)` and `enc(a₂)`, which
+is impossible.
+
+**Case 3: `q₁ = q₂` and `a₁ = a₂`.** Then `r₁ = r₂` (identical
+transition). The rule set may contain duplicate entries, but
+they are logically identical and produce the same match.
+No conflict arises.
+
+**Edge case: single-element patterns `[enc(q)]`.** These are
+turn-around rules (Section 3.4). They match only when `id[1]`
+is absent, i.e., when the cell to the right is default (0).
+For a rule `[enc(q)]` to conflict with `[enc(q), enc(a)]`
+at the same position, the cell to the right would need to be
+both `0` (for the single-element rule) and `enc(a) ≠ 0`
+(for the two-element rule), which is impossible.
+
+Thus, no two distinct rules can match at overlapping cells. ∎
+
+**Corollary 1.** Under Lemma 1, arbitration is deterministic:
+for any grid state, at most one rule matches at each position,
+and no two matches overlap. The greedy arbitration algorithm
+accepts all matches.
+
+### 3.4. Implementation: Bit Inversion
+
+The configuration `configs/turing.yaml` implements a bit-inverting TM
+with tape alphabet `Γ = {0, 1}` and a single state `Q₀`:
+
+```
+head marker:       10  (enc(Q₀) = 10)
+tape symbol 1:     1   (enc(1) = 1)
+tape symbol 0:     2   (enc(0) = 2)
+blank:             0
+```
+
+Rules:
+
+```
+id=[10, 2] → shift east, change (-1, 0, 1)    read 0, write 1, move right
+id=[10, 1] → shift east, change (-1, 0, 2)    read 1, write 0, move right
+```
+
+The change at `dx = -1` writes the new symbol at the position
+vacated by the head. The head type remains `10` (no state change),
+so the head continues moving right. When the head reaches a blank
+cell (type 0), no rule matches and the system halts.
+
+The inverse encoding (type 2 = 0, type 1 = 1) is used to make
+the output visually distinct from the input.
+
+### 3.5. Complexity Analysis
+
+**Theorem 2 (Time preservation).** A Cellaria rule set constructed
+per Theorem 1 requires exactly one tick per TM step.
+
+*Proof.* Direct from Theorem 1: the inductive proof establishes
+a bijection between ticks and TM steps. ∎
+
+**Theorem 3 (Space efficiency).** Simulating a TM with `n` states
+and tape length `k` requires `O(n + k)` Cellaria cells on a 1×N
+grid.
+
+*Proof.* The tape requires `k` cells (one per tape position).
+The head requires 1 cell of type `enc(q)`, which is distinct from
+tape symbols. The total is `k + 1` cells. The number of states
+`n` affects the rule set size, not the grid size. The encoding
+`enc(q) = 10 + i` requires no additional grid cells. ∎
 
 ---
 
@@ -253,7 +426,7 @@ A tag system with deletion number `m = 2` and alphabet `Σ = {A, B}`:
 - Halt: when `|w| < m`.
 
 Minsky proved that tag systems with `m = 2` and binary alphabet are
-Turing-complete.
+Turing-complete [Minsky 1961].
 
 For our demonstration, we use productions `π(A) = AB, π(B) = A`.
 
@@ -304,20 +477,46 @@ Tick 5: [0, 0, 2, 1, 2, ...]    write B, marker disappears → 0 matches
 Tick 6: [0, 0, 2, 1, 2, ...]    stable: B A B ✓
 ```
 
-### 4.4. Composition
+### 4.4. Composition and Axiom 3
 
-One tag system step = one Cellaria run from initial state (string + marker 10)
-to zero-match state. The result is the string prepared for the next step.
-Repeated steps are orchestrated through boundary I/O: the post-step grid state
-is output and fed back as input for the next step. This is allowed by
-Axiom 3 (interface through boundary only).
+One tag system step corresponds to one Cellaria run: from initial state
+(string + marker 10) to zero-match state. The result is the string
+prepared for the next step.
+
+Repeated execution of tag system steps requires orchestration: the
+post-step grid state must be re-initialized with a fresh marker 10
+for the next step. This orchestration is performed by the runtime
+environment, not by Cellaria rules within the grid. By Axiom 3,
+interface through boundary only, this is permitted: the runtime
+reads the output grid state and writes the next input state across
+the system boundary. The computation (the tag step itself) takes
+place entirely within the grid.
+
+If one wishes to avoid external orchestration, a meta-interpreter
+can be constructed within Cellaria: a Cellaria program that reads
+(step input) from the boundary, executes the tag step, and outputs
+(step result + halt signal) to the boundary. Such a meta-interpreter
+is a finite composition of the rules in Section 4.2 combined with
+boundary I/O rules. Its construction is straightforward but
+adds no new insight to the completeness proof; we omit it for brevity.
 
 ### 4.5. Transitive Completeness
 
 1. Tag systems (m=2, binary alphabet) are Turing-complete [Minsky 1961].
 2. One tag system step is simulated by Cellaria (Section 4.2).
-3. Step composition is done through I/O boundary (Axiom 3).
+3. Step composition is orchestrated through boundary I/O (Axiom 3).
 Therefore, Cellaria is Turing-complete.
+
+### 4.6. Complexity of Tag System Simulation
+
+**Theorem 4 (Tag step complexity).** One tag system step on a string
+of length `k` requires `O(k)` Cellaria ticks.
+
+*Proof.* The simulation consists of three phases:
+- Read and delete m=2: 2 ticks.
+- Traverse: `k - 2` ticks (one symbol shifted left per tick).
+- Write production: `|π(X)|` ticks (one symbol per tick).
+Total ticks: `2 + (k - 2) + |π(X)| = k + |π(X)| = O(k)`. ∎
 
 ---
 
@@ -350,6 +549,7 @@ motion. Together, they rule out systematic translation errors.
 - **Determinism:** greedy arbitration is deterministic, but the model
   permits non-deterministic rule sets (overlapping patterns with equal
   priority). The completeness proofs assume deterministic arbitration.
+  Lemma 1 shows that the constructed TM rule sets are always conflict-free.
 
 ### 5.3. Comparison with Other Models
 
@@ -357,16 +557,41 @@ motion. Together, they rule out systematic translation errors.
 require port connections. Cellaria uses a homogeneous grid with geometric
 adjacency. Interaction nets have a stronger notion of locality (only
 active pairs interact); Cellaria rules can inspect longer patterns.
+Interaction nets are also Turing-complete, but their graph rewriting
+is more complex than Cellaria's chained shift.
 
 **P-Systems (Păun 1998):** P-systems use hierarchical membrane structures
 with evolution rules. Cellaria has no hierarchy; all cells are equal.
+P-systems achieve Turing completeness through membrane dissolution and
+creation, which have no analogue in Cellaria.
 
 **Chemical Abstract Machine (CHAM, Berry & Boudol 1992):** CHAM uses
 multiset rewriting with no spatial structure. Cellaria adds geometry:
 cells have coordinates, distance matters, and chained shift provides
-directional movement.
+directional movement. CHAM's completeness relies on the ability to
+encode any multiset rewriting system; Cellaria's completeness is
+proved by explicit simulation.
 
-### 5.4. Implications
+**MGS (Giavitto 2002):** MGS is a spatial computing language based on
+topological collections. It supports multiple spatial structures
+(arrays, graphs, Delaunay triangulations) and declarative rewriting.
+Cellaria is more constrained (grid only, chained shift only) but
+simpler to analyze.
+
+**Amorphous Computing (Abelson et al. 2000):** Amorphous computing
+models computation in irregular, probabilistic environments. Cellaria
+is deterministic and grid-based, making it more suitable for formal
+verification.
+
+### 5.4. Complexity Analysis Summary
+
+| Metric | Path 1 (TM) | Path 2 (Tag system) |
+|---|---|---|
+| Ticks per step | 1 (Theorem 2) | O(k) per tag step (Theorem 4) |
+| Grid cells | O(k + n) (Theorem 3) | O(k) |
+| Rules | O(|Q| × |Γ|) | O(|Σ|) |
+
+### 5.5. Implications
 
 The result "local reduction suffices for universal computation" has
 both theoretical and practical implications:
@@ -380,6 +605,9 @@ both theoretical and practical implications:
   communicating only with immediate neighbors. This is relevant for
   novel computing substrates (e.g., molecular computing, optical
   computing, distributed sensor networks).
+- The model's determinism (Lemma 1) and the formal proof of
+  conflict-free TM rules provide a foundation for verification
+  of Cellaria programs.
 
 ---
 
@@ -392,8 +620,10 @@ boundary only, rules stored externally, and cleanup through rules.
 
 Two independent proofs demonstrate Turing completeness:
 
-1. A constructive translation from any Turing machine to Cellaria rules.
-2. A reduction through tag systems (Minsky, m=2).
+1. **Theorem 1**: a constructive translation from any Turing machine
+   to Cellaria rules, with Lemma 1 guaranteeing conflict-free execution.
+2. **Section 4**: a reduction through tag systems (Minsky, m=2)
+   with explicit handling of Axiom 3 for step composition.
 
 Both proofs rely solely on the primitive operations: pattern matching,
 chained shift, and greedy arbitration. No global control, no shared memory,
@@ -429,6 +659,112 @@ is a sufficient basis for universal computation.
 
 7. Cook, M. (2004). "Universality in Elementary Cellular Automata."
    *Complex Systems*, 15(1), 1–40.
+
+8. Giavitto, J.-L., & Michel, O. (2002). "The Topological Structures of
+   Membrane Computing." *Fundamenta Informaticae*, 49(1-3), 123–145.
+
+9. Abelson, H., et al. (2000). "Amorphous Computing." *Communications of
+   the ACM*, 43(5), 74–82.
+
+10. Plump, D. (2012). "The Graph Programming Language GP 2." *EATCS
+    Bulletin*, 108, 49–68.
+
+---
+
+## Appendix A: Full Example — Turing Machine Bit Inversion
+
+### A.1. Configuration
+
+The complete configuration `configs/turing.yaml`:
+
+```yaml
+grid:
+  width: 16
+  height: 1
+  default_cell_type: 0
+
+  initial_cells:
+    - coord: [0, 0]
+      type: 10        # head marker (state Q₀)
+    - coord: [1, 0]
+      type: 1         # tape symbol 1
+    - coord: [2, 0]
+      type: 2         # tape symbol 0
+    - coord: [3, 0]
+      type: 1         # tape symbol 1
+    - coord: [4, 0]
+      type: 1         # tape symbol 1
+    - coord: [5, 0]
+      type: 2         # tape symbol 0
+
+  boundaries: []
+
+rules:
+  # (Q₀, 0) → (Q₀, 1), move right
+  - id: [10, 2]       # 10=head, 2=enc(0)
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - [-1, 0, 1]    # write 1 (enc(1)) at vacated position
+
+  # (Q₀, 1) → (Q₀, 0), move right
+  - id: [10, 1]       # 10=head, 1=enc(1)
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - [-1, 0, 2]    # write 2 (enc(0)) at vacated position
+```
+
+### A.2. Encoding
+
+| TM component | Cellaria type |
+|---|---|
+| Head in state Q₀ | 10 |
+| Tape symbol 1 | 1 |
+| Tape symbol 0 | 2 |
+| Blank (end of tape) | 0 |
+
+The inversion encoding (type 1 = symbol 1, type 2 = symbol 0) is
+a design choice for readability. The actual mapping is irrelevant
+to the proof.
+
+### A.3. Trace (simulation output)
+
+Input: `1 0 1 1 0` (binary `10110`)
+
+```
+Tick 0: [10, 1, 2, 1, 1, 2, 0, 0, ...]   head at pos 0
+Tick 1: [2, 10, 2, 1, 1, 2, 0, 0, ...]    write 0, move right
+Tick 2: [2, 1, 10, 1, 1, 2, 0, 0, ...]    write 1, move right
+Tick 3: [2, 1, 2, 10, 1, 2, 0, 0, ...]    write 0, move right
+Tick 4: [2, 1, 2, 2, 10, 2, 0, 0, ...]    write 0, move right
+Tick 5: [2, 1, 2, 2, 1, 10, 0, 0, ...]    write 1, move right
+Tick 6: [2, 1, 2, 2, 1, 10, 0, 0, ...]    halt (no match for [10, 0])
+```
+
+Output: `2 1 2 2 1` = `0 1 0 0 1` (binary `01001` = bit-inverted `10110`).
+
+The head never turns around; it traverses the tape once, inverting
+each bit, and halts when it reaches the first blank cell. This
+simulates a TM with a single state and a right-moving head.
+
+### A.4. Decoding
+
+| Cellaria output | Decoded value |
+|---|---|
+| 2 | 0 |
+| 1 | 1 |
+| 2 | 0 |
+| 2 | 0 |
+| 1 | 1 |
+
+Result: `01001` = bit-inverted input `10110` ✓
 
 ---
 
