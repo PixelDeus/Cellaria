@@ -1,0 +1,45 @@
+grid:
+  width: 8
+  height: 1
+  default_cell_type: 0
+
+  initial_cells:
+    - coord: [1, 0]
+      type: 1
+    - coord: [2, 0]
+      type: 2
+    - coord: [5, 0]
+      type: 3
+    - coord: [6, 0]
+      type: 4
+
+  boundaries: []
+
+rules:
+  - id: 1
+    priority: 10
+    pattern:
+      - offset: [0, 0]
+        type: 1
+      - offset: [1, 0]
+        type: 2
+    result: [5, 5]
+    shift:
+      direction: East
+      chain_length: 3
+      fill_value: 0
+      overflow: discard
+
+  - id: 2
+    priority: 5
+    pattern:
+      - offset: [0, 0]
+        type: 3
+      - offset: [1, 0]
+        type: 4
+    result: [6, 6]
+    shift:
+      direction: West
+      chain_length: 3
+      fill_value: 0
+      overflow: discard

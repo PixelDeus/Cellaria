@@ -1,0 +1,63 @@
+# Демонстрация overflow при chain_length > pattern_len.
+#
+# Два правила, оба с chain_length = 3, но pattern_len = 2.
+#   → chain_length > pattern_len: цепочка длиннее group_cells,
+#     возникает "вытекание" — сдвиг захватывает дополнительную ячейку.
+#
+# Правило 1 (id:1): [1, 2] → [0, 1] + East shift(3), overflow = discard
+#   group_cells: (2,0), (3,0) → result [0, 1]
+#   chain_cells: (2,0), (3,0), (4,0) — extra ячейка (4,0) за group_cells
+#   Shift: (2,0) ← fill=0, (3,0) ← old(2,0)=1, (4,0) ← old(3,0)=2
+#   Затем group_cells перезаписываются result: (2,0)=0, (3,0)=1
+#   Старое значение (4,0) выталкивается и отбрасывается (discard)
+#
+# Правило 2 (id:2): [3, 4] → [0, 3] + East shift(3), overflow = write:6
+#   Аналогично, но вытолкнутое значение заменяется на 6 (write:6)
+
+grid:
+  width: 8
+  height: 2
+  default_cell_type: 0
+
+  initial_cells:
+    - coord: [2, 0]
+      type: 1
+    - coord: [3, 0]
+      type: 2
+    - coord: [2, 1]
+      type: 3
+    - coord: [3, 1]
+      type: 4
+
+  boundaries: []
+
+rules:
+  # chain_length (3) > pattern_len (2) → вытекание, overflow = discard
+  - id: 1
+    priority: 10
+    pattern:
+      - offset: [0, 0]
+        type: 1
+      - offset: [1, 0]
+        type: 2
+    result: [0, 1]
+    shift:
+      direction: East
+      chain_length: 3
+      fill_value: 0
+      overflow: discard
+
+  # chain_length (3) > pattern_len (2) → вытекание, overflow = write:6
+  - id: 2
+    priority: 10
+    pattern:
+      - offset: [0, 0]
+        type: 3
+      - offset: [1, 0]
+        type: 4
+    result: [0, 3]
+    shift:
+      direction: East
+      chain_length: 3
+      fill_value: 0
+      overflow: write:6

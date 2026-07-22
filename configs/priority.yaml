@@ -1,0 +1,31 @@
+grid:
+  width: 4
+  height: 1
+  default_cell_type: 0
+
+  initial_cells:
+    - coord: [0, 0]
+      type: 1
+    - coord: [1, 0]
+      type: 2
+
+  boundaries: []
+
+rules:
+  - id: 1
+    priority: 10
+    pattern:
+      - offset: [0, 0]
+        type: 1
+      - offset: [1, 0]
+        type: 2
+    result: [5, 5]
+
+  - id: 2
+    priority: 5
+    pattern:
+      - offset: [0, 0]
+        type: 1
+      - offset: [1, 0]
+        type: 2
+    result: [6, 6]

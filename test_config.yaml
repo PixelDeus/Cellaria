@@ -1,0 +1,73 @@
+# Тестовый конфиг для модульных тестов (test_load_test_config в config.rs).
+#
+# НЕ ПРЕДНАЗНАЧЕН для запуска симуляции — используется только
+# для проверки парсинга YAML, построения индекса и граничных буферов.
+#
+# Содержит:
+#   - Grid 8×8 с 4 начальными ячейками
+#   - 3 правила (id: 1, 2, 3) с разными приоритетами
+#   - 2 граничных канала (input channel 0, output channel 1)
+#   - 1 правило со сдвигом (East, chain_length=2, overflow=discard)
+#
+# См. src/config.rs → test_load_config
+
+grid:
+  width: 8
+  height: 8
+  default_cell_type: 0
+  initial_cells:
+    - coord: [1, 1]
+      type: 1
+    - coord: [2, 1]
+      type: 2
+    - coord: [5, 3]
+      type: 1
+    - coord: [6, 3]
+      type: 2
+  boundaries:
+    - cell: [0, 0]
+      channel: 0
+      direction: input
+      max_queue: 16
+    - cell: [7, 7]
+      channel: 1
+      direction: output
+      max_queue: 16
+
+rules:
+  - id: 1
+    priority: 10
+    pattern:
+      - offset: [0, 0]
+        type: 1
+      - offset: [1, 0]
+        type: 2
+    result: [3, 4]
+
+  - id: 2
+    priority: 5
+    pattern:
+      - offset: [0, 0]
+        type: 3
+      - offset: [0, 1]
+        type: 4
+    result: [1, 1]
+    shift:
+      direction: East
+      chain_length: 2
+      fill_value: 0
+      overflow: discard
+
+  - id: 3
+    priority: 8
+    pattern:
+      - offset: [0, 0]
+        type: 3
+      - offset: [1, 0]
+        type: 4
+    result: [5, 6]
+    shift:
+      direction: East
+      chain_length: 2
+      fill_value: 0
+      overflow: discard

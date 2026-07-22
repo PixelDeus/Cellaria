@@ -1,0 +1,29 @@
+grid:
+  width: 8
+  height: 1
+  default_cell_type: 0
+
+  initial_cells: []
+
+  boundaries:
+    - cell: [0, 0]
+      channel: 0
+      direction: input
+      max_queue: 16
+    - cell: [7, 0]
+      channel: 1
+      direction: output
+      max_queue: 16
+
+rules:
+  - id: 1
+    priority: 10
+    pattern:
+      - offset: [0, 0]
+        type: 5
+    result: [5]
+    shift:
+      direction: East
+      chain_length: 2
+      fill_value: 0
+      overflow: discard

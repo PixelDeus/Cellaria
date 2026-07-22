@@ -1,0 +1,77 @@
+# Две головки на ленте, встречное движение, столкновение.
+#
+# Демонстрирует два режима chain_length:
+#   - Правило 1: chain_length = 2, pattern_len = 2 → chain_length == pattern_len
+#     (сдвиг не выходит за group_cells, окно = штамп)
+#   - Правило 2: chain_length = 2, pattern_len = 2 → аналогично
+#
+# Головка A (тип 1) движется на восток.
+# Головка B (тип 3) движется на запад.
+# При столкновении: [1, 3] → [7, 7].
+#
+# Механика движения:
+#   Правило сдвига East chain_length=2: (x) → fill=0, (x+1) ← old(x)
+#   Результат [0, 1] перезаписывает group_cells
+#   Нетто: голова [1] смещается на (x+1), (x) становится 0.
+#
+# Арбитраж: правило столкновения (priority=20) выше движения (priority=10),
+# поэтому при смежности головок срабатывает коллизия, а не движение.
+
+grid:
+  width: 8
+  height: 1
+  default_cell_type: 0
+
+  initial_cells:
+    - coord: [0, 0]
+      type: 1
+    - coord: [7, 0]
+      type: 3
+
+  boundaries: []
+
+rules:
+  # ── Головка A: движение на восток ──────────────────────────
+  # Условие: [1, 0] → [0, 1] + сдвиг East
+  # chain_length = 2 = pattern_len → сдвиг в границах group_cells
+  - id: 1
+    priority: 10
+    pattern:
+      - offset: [0, 0]
+        type: 1
+      - offset: [1, 0]
+        type: 0
+    result: [0, 1]
+    shift:
+      direction: East
+      chain_length: 2
+      fill_value: 0
+      overflow: discard
+
+  # ── Головка B: движение на запад ───────────────────────────
+  # Условие: [3, 0] → [0, 3] + сдвиг West
+  # chain_length = 2 = pattern_len
+  - id: 2
+    priority: 10
+    pattern:
+      - offset: [0, 0]
+        type: 3
+      - offset: [-1, 0]
+        type: 0
+    result: [0, 3]
+    shift:
+      direction: West
+      chain_length: 2
+      fill_value: 0
+      overflow: discard
+
+  # ── Столкновение: A слева, B справа ────────────────────────
+  # Условие: [1, 3] → [7, 7]
+  - id: 3
+    priority: 20
+    pattern:
+      - offset: [0, 0]
+        type: 1
+      - offset: [1, 0]
+        type: 3
+    result: [7, 7]
