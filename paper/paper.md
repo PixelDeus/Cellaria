@@ -160,7 +160,8 @@ In the current implementation, a rule is defined by:
   Groups are executed in priority order.
 - `changes`: post-shift modifications `(dx, dy, value)` applied relative
   to the head's post-shift position. **Changes are applied only if at
-  least one shift was executed.**
+  least one shift was executed.** A shift of 0 steps in any direction is
+  treated as an executed shift.
 - `priority`: higher priority rules win in conflicts.
 - `min_age`: minimum age of the center cell for the rule to activate.
 - `active_only`: when true, matching is restricted to neighborhoods of
@@ -282,11 +283,14 @@ where:
 ```
 shift_spec(L) = { direction: west, steps: 1 }
 shift_spec(R) = { direction: east, steps: 1 }
-shift_spec(H) = (no shift, empty group)
+shift_spec(H) = { direction: east, steps: 0 }   // dummy zero-step shift to trigger changes
 ```
 
 For a halt transition `δ(q, a) = (q', a', H)`, set `q' = q_h`
-in the encoding. By Definition 1, `enc(q_h) = 10 + |Q|`. Since
+in the encoding. A zero-step shift is formally executed, satisfying
+the condition in Section 2.3 that changes apply only if at least one
+shift was executed, while leaving the head position unchanged. By
+Definition 1, `enc(q_h) = 10 + |Q|`. Since
 no rule is generated with `id[0] = enc(q_h)`, the head marker
 for the halt state has no matching rule. The system stabilizes
 when the head enters this state.
@@ -455,11 +459,14 @@ facilitating manual verification of correctness.
 
 ### 3.5. Complexity of TM Simulation
 
-**Theorem 2 (Time preservation).** A Cellaria rule set constructed
-per Theorem 1 requires exactly one tick per TM step.
+**Theorem 2 (Time preservation).** Each simulated TM transition,
+including the transition that writes the halting state `q_h`,
+is executed in exactly one Cellaria tick.
 
-*Proof.* Direct from Theorem 1: the inductive proof establishes
-a bijection between ticks and TM steps. ∎
+*Proof.* The inductive proof of Theorem 1 establishes a bijection
+between TM transitions and Cellaria ticks. The halt transition is a
+regular transition that writes `q_h`; the subsequent stabilisation
+(zero matches in the next detect phase) is not a computation step. ∎
 
 **Theorem 3 (Space efficiency).** Simulating a TM with `n` states
 and tape length `k` requires `O(n + k)` Cellaria cells on a 1×N
@@ -522,12 +529,16 @@ marker  string
    marker disappears via change `[0, 0, 0]`. Tick stops because next
    tick finds zero matches.
 
+For concreteness, the trace below demonstrates one tag step on the
+initial string A B B, which transforms to B A B under productions
+π(A) = AB, π(B) = A.
+
 ### 4.3. Trace Example (A B B → B A B)
 
 From actual simulation:
 
 ```
-Tick 0: [10, 1, 2, 2, 0, ...]   A B B (1=A, 2=B)
+Tick 0: [10, 1, 2, 2, 0, ...]   // initial: A B B (1=A, 2=B)
 Tick 1: [0, 11, 2, 2, 0, ...]   read A
 Tick 2: [0, 0, 13, 2, 0, ...]   delete second B
 Tick 3: [0, 0, 2, 13, 0, ...]   carry B left
@@ -671,6 +682,7 @@ verification.
 | Ticks per step | 1 (Theorem 2) | O(k) per tag step (Theorem 4) |
 | Grid cells | O(k + n) (Theorem 3) | O(k) |
 | Rules | O(|Q| × |Γ|) | O(|Σ|) |
+| Rules (demo) | O(|Q| × |Γ|) | O(1) |
 
 ### 5.5. Implications
 
