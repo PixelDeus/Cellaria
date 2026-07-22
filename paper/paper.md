@@ -46,6 +46,19 @@ global uniformity (cellular automata) or require complex graph rewriting
 Cellaria aims to be a minimal, concrete model of local reduction with
 deterministic semantics and practical implementation.
 
+Formally, by "local reduction" in Cellaria we mean:
+(1) pattern matching over finite horizontal sequences of adjacent cells
+    of arbitrary length,
+(2) asymmetric chained shift where only the center cell (the head) moves
+    and its origin is cleared to default,
+(3) priority-based greedy arbitration resolving overlapping matches
+    deterministically.
+
+This combination distinguishes Cellaria from:
+- cellular automata (fixed neighborhood, uniform rule),
+- interaction nets (graph rewriting with port connections),
+- string rewriting systems (no spatial embedding).
+
 ### 1.2. Why Not a Cellular Automaton?
 
 Cellular automata (CA) are the most famous local computation model. Every
@@ -154,7 +167,10 @@ In the current implementation, a rule is defined by:
   non-default cells (optimization).
 
 For the formal definition of the data structures, see the specification
-(`specs/specification.md`, Section 3).
+(`specs/specification.md`, Section 3). The current implementation includes
+additional fields (notably `pattern`, reserved for future 2D pattern
+matching extensions). For the formal model and all proofs in this paper,
+only the fields described above are relevant.
 
 ### 2.4. Chained Shift
 
@@ -241,6 +257,11 @@ For a move left transition `δ(q, a) = (q', a', L)`, after the shift:
 - The new pattern `[enc(q'), enc(tape[pos-1])]` matches at `pos-1`.
 
 This ensures the invariant is maintained after each step.
+
+The proof uses a 1×N grid for simplicity. Extension to the full 2D grid
+is straightforward: the tape occupies row 0, and additional rows may be
+used for auxiliary computation or multi-tape simulations without affecting
+the construction.
 
 **Definition 3 (Rule construction).** For each transition `δ(q, a) = (q', a', d)`,
 construct a Cellaria rule `R(q, a)`:
@@ -546,6 +567,16 @@ Thus, any tag system computation (which is a finite sequence of steps,
 or a potentially infinite sequence that terminates) is realised by
 Cellaria with external coordination through Axiom 3.
 
+We acknowledge that the meta-interpreter construction relies on boundary
+I/O (Axiom 3) for step composition. A fully internal tag system
+interpreter — where the entire computation cycle runs within the grid
+without external intervention — remains an open engineering challenge.
+However, this does not weaken the completeness result: Axiom 3 is part
+of the model, and external coordination is a legitimate use of it. This
+proof path demonstrates that tag system semantics are expressible in
+Cellaria; the direct TM simulation (Proof 1, Theorem 1) provides the
+stronger, fully internal completeness result.
+
 **Corollary 5.1.** By Minsky's theorem, tag systems with `m = 2` are
 Turing-complete. Therefore, Cellaria is Turing-complete.
 
@@ -658,12 +689,16 @@ both theoretical and practical implications:
 - The model's determinism (Lemma 1) and the formal proof of
   conflict-free TM rules provide a foundation for verification
   of Cellaria programs.
-- An additional implication is the model's inherent parallelism.
-  Since Lemma 1 guarantees that rules do not conflict, multiple
-  non-overlapping matches can be applied simultaneously in a single
-  tick. This suggests that Cellaria is naturally suited for parallel
-  and distributed implementation, where each rule match can be
-  executed on a separate processor.
+- An additional implication is the model's potential for parallelism.
+  Lemma 1 demonstrates that for the constructed TM rule sets, rules never
+  conflict, and thus all matches can be applied simultaneously in a single
+  tick. For general rule sets, Cellaria's semantics do not preclude parallel
+  execution: any set of non-overlapping matches is guaranteed to produce
+  the same result regardless of application order. However, the greedy
+  arbitration algorithm as currently specified resolves overlaps sequentially
+  by priority. Characterising exactly which rule sets admit fully parallel
+  execution — and whether a static analysis can determine this — remains
+  an open question.
 
 ### 5.6. Open Questions and Future Work
 
@@ -718,33 +753,36 @@ penalty in space or time for the class of Turing machines.
    Tag and Other Topics in Theory of Turing Machines." *Annals of
    Mathematics*, 74(3), 437–455.
 
-2. Lafont, Y. (1990). "Interaction Nets." *Proceedings of the 17th ACM
+2. Cocke, J., & Minsky, M. (1964). "Universality of Tag Systems with
+   P=2." *Journal of the ACM*, 11(1), 15–20.
+
+3. Lafont, Y. (1990). "Interaction Nets." *Proceedings of the 17th ACM
    SIGPLAN-SIGACT Symposium on Principles of Programming Languages*,
    95–108.
 
-3. Păun, G. (1998). "Computing with Membranes." *Journal of Computer and
+4. Păun, G. (1998). "Computing with Membranes." *Journal of Computer and
    System Sciences*, 61(1), 108–143.
 
-4. Berry, G., & Boudol, G. (1992). "The Chemical Abstract Machine."
+5. Berry, G., & Boudol, G. (1992). "The Chemical Abstract Machine."
    *Theoretical Computer Science*, 96(1), 217–248.
 
-5. Turing, A. M. (1936). "On Computable Numbers, with an Application to
+6. Turing, A. M. (1936). "On Computable Numbers, with an Application to
    the Entscheidungsproblem." *Proceedings of the London Mathematical
    Society*, s2-42(1), 230–265.
 
-6. Wolfram, S. (2002). *A New Kind of Science*. Wolfram Media.
+7. Wolfram, S. (2002). *A New Kind of Science*. Wolfram Media.
    [On cellular automata and universality.]
 
-7. Cook, M. (2004). "Universality in Elementary Cellular Automata."
+8. Cook, M. (2004). "Universality in Elementary Cellular Automata."
    *Complex Systems*, 15(1), 1–40.
 
-8. Giavitto, J.-L., & Michel, O. (2002). "The Topological Structures of
+9. Giavitto, J.-L., & Michel, O. (2002). "The Topological Structures of
    Membrane Computing." *Fundamenta Informaticae*, 49(1-3), 123–145.
 
-9. Abelson, H., et al. (2000). "Amorphous Computing." *Communications of
+10. Abelson, H., et al. (2000). "Amorphous Computing." *Communications of
    the ACM*, 43(5), 74–82.
 
-10. Plump, D. (2012). "The Graph Programming Language GP 2." *EATCS
+11. Plump, D. (2012). "The Graph Programming Language GP 2." *EATCS
     Bulletin*, 108, 49–68.
 
 ---
