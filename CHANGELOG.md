@@ -1,34 +1,31 @@
 # Changelog
 
-## [0.2.0] - 2026-07-22
+## [0.2.0] — Unreleased
 
 ### Added
-- **Error handling**: единый тип `CellariaError` с `thiserror`, `load_config` возвращает `Result<_, CellariaError>`
-- **Validation**: проверка наличия центра `(0, 0)` в паттерне, соответствие длин `result_cells` и `pattern`, `chain_length > 0` при наличии shift
-- **RuleStore**: константа `MAX_BUFFER_SIZE = 1024` с автоочисткой буфера при переполнении; поддержка `min_age` и `shift` в пакете `AddRule`
-- **Grid API**: `iter_active()` для итерации активных ячеек, `bounds()` для получения размеров хранилища
-- **BoundaryBuffer**: вынесен в `HashMap<GridCoord, BoundaryBuffer>` в Grid, убран `Option` из каждой ячейки
-- **Direction**: новая структура `Direction(i8, i8)` вместо enum `ShiftDirection` с константами NORTH/SOUTH/EAST/WEST
-- **Engine hook**: опциональный `on_match: Option<Box<dyn Fn(&RuleMatch)>>`
-- **CLI**: парсинг через `clap` с флагами `--ticks` и `--json`
-- **Benchmarks**: бенчмарки для `detect_matches`, `arbitrate`, `apply_matches`, `run_tick`
-- **RuleStore API**: `error_stats()` для получения статистики ошибок декодирования
+- **Conflict analyzer**: новый модуль `src/conflict_analyzer.rs` для статического обнаружения конфликтов между правилами (пересечение affected regions, несовместимость типов, разные min_age)
+- **7 новых конфигов**:
+  - `configs/composition.yaml` — композиция TM-головки + cleaner
+  - `configs/oscillation.yaml` — контрпример для не-необходимости счётчикового потенциала
+  - `configs/self_replication.yaml` — самовоспроизведение: цепочка `10` растёт слева
+  - `configs/ca_simulation.yaml` — клеточный автомат: маркер обновляет ячейки по XOR
+  - `configs/multi_head_tm.yaml` — две TM-головки на одной ленте
+  - `configs/sorting.yaml` — пузырьковая сортировка (один проход)
+  - `configs/propagation.yaml` — волна: граница `1...1`/`0...0` смещается вправо
+- **Paper**: главы `paper/paper2.md` (termination & completeness) и `paper/paper3.md` (data model & comparisons), HTML/PDF сборка
+- **Match engine**: интеграция статистического конфликт-анализа в фазу арбитража; опциональный коллбэк `on_match`
 
 ### Changed
-- **Инкапсуляция**: `Grid<S>.storage` сделан приватным, доступ через публичные методы
-- **RuleStore**: `decode_errors` — приватное поле
-- **Imports**: явные re-exports в `lib.rs` вместо wildcard
-- **ChunkStorage**: `get_mut` не материализует ячейку при первом обращении (lazy init on write)
-- **Производительность**: убраны промежуточные `collect::<Vec<_>>()` в фазах движка
+- **Engine**: при непустом конфликт-графе разрешение коллизий через `resolve_conflicts` вместо прямого применения
+- **Grid**: доработки для поддержки анализа конфликтов
+- **RuleStore**: расширен API для запроса правил по маске
+- **Types**: добавлены новые типы для конфликт-анализа
+- **Benches**: обновлены под новую архитектуру движка
 
 ### Fixed
-- **ChunkStorage::set**: при изменении ячейки через `get_mut` + ручное присвоение счётчик `non_default_count` не синхронизировался. Исправлено: убрана прямая мутация `cells[idx]`, все изменения через `set()`
-- **RuleStore**: очистка буфера канала при превышении `MAX_BUFFER_SIZE`
-- **All unwrap()**: заменены на `expect` с контекстом или `?`
+- Предыдущий CHANGELOG содержал описание изменений, которые не были закоммичены. История исправлена.
 
 ### Removed
-- `ShiftDirection` enum (заменён на `Direction(i8, i8)`)
-- `boundary` поле из `Cell` (вынесено в `HashMap` в `Grid`)
-- Wildcard re-exports в `lib.rs`
+- Устаревшие упоминания несуществующих конфигов в документации
 
-## [0.1.0] - Initial release
+## [0.1.0] — Initial release (committed to GitHub)

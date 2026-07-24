@@ -99,20 +99,21 @@ impl RuleStore {
     /// (пакеты, где встречен терминатор 255).
     ///
     /// Вызывается после `run_tick` (когда `flush_output` уже перенёс данные).
+    /// Дренирует только канал 0 (rule-канал), не затрагивая другие каналы.
     pub fn drain_rule_channel<S: GridStorage>(&mut self, grid: &mut Grid<S>) -> Vec<CompletedOp> {
-        // Собираем все (значение) из буферов граничных ячеек (все каналы)
+        // Собираем все значения из канала 0 граничных буферов
         let mut drained: Vec<u8> = Vec::new();
         for (_coord, boundary) in grid.iter_boundaries() {
-            for (_channel, queue) in &boundary.queues {
+            if let Some(queue) = boundary.queues.get(&0) {
                 for cell in queue {
                     drained.push(cell.value.0 .0);
                 }
             }
         }
 
-        // Очищаем все очереди буферов
+        // Очищаем только очередь канала 0 в буферах
         for (_, boundary) in grid.iter_boundaries_mut() {
-            boundary.clear();
+            boundary.queues.remove(&0);
         }
 
         // Накопляем байты в буфер
@@ -316,6 +317,7 @@ fn deserialize_packet(data: &[u8], _next_id: u8) -> Result<RuleOp, String> {
                 active_only: false,
                 priority,
                 min_age: 0,
+                overflow: Default::default(),
             };
 
             Ok(RuleOp::AddRule(rule))
@@ -383,6 +385,7 @@ mod tests {
             active_only: false,
             priority,
             min_age: 0,
+            overflow: Default::default(),
         }
     }
 

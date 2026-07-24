@@ -29,6 +29,7 @@ pub trait GridStorage {
 ///
 /// Хранит все ячейки в плоском векторе `cells` размером `width × height`.
 /// Индексация: `index = y * width + x`.
+#[derive(Clone)]
 pub struct VecStorage {
     /// Плоский вектор всех ячеек решётки.
     pub cells: Vec<Cell>,
@@ -113,6 +114,7 @@ const CHUNK_SIZE: usize = 64;
 /// Хранит `Option<Cell>`: `None` для дефолтных ячеек (оптимизация памяти).
 /// `non_default_count` отслеживает количество не-дефолтных ячеек для быстрой
 /// проверки, нужно ли хранить чанк.
+#[derive(Clone)]
 struct Chunk {
     cells: Vec<Option<Cell>>,
     non_default_count: usize,
@@ -154,6 +156,7 @@ impl Chunk {
 /// Чанки создаются лениво при первом обращении через [`set`](GridStorage::set).
 /// Пустые чанки не хранятся в `HashMap`.
 /// Не-дефолтные ячейки хранятся как `Some(Cell)`, дефолтные — как `None`.
+#[derive(Clone)]
 pub struct ChunkStorage {
     chunks: HashMap<(usize, usize), Chunk>,
     default_cell: Cell,

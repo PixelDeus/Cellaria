@@ -10,6 +10,7 @@ use crate::types::{BoundaryBuffer, Cell};
 ///
 /// Граничные буферы ввода-вывода вынесены в отдельную HashMap,
 /// а не в каждую ячейку (пункт 3.3 рефакторинга).
+#[derive(Clone)]
 pub struct Grid<S: GridStorage> {
     /// Внутреннее хранилище.
     pub storage: S,

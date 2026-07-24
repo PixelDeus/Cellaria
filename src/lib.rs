@@ -84,6 +84,7 @@
 //! ```
 
 pub mod config;
+pub mod conflict_analyzer;
 pub mod engine;
 pub mod error;
 mod grid;
@@ -93,12 +94,13 @@ pub mod types;
 
 // Явные реэкспорты публичного API
 pub use config::load_config;
-pub use engine::{run_tick, Engine};
+pub use engine::{run_tick, Engine, TerminationVerdict};
 pub use error::CellariaError;
 pub use grid::{Grid, SimpleGrid};
 pub use rule_store::RuleStore;
 pub use storage::{ChunkStorage, GridStorage, VecStorage};
 pub use types::{
-    AffectedRegion, BoundaryBuffer, Cell, CellType, CellValue, Direction, OverflowAction, Rule,
-    RuleId, RuleMatch, ShiftSpec,
+    AffectedRegion, BoundaryBuffer, Cell, CellType, CellValue, Direction, OverflowAction,
+    Rule, RuleId, RuleMatch, ShiftSpec,
 };
+pub use conflict_analyzer::ConflictGraph;

@@ -95,24 +95,26 @@ pub struct RuleMatch {
     pub rule_id: RuleId,
 }
 
+/// Действие при выходе ячейки за границу решётки (overflow).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OverflowAction {
+    /// Отбросить ячейку (не писать в граничный буфер).
+    #[serde(rename = "discard")]
+    Discard,
+    /// Записать ячейку в граничный буфер с указанным типом-заменителем.
+    #[serde(rename = "write")]
+    Write(u8),
+}
+
+impl Default for OverflowAction {
+    fn default() -> Self {
+        Self::Discard
+    }
+}
+
 // ============================================================================
 // Правила
 // ============================================================================
-
-/// Действие при выходе за границы.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum OverflowAction {
-    /// Обрезать (не сдвигать).
-    Clip,
-    /// Циклический перенос (тор).
-    Wrap,
-    /// Записать значение в канал.
-    Channel,
-    /// Заменить выходящее значение.
-    Write,
-    /// Отбросить выходящее значение.
-    Discard,
-}
 
 /// Полное определение правила.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +136,9 @@ pub struct Rule {
     /// Минимальный возраст ячейки-центра для активации правила.
     /// Правило срабатывает только если возраст ячейки ≥ min_age.
     pub min_age: u64,
+    /// Действие при overflow (выходе за границу решётки).
+    #[serde(default)]
+    pub overflow: OverflowAction,
 }
 
 impl Rule {

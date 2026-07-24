@@ -7,7 +7,8 @@ use crate::grid::Grid;
 use crate::storage::GridStorage;
 use crate::storage::VecStorage;
 use crate::types::{
-    BoundaryBuffer, Cell, CellType, CellValue, Direction, Rule, ShiftSpec,
+    BoundaryBuffer, Cell, CellType, CellValue, Direction, OverflowAction, Rule,
+    ShiftSpec,
 };
 
 // === Вспомогательный тип — входной шаблон конфига ===
@@ -43,6 +44,9 @@ struct YamlRule {
     /// Минимальный возраст ячейки-центра для активации правила.
     #[serde(default)]
     min_age: u64,
+    /// Действие при overflow (выходе за границу решётки).
+    #[serde(default)]
+    overflow: OverflowAction,
 }
 
 /// YAML-формат начальной ячейки.
@@ -108,11 +112,7 @@ pub fn load_config(path: &str) -> ConfigResult {
     let yg = yaml.grid;
 
     // Создаём решётку
-    let mut storage = VecStorage {
-        cells: vec![Cell::default(); yg.width * yg.height],
-        width: yg.width,
-        height: yg.height,
-    };
+    let mut storage = VecStorage::new(yg.width, yg.height);
 
     // Заполняем default_cell_type для всех ячеек
     for cell in storage.cells.iter_mut() {
@@ -200,6 +200,7 @@ pub fn load_config(path: &str) -> ConfigResult {
             active_only: yr.active_only,
             priority: yr.priority,
             min_age: yr.min_age,
+            overflow: Default::default(),
         });
     }
 

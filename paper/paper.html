@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc 3.10.1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Local Reduction Suffices for Universal Computation</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      white-space: pre-wrap;
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: 1.5em;}
+    div.column{flex: auto;}
+    @media screen {
+    div.columns{gap: min(4vw, 1.5em);}
+    div.column{overflow-x: auto;}
+    }
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    /* CSS for syntax highlighting */
+    html { -webkit-text-size-adjust: 100%; }
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Local Reduction Suffices for Universal
+Computation</h1>
+</header>
+<h1 id="local-reduction-suffices-for-universal-computation">Local
+Reduction Suffices for Universal Computation</h1>
+<p><strong>Cellaria: A Model of Computation by Local
+Reduction</strong></p>
+<hr />
+<h2 id="abstract">Abstract</h2>
+<p>We present Cellaria, a computational model based solely on local
+reduction: the state of a two-dimensional grid changes exclusively
+through rule-governed substitution of locally connected cell groups. The
+model has no processor, no bus, no shared memory, no instruction
+pointer, and no global control flow. Moving data requires a chained
+shift operation (a cell is copied to a distant location, then erased at
+its origin); competition between rules is resolved by greedy arbitration
+with priority and cell age.</p>
+<p>We prove Turing completeness by two independent paths:</p>
+<ol type="1">
+<li><strong>Direct Turing machine simulation:</strong> a constructive
+algorithm translates any Turing machine into a Cellaria rule set.</li>
+<li><strong>Tag system reduction:</strong> a tag system (Minsky, m=2) is
+simulated in Cellaria; tag systems are Turing-complete.</li>
+</ol>
+<p>Both proofs rely strictly on the five axioms of Cellaria: homogeneous
+grid, computation through rules only, interface through boundary only,
+rules stored outside the grid, and cleanup through rules.</p>
+<hr />
+<h2 id="introduction">1. Introduction</h2>
+<h3 id="what-is-local-reduction">1.1. What is Local Reduction?</h3>
+<p>Local reduction is a principle: the global state of a system changes
+only by replacing locally connected groups of elements according to
+fixed rules. No element has global authority. No central scheduler
+dispatches instructions. The computation is the collective effect of
+independent local decisions.</p>
+<p>This principle appears in nature (chemical reactions, protein
+folding, crystal growth), in distributed systems (wireless sensor
+networks, gossip protocols), and in theoretical computer science
+(interaction nets, P-systems, cellular automata). However, existing
+models either impose global uniformity (cellular automata) or require
+complex graph rewriting (interaction nets).</p>
+<p>Cellaria aims to be a minimal, concrete model of local reduction with
+deterministic semantics and practical implementation.</p>
+<p>Formally, by “local reduction” in Cellaria we mean: (1) pattern
+matching over finite horizontal sequences of adjacent cells of arbitrary
+length, (2) asymmetric chained shift where only the center cell (the
+head) moves a finite number of steps in one direction and its origin is
+cleared to default; this preserves <em>locality of effect</em> (only two
+cells are modified) while relaxing the classical <em>locality of
+speed</em> constraint to permit distant jumps within a single tick, (3)
+priority-based greedy arbitration resolving overlapping matches
+deterministically.</p>
+<p>This combination distinguishes Cellaria from: - cellular automata
+(fixed neighborhood, uniform rule), - interaction nets (graph rewriting
+with port connections), - string rewriting systems (no spatial
+embedding).</p>
+<h3 id="why-not-a-cellular-automaton">1.2. Why Not a Cellular
+Automaton?</h3>
+<p>Cellular automata (CA) are the most famous local computation model.
+Every cell updates by the same rule applied to a fixed neighborhood.
+Cellaria differs fundamentally:</p>
+<ul>
+<li><strong>Multiple rules:</strong> Cellaria has many rules, not one.
+Rules compete.</li>
+<li><strong>Dynamic neighborhood:</strong> pattern matching is not fixed
+to von Neumann or Moore neighborhoods — any 1D horizontal pattern is
+allowed.</li>
+<li><strong>Chained shift:</strong> data moves by chained shift, not by
+copying to a neighboring cell. The original cell is cleared.</li>
+<li><strong>Greedy arbitration:</strong> overlapping pattern matches are
+resolved by priority, age, and coordinates.</li>
+</ul>
+<p>Cellaria is closer to a rule-based rewriting system embedded in a
+grid than to a cellular automaton.</p>
+<p>This distinction is practically relevant. The proof of Turing
+completeness for the elementary cellular automaton Rule 110 [Cook 2004]
+relies on demonstrating that complex emergent structures (gliders,
+collisions) simulate a cyclic tag system — a tour de force of global
+analysis. In Cellaria, by contrast, the translation from a Turing
+machine is direct, modular, and constructive: each TM transition becomes
+exactly one Cellaria rule, with Lemma 1 guaranteeing conflict-free
+execution. This makes Cellaria programs amenable to compositional
+verification, a property notoriously difficult for cellular
+automata.</p>
+<h3 id="why-not-turing-machines">1.3. Why Not Turing Machines?</h3>
+<p>A Turing machine has a central head and a tape. In Cellaria, both
+head and tape are cells on the same grid. There is no architectural
+separation of control and memory. The head is just a cell with a special
+type; movement is chained shift, not a head moving over a static
+tape.</p>
+<p>The Turing machine is our target for the completeness proof, not our
+inspiration.</p>
+<h3 id="related-work">1.4. Related Work</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Model</th>
+<th>Key difference from Cellaria</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cellular automata</td>
+<td>Single rule, fixed neighborhood</td>
+</tr>
+<tr>
+<td>Interaction nets [Lafont 1990]</td>
+<td>Graph rewriting, port connections</td>
+</tr>
+<tr>
+<td>P-systems [Păun 1998]</td>
+<td>Hierarchical membranes</td>
+</tr>
+<tr>
+<td>String rewriting (Post, Thue)</td>
+<td>No spatial structure</td>
+</tr>
+<tr>
+<td>Chemical abstract machine [Berry &amp; Boudol 1992]</td>
+<td>Multiset rewriting, no geometry</td>
+</tr>
+<tr>
+<td>MGS (spatial computing) [Giavitto 2002]</td>
+<td>Topological collections, declarative</td>
+</tr>
+<tr>
+<td>Amorphous computing [Abelson 2000]</td>
+<td>No fixed grid, probabilistic</td>
+</tr>
+<tr>
+<td>Shape computing</td>
+<td>Pattern matching on arbitrary neighbourhoods</td>
+</tr>
+<tr>
+<td>Cell programming language [Shapiro 1995]</td>
+<td>Cellular automata variant</td>
+</tr>
+<tr>
+<td>GP 2 [Plump 2012]</td>
+<td>Graph programs, not grid-based</td>
+</tr>
+</tbody>
+</table>
+<p>Cellaria occupies a specific niche: grid-based, multi-rule,
+priority-driven, with chained shift as the only movement mechanism.
+Unlike MGS, Cellaria does not require topological collections; unlike
+amorphous computing, it is deterministic and operates on a fixed
+grid.</p>
+<hr />
+<h2 id="the-cellaria-model">2. The Cellaria Model</h2>
+<h3 id="five-axioms">2.1. Five Axioms</h3>
+<p>The model is defined by five axioms. Any claim about Cellaria must
+respect these constraints.</p>
+<p><strong>Axiom 1: Homogeneous Grid.</strong> No cell has privileged
+status by coordinate. No reserved system zones. Channels (I/O
+boundaries) are permitted because they are external to the grid, not
+internal privileges.</p>
+<p><strong>Axiom 2: Computation Through Rules Only.</strong> All state
+changes inside the grid happen through the detect → arbitrate → apply
+cycle. No hidden mechanism modifies cells without rule participation.
+Cell age is passive metadata, it influences arbitration but never
+changes state directly.</p>
+<p><strong>Axiom 3: Interface Through Boundary Only.</strong> Input and
+output transport data across the system boundary. They are not
+computation. Data crossing the boundary is I/O; data changing inside the
+grid is computation. The boundary phases (input, flush) do not compete
+with rules.</p>
+<p><strong>Axiom 4: Rules Outside the Grid.</strong> Rules are stored
+externally and updated atomically between ticks. Storing rules inside
+the grid would require reserved zones (violating Axiom 1) or risk races
+(rules changing mid-tick).</p>
+<p><strong>Axiom 5: Cleanup Through Rules.</strong> If a cell should
+disappear, a rule must do it. The <code>min_age</code> field in rules
+enables time-based cleanup: a rule activates only if its center cell has
+not changed for N ticks. No hidden garbage collection timer exists.</p>
+<h3 id="grid-and-cells">2.2. Grid and Cells</h3>
+<p>The grid is two-dimensional and rectangular. Each cell stores:</p>
+<ul>
+<li>A type value <code>t ∈ {0..255}</code>, where <code>t = 0</code> is
+the default (empty) type</li>
+<li>An age counter, incremented every tick and reset when the cell
+changes</li>
+</ul>
+<h3 id="rules">2.3. Rules</h3>
+<p>In the current implementation, a rule is defined by:</p>
+<ul>
+<li><code>id</code>: a <code>RuleId</code> (a sequence of
+<code>CellType</code> values, <code>Vec&lt;CellType&gt;</code>). The
+first element <code>id[0]</code> is the center (the head). The head
+determines the matching position and is the only cell that moves on
+shift.</li>
+<li><code>pattern</code>: reserved for future use
+(<code>Vec&lt;Vec&lt;u8&gt;&gt;</code>, currently unused).</li>
+<li><code>shifts</code>: zero or more shift groups. Each group is a
+sequence of directional shifts (east, west, up, down) applied to the
+head. Groups are executed in priority order.</li>
+<li><code>changes</code>: post-shift modifications
+<code>(dx, dy, value)</code> applied relative to the head’s post-shift
+position. <strong>Changes are applied only if at least one shift was
+executed.</strong> A shift of 0 steps in any direction is treated as an
+executed shift (not used in the constructions of this paper, but
+supported by the model).</li>
+<li><code>priority</code>: higher priority rules win in conflicts.</li>
+<li><code>min_age</code>: minimum age of the center cell for the rule to
+activate.</li>
+<li><code>active_only</code>: when true, matching is restricted to
+neighborhoods of non-default cells (optimization).</li>
+</ul>
+<p>For the formal definition of the data structures, see the
+specification (<code>specs/specification.md</code>, Section 3). The
+current implementation includes additional fields (notably
+<code>pattern</code>, reserved for future 2D pattern matching
+extensions). For the formal model and all proofs in this paper, only the
+fields described above are relevant.</p>
+<h3 id="chained-shift">2.4. Chained Shift</h3>
+<p>Chained shift is the only data movement mechanism. When a rule with a
+shift matches:</p>
+<ol type="1">
+<li>The head cell <code>(cx, cy)</code> is copied <code>steps</code>
+cells in the given direction.</li>
+<li>If the destination is within the grid, the head is copied
+there.</li>
+<li>If the destination is outside, the head enters an output
+buffer.</li>
+<li>The original position <code>(cx, cy)</code> is cleared to default
+(0).</li>
+</ol>
+<p>Only the head moves. The rest of the pattern (the “tail”) stays in
+place. This is asymmetrical: the head is the active element; the tail is
+passive context.</p>
+<p><strong>Remark (Locality of effect vs. locality of information
+speed).</strong> A chained shift with <code>steps &gt; 1</code> changes
+only two cells: the destination cell (which receives the head’s type)
+and the origin cell (which is cleared). In this sense, the
+<em>effect</em> of the rule is strictly local: it touches only the
+endpoints of the shift. This is distinct from <em>locality of
+information speed</em> in classical cellular automata, where each cell
+can only influence its immediate neighbors per tick and information
+propagates at speed 1. Cellaria intentionally relaxes the speed
+constraint while preserving locality of effect: no rule inspects or
+modifies the intermediate cells between origin and destination. Theorem
+1 then demonstrates that even with this relaxed notion of locality —
+where information can leap — no global control is required for universal
+computation. Characterising the exact boundary between locality of
+effect and locality of speed remains an open theoretical question.</p>
+<p><strong>On the term “chained”.</strong> The term “chained” refers to
+the fact that multiple shift groups within a single rule are executed
+sequentially in priority order, each group potentially moving the head
+further. A single shift within a group is an atomic jump from origin to
+destination; it does not chain through or inspect intermediate
+cells.</p>
+<p><strong>Interaction with pattern tail.</strong> When a rule with
+pattern <code>[HeadType, TailType]</code> and a shift of 1 step is
+applied, the sequence is:</p>
+<ol type="1">
+<li>The head cell (center, <code>HeadType</code>) is copied to the
+destination cell. The original head position is cleared to 0.</li>
+<li>The destination cell — which previously held <code>TailType</code> —
+is overwritten by the incoming <code>HeadType</code>. The tail is thus
+consumed by the head’s movement.</li>
+<li>The <code>changes</code> phase then writes a new tail symbol at the
+position vacated by the head (now 0), using coordinates relative to the
+head’s post-shift position.</li>
+</ol>
+<p>This guarantees atomicity: the new head and new tail appear
+simultaneously, and no cell is ever simultaneously claimed by two
+operations. The old tail is naturally overwritten by the incoming head
+rather than being explicitly cleared, because the shift phase copies the
+head <em>onto</em> the tail’s position.</p>
+<h3 id="tick-cycle">2.5. Tick Cycle</h3>
+<p>Each simulation tick has five phases:</p>
+<ol type="1">
+<li><strong>Input:</strong> data from input buffers is written to
+boundary cells.</li>
+<li><strong>Detect:</strong> scan the grid for pattern matches.</li>
+<li><strong>Arbitrate:</strong> resolve conflicts by priority, age,
+coordinates.</li>
+<li><strong>Apply:</strong> execute shifts and changes for accepted
+matches.</li>
+<li><strong>Flush:</strong> collect output, advance ages.</li>
+</ol>
+<h3 id="io-boundaries">2.6. I/O Boundaries</h3>
+<p>Boundary cells are on the grid edge. Input buffers feed data to
+boundary cells at the start of each tick. When a cell shifts out of the
+grid, it enters an output buffer. Buffers are organized by channel
+number.</p>
+<hr />
+<h2 id="proof-1-direct-turing-machine-simulation">3. Proof 1: Direct
+Turing Machine Simulation</h2>
+<h3 id="formal-definitions">3.1. Formal Definitions</h3>
+<p><strong>Definition 1 (Encoding function).</strong> Let a Turing
+machine be given as</p>
+<pre><code>M = ⟨Q, Γ, δ, q₀, q_h⟩</code></pre>
+<p>where <code>Q = {q₀, q₁, ..., q_{n-1}, q_h}</code> is the set of
+states, <code>Γ = {γ₀, γ₁, ..., γ_{k-1}}</code> is the tape alphabet
+with blank symbol <code>⊔ ∈ Γ</code>, and
+<code>δ: Q × Γ → Q × Γ × {L, R, H}</code> is the transition
+function.</p>
+<p>We define the encoding function
+<code>enc: (Q ∪ Γ) → CellType</code>:</p>
+<pre><code>enc(γᵢ) = i + 1            for γᵢ ∈ Γ, γᵢ ≠ ⊔
+enc(⊔)  = 0
+enc(qᵢ) = 10 + i            for qᵢ ∈ Q, qᵢ ≠ q_h
+enc(q_h) = 10 + |Q|         (halt state marker)</code></pre>
+<p>Since <code>enc(⊔) = 0</code> and type 0 is the default (empty) cell
+type in Cellaria, blank tape cells are naturally encoded as empty grid
+cells. This alignment is intentional: it ensures that any uninitialised
+region of the grid behaves as a blank tape, and no explicit
+blank-filling is required.</p>
+<p>The encoding function <code>enc</code> is injective on
+<code>Q ∪ Γ</code>: distinct states and tape symbols map to distinct
+cell types. This ensures that every TM configuration has a unique
+Cellaria representation.</p>
+<p><strong>Definition 2 (Cellaria grid configuration, revised).</strong>
+A 1×N grid <code>G</code> encodes a TM configuration
+<code>(q, tape, pos)</code> such that:</p>
+<ul>
+<li>The head marker <code>enc(q)</code> occupies grid position
+<code>pos</code>.</li>
+<li>The tape symbol <code>enc(tape[pos])</code> occupies grid position
+<code>pos+1</code>.</li>
+<li>All other tape symbols occupy their respective positions.</li>
+</ul>
+<p><strong>Invariant:</strong> The head marker is always immediately
+left of the current tape symbol. This ensures that the pattern
+<code>[enc(q), enc(tape[pos])]</code> always matches at position
+<code>pos</code> with the center at <code>pos</code> and
+<code>id[1]</code> at <code>pos+1</code>.</p>
+<p>For the encoding to be valid, the grid must have size at least
+<code>max(pos + 1)</code> where <code>pos</code> is the head position.
+Blank cells (<code>enc(⊔) = 0</code>) may extend beyond the tape to fill
+the remainder of the grid. This ensures that the rule
+<code>[enc(q), enc(a)]</code> always has a complete pattern match at
+<code>pos</code>.</p>
+<p>For a move left transition <code>δ(q, a) = (q', a', L)</code>, after
+the shift: - The head marker moves from <code>pos</code> to
+<code>pos-1</code>. - The current symbol <code>a'</code> is written at
+<code>pos</code> (vacated by head). - The symbol at <code>pos-1</code>
+is now the new “current” symbol from <code>tape[pos-1]</code>. - The new
+pattern <code>[enc(q'), enc(tape[pos-1])]</code> matches at
+<code>pos-1</code>.</p>
+<p>This ensures the invariant is maintained after each step.</p>
+<p>The proof uses a 1×N grid for simplicity. Extension to the full 2D
+grid is straightforward: the tape occupies row 0, and additional rows
+may be used for auxiliary computation or multi-tape simulations without
+affecting the construction.</p>
+<p><strong>Definition 3 (Rule construction, revised notation).</strong>
+For each transition <code>δ(q, a) = (q', a', d)</code>, construct a
+Cellaria rule <code>R(q, a)</code>:</p>
+<pre><code>R(q, a) = Rule(
+    id = [enc(q), enc(a)],          // head marker + tape symbol
+    shifts = [ [shift_spec(d)] ],   // one shift group
+    changes = change_spec(d, enc(a&#39;)),  // returns a list of (dx, dy, value) tuples
+    priority = 10,
+    min_age = 0,
+    active_only = false
+)</code></pre>
+<p>where:</p>
+<pre><code>shift_spec(L) = { direction: west, steps: 1 }
+shift_spec(R) = { direction: east, steps: 1 }
+shift_spec(H) = { direction: east, steps: 1 }   // standard rightward shift
+                                                 // for uniform handling
+
+// change_spec(d, val) returns a list of (dx, dy, value) tuples.
+// For move transitions the list has one element; for halt it has two.
+change_spec(R, val) = [(-1, 0, val)]                       // head moved right (east):
+                                                            // vacated cell is at dx = -1
+change_spec(L, val) = [(+1, 0, val)]                       // head moved left (west):
+                                                            // vacated cell is at dx = +1
+change_spec(H, val) = [(-1, 0, enc(q_h)), (0, 0, val)]    // at vacated position: write halt marker enc(q_h)
+                                                            // at new head position: write updated tape symbol val
+                                                            // both elements applied atomically
+                                                            // in the same changes phase</code></pre>
+<p>The change_spec coordinates are relative to the head’s post-shift
+position. For a rightward move, the vacated cell is one step to the left
+of the new head position (dx = -1). For a leftward move, the vacated
+cell is one step to the right of the new head position (dx = +1).</p>
+<p>For the halt transition, the rule uses a standard rightward shift of
+1 step. Two changes are applied: at the vacated position (dx = -1), the
+halt marker <code>enc(q_h)</code> is written, replacing the original
+head; at the new head position (dx = 0), the updated tape symbol
+<code>val</code> is written, replacing the previous tape symbol. After
+this tick, the grid contains <code>enc(q_h)</code> immediately left of
+the updated tape symbol, maintaining the invariant from Definition 2. On
+the next tick, the detect phase finds no rule matching
+<code>enc(q_h)</code>, and the system stabilises.</p>
+<p>By Definition 1, <code>enc(q_h) = 10 + |Q|</code>. Since no rule is
+generated with <code>id[0] = enc(q_h)</code>, the head marker for the
+halt state has no matching rule. The system stabilizes when the head
+enters this state.</p>
+<p><strong>Definition 4 (Initial configuration).</strong> Given TM input
+<code>w = a₀a₁...a_{m-1}</code>, the initial Cellaria grid is:</p>
+<pre><code>G[0] = enc(q₀)        // head marker
+G[1] = enc(a₀)        // first symbol
+G[2] = enc(a₁)
+...
+G[m] = enc(a_{m-1})
+G[m+1..N-1] = 0       // blank tape</code></pre>
+<h3 id="theorem-1-turing-completeness-of-cellaria">3.2. Theorem 1
+(Turing Completeness of Cellaria)</h3>
+<pre><code>Theorem 1. For any Turing machine M and any input w,
+there exists a finite Cellaria rule set R and a finite grid G
+such that for all n ∈ ℕ:
+
+    M accepts w in n steps (the n-th step enters the halting state q_h)
+    ⇔  
+    Cellaria with rule set R executes exactly n computational ticks
+    (each corresponding to one TM transition), after which the grid
+    contains enc(q_h) as the head marker. On tick n+1, the detect phase
+    finds zero matches and the system stabilises with no further state
+    changes. The number of computational ticks equals the number of
+    TM steps.</code></pre>
+<p><strong>Proof.</strong> We prove by induction on the number of steps
+<code>n</code>.</p>
+<p><strong>Base case (n = 0).</strong> The initial TM configuration
+<code>M ⊢⁰ (q₀, w, 0)</code> maps to the initial Cellaria grid
+<code>G₀</code> per Definition 4. No rule has applied yet, matching the
+TM state before any step.</p>
+<p><strong>Inductive step.</strong> Assume that after <code>n</code>
+steps, the TM configuration <code>(q, tape, pos)</code> maps to Cellaria
+grid <code>Gₙ</code> per Definition 2, and that no rule has been applied
+in tick <code>n</code> (the tick counter is at <code>n</code>, awaiting
+the next tick).</p>
+<p>We show that one tick of Cellaria (phases detect → arbitrate → apply)
+produces grid <code>G_{n+1}</code> that corresponds to the TM
+configuration after step <code>n+1</code>.</p>
+<p><strong>Step 1 (detect).</strong> The grid <code>Gₙ</code> contains
+pattern <code>[enc(q), enc(tape[pos])]</code> at position
+<code>pos</code>. The rule <code>R(q, tape[pos])</code> is present in R
+by Definition 3. The detect phase finds this match.</p>
+<p><strong>Step 2 (arbitrate).</strong> Only one rule matches at
+position <code>pos</code> because <code>enc(q)</code> is unique per
+state. Lemma 1 (below) guarantees no overlapping matches. The rule is
+accepted.</p>
+<p><strong>Step 3 (apply).</strong> According to the Cellaria tick cycle
+(Section 2.5), shifts are applied before changes.</p>
+<ol type="1">
+<li><strong>Shift phase:</strong> head cell at <code>(cx, cy)</code> is
+copied to <code>(cx', cy')</code>, then the original position
+<code>(cx, cy)</code> is cleared to default (0).</li>
+<li><strong>Changes phase:</strong> for each
+<code>(dx, dy, value)</code> in changes, a cell at
+<code>(cx' + dx, cy' + dy)</code> is set to <code>value</code>.</li>
+</ol>
+<p>For TM rules, the changes specification is
+<code>change_spec(d, enc(a'))</code> as defined in Definition 3. Since
+shift has already cleared <code>(cx, cy)</code> before changes execute,
+the write is atomic and unambiguous.</p>
+<p>After application, the grid state is:</p>
+<ul>
+<li>If <code>d = R</code>: <code>G_{n+1}[pos] = enc(a')</code>,
+<code>G_{n+1}[pos+1] = enc(q')</code>, and
+<code>G_{n+1}[pos+2] = enc(tape[pos+1])</code>. This corresponds to TM
+configuration <code>(q', tape[pos←a'], pos+1)</code>.</li>
+<li>If <code>d = L</code>: after shift, the head moves from
+<code>pos</code> to <code>pos-1</code>. The <code>changes</code>
+specification <code>change_spec(L, enc(a')) = (+1, 0, enc(a'))</code>
+writes <code>enc(a')</code> at <code>dx = +1</code> relative to the new
+head position, i.e., at <code>pos</code> (the cell vacated by the head).
+Thus: <code>G_{n+1}[pos-1] = enc(q')</code>,
+<code>G_{n+1}[pos] = enc(a')</code>. The invariant holds:
+<code>enc(q')</code> is now immediately left of
+<code>enc(tape[pos-1])</code> at their respective positions, forming the
+pattern <code>[enc(q'), enc(tape[pos-1])]</code> at the new head
+position <code>pos-1</code>. This corresponds to TM configuration
+<code>(q', tape[pos←a'], pos-1)</code>.</li>
+<li>If <code>d = H</code>: the rule performs a standard rightward shift
+of 1 step. The head moves from <code>pos</code> to <code>pos+1</code>.
+Two changes are applied:
+<code>change_spec(H, enc(a'))[0] = (-1, 0, enc(q_h))</code> writes the
+halt marker <code>enc(q_h)</code> at the vacated position
+<code>pos</code> (dx = -1 relative to the new head position
+<code>pos+1</code>).
+<code>change_spec(H, enc(a'))[1] = (0, 0, enc(a'))</code> writes the
+updated tape symbol <code>enc(a')</code> at the new head position
+<code>pos+1</code>. Thus: <code>G_{n+1}[pos] = enc(q_h)</code>,
+<code>G_{n+1}[pos+1] = enc(a')</code>. The invariant from Definition 2
+is maintained: the head marker <code>enc(q_h)</code> is immediately left
+of the current tape symbol. Since no rule has
+<code>id[0] = enc(q_h)</code> (by Definition 1), the detect phase of the
+next tick finds zero matches, and the system stabilises.</li>
+</ul>
+<p><strong>Halt.</strong> If <code>δ(q, a) = (q', a', H)</code>, the
+transition is executed in one computational tick as described above
+(case d = H), producing a grid with head marker <code>enc(q_h)</code>.
+On the next tick (n+1), the detect phase finds zero matches, and the
+system stabilises. The halt transition itself is a regular computational
+step; stabilisation is the absence of further computation.</p>
+<p>Thus, each Cellaria tick corresponds to exactly one TM step, and the
+sequences of configurations are isomorphic. ∎</p>
+<h3 id="lemma-1-conflict-free-rules">3.3. Lemma 1 (Conflict-Free
+Rules)</h3>
+<pre><code>Lemma 1. For a Turing machine M with state set Q,
+let R be the rule set constructed per Definition 3.
+Then for any two distinct rules r₁, r₂ ∈ R,
+there is no grid state g where both r₁ and r₂ match
+at overlapping cells.</code></pre>
+<p><strong>Proof.</strong> Two rules <code>r₁</code> and <code>r₂</code>
+may only conflict if their patterns overlap at the same grid position.
+The matching pattern of any rule <code>R(q, a)</code> is
+<code>[enc(q), enc(a)]</code>, where <code>enc(q)</code> is the head
+marker and <code>enc(a)</code> is the tape symbol.</p>
+<p>Consider two cases:</p>
+<p><strong>Case 1: <code>q₁ ≠ q₂</code>.</strong> Then
+<code>enc(q₁) ≠ enc(q₂)</code> by Definition 1 (since <code>enc</code>
+is injective on <code>Q</code>). The first element of
+<code>id(r₁)</code> differs from the first element of
+<code>id(r₂)</code>. Pattern matching requires <code>id[0]</code> to
+match the center cell. Since <code>enc(q₁) ≠ enc(q₂)</code>, no cell can
+be the center of both patterns simultaneously.</p>
+<p><strong>Case 2: <code>q₁ = q₂ = q</code> but
+<code>a₁ ≠ a₂</code>.</strong> Then <code>enc(a₁) ≠ enc(a₂)</code> (the
+encoding is injective on <code>Γ</code>). The patterns are
+<code>[enc(q), enc(a₁)]</code> and <code>[enc(q), enc(a₂)]</code>. They
+share the same center cell type <code>enc(q)</code>, but the second cell
+<code>id[1]</code> differs. For both to match at the same position, the
+cell to the right of the center would need to be both
+<code>enc(a₁)</code> and <code>enc(a₂)</code>, which is impossible.</p>
+<p><strong>Case 3: <code>q₁ = q₂</code> and
+<code>a₁ = a₂</code>.</strong> Then <code>r₁ = r₂</code> (identical
+transition). The rule set may contain duplicate entries, but they are
+logically identical and produce the same match. No conflict arises.</p>
+<p>Thus, no two distinct rules can match at overlapping cells. ∎</p>
+<p><strong>Remark (Extension to dynamic patterns).</strong> While the
+constructed TM rule set uses only two-element patterns
+<code>[enc(q), enc(a)]</code>, Cellaria’s rule syntax permits
+single-element patterns <code>[enc(q)]</code> and longer patterns. For
+completeness, we note that Lemma 1 generalizes: any rule set where
+patterns are disjoint (no two patterns share the same cell type at
+matching positions) will have conflict-free execution. This enables
+future extensions (e.g., multi-head rules, variable-length
+patterns).</p>
+<p><strong>Corollary 1.</strong> Under Lemma 1, arbitration is
+deterministic: for any grid state, at most one rule matches at each
+position, and no two matches overlap. The greedy arbitration algorithm
+accepts all matches.</p>
+<p><strong>Corollary 2 (Parallel execution).</strong> Under the TM rule
+set constructed per Definition 3, Lemma 1 guarantees that no two rules
+match at overlapping positions. Therefore, all matches in a given tick
+are pairwise independent and can be applied in any order — or
+simultaneously in a single parallel pass over the grid — without
+affecting the final configuration. This provides a direct path to
+efficient parallel implementation on GPU or FPGA architectures, as the
+detect and apply phases for the TM simulation require no sequential
+arbitration.</p>
+<h3 id="implementation-bit-inversion">3.4. Implementation: Bit
+Inversion</h3>
+<p>The configuration <code>configs/turing.yaml</code> implements a
+bit-inverting TM with tape alphabet <code>Γ = {0, 1}</code> and a single
+state <code>Q₀</code>:</p>
+<pre><code>head marker:       10  (enc(Q₀) = 10)
+tape symbol 1:     1   (enc(1) = 1)
+tape symbol 0:     2   (enc(0) = 2)
+blank:             0</code></pre>
+<p>Rules:</p>
+<pre><code>id=[10, 2] → shift east, change (-1, 0, 1)    read 0, write 1, move right
+id=[10, 1] → shift east, change (-1, 0, 2)    read 1, write 0, move right</code></pre>
+<p>The change at <code>dx = -1</code> writes the new symbol at the
+position vacated by the head. The head type remains <code>10</code> (no
+state change), so the head continues moving right. When the head reaches
+a blank cell (type 0), no rule matches and the system halts.</p>
+<p>The inverse encoding (type 2 = 0, type 1 = 1) is used to make the
+output symbols visually distinct from the input symbols, facilitating
+manual verification of correctness.</p>
+<h3 id="complexity-of-tm-simulation">3.5. Complexity of TM
+Simulation</h3>
+<p><strong>Theorem 2 (Time preservation).</strong> Each simulated TM
+transition, including the transition that writes the halting state
+<code>q_h</code>, is executed in exactly one Cellaria tick.</p>
+<p><em>Proof.</em> The inductive proof of Theorem 1 establishes a
+bijection between TM transitions and Cellaria ticks. The halt transition
+is a regular transition that writes <code>q_h</code>; the subsequent
+stabilisation (zero matches in the next detect phase) is not a
+computation step. ∎</p>
+<p><strong>Theorem 3 (Space efficiency).</strong> Simulating a TM with
+<code>n</code> states and tape length <code>k</code> requires
+<code>O(n + k)</code> Cellaria cells on a 1×N grid.</p>
+<p><em>Proof.</em> The tape requires <code>k</code> cells (one per tape
+position). The head requires 1 cell of type <code>enc(q)</code>, which
+is distinct from tape symbols. The total is <code>k + 1</code> cells.
+The number of states <code>n</code> affects the rule set size, not the
+grid size. The encoding <code>enc(q) = 10 + i</code> requires no
+additional grid cells. ∎</p>
+<hr />
+<h2 id="proof-2-reduction-via-tag-system">4. Proof 2: Reduction via Tag
+System</h2>
+<h3 id="tag-systems-minsky-1961">4.1. Tag Systems (Minsky 1961)</h3>
+<p>A tag system with deletion number <code>m = 2</code> and alphabet
+<code>Σ = {A, B}</code>:</p>
+<ul>
+<li>Configuration: a string <code>w ∈ Σ*</code></li>
+<li>Step: let <code>X = w[0]</code>. Delete the first <code>m = 2</code>
+symbols from <code>w</code>. Append the production
+<code>π(X) ∈ Σ*</code> to the end.</li>
+<li>Halt: when <code>|w| &lt; m</code>.</li>
+</ul>
+<p>Minsky proved that tag systems with <code>m = 2</code> and binary
+alphabet are Turing-complete [Minsky 1961].</p>
+<p>For our demonstration, we use productions
+<code>π(A) = AB, π(B) = A</code>.</p>
+<h3 id="simulating-one-tag-step-in-cellaria">4.2. Simulating One Tag
+Step in Cellaria</h3>
+<p>The configuration <code>configs/tag_system.yaml</code> implements one
+tag system step.</p>
+<p><strong>Grid layout (1×32):</strong></p>
+<pre><code>[10, A, B, B, 0, 0, ...]
+  ↑   ↑
+marker  string</code></pre>
+<p><strong>Marker states:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>10</code></td>
+<td>Start: read first symbol</td>
+</tr>
+<tr>
+<td><code>11</code></td>
+<td>Read A, deleting second symbol</td>
+</tr>
+<tr>
+<td><code>12</code></td>
+<td>Read B, deleting second symbol</td>
+</tr>
+<tr>
+<td><code>13</code></td>
+<td>Traverse (A→AB): shifting symbols left</td>
+</tr>
+<tr>
+<td><code>14</code></td>
+<td>Traverse (B→A): shifting symbols left</td>
+</tr>
+<tr>
+<td><code>15</code></td>
+<td>Write A (first symbol of AB production)</td>
+</tr>
+<tr>
+<td><code>16</code></td>
+<td>Write A (A production)</td>
+</tr>
+<tr>
+<td><code>17</code></td>
+<td>Write B (second symbol of AB production)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Execution phases:</strong></p>
+<ol type="1">
+<li>Read and delete m=2: <code>[10, X, Y] → [0, 0, 13|14]</code></li>
+<li>Traverse: <code>[13|14, X] → [X, 13|14]</code> — compress the string
+leftward</li>
+<li>Write production: <code>[13|14, 0] → [π(X), 0]</code> — production
+is written, marker disappears via change <code>[0, 0, 0]</code>. Tick
+stops because next tick finds zero matches.</li>
+</ol>
+<p>For concreteness, the trace below demonstrates one tag step on the
+initial string A B B, which transforms to B A B under productions π(A) =
+AB, π(B) = A.</p>
+<h3 id="trace-example-a-b-b-b-a-b">4.3. Trace Example (A B B → B A
+B)</h3>
+<p>From actual simulation:</p>
+<pre><code>Tick 0: [10, 1, 2, 2, 0, ...]   // initial: A B B (1=A, 2=B)
+Tick 1: [0, 11, 2, 2, 0, ...]   read A
+Tick 2: [0, 0, 13, 2, 0, ...]   delete second B
+Tick 3: [0, 0, 2, 13, 0, ...]   carry B left
+Tick 4: [0, 0, 2, 1, 15, ...]   write A (AB production)
+Tick 5: [0, 0, 2, 1, 2, ...]    write B, marker changes to (0,0,0) → 0 matches
+Tick 6: [0, 0, 2, 1, 2, ...]    stable: B A B ✓
+        (no rule matches; system halts)</code></pre>
+<h3 id="composition-and-axiom-3-revised">4.4. Composition and Axiom 3
+(Revised)</h3>
+<p>One tag system step corresponds to one Cellaria run: from initial
+state to a stable configuration with no matching rules. The result is
+the string prepared for the next step.</p>
+<p><strong>Meta-Interpreter Construction:</strong></p>
+<p>To simulate multiple tag steps without external orchestration, we can
+construct a meta-interpreter within Cellaria itself:</p>
+<p>A finite rule set <code>R_meta</code> that: 1. Reads an input string
+from boundary (Axiom 3, input phase). 2. Executes one tag step using
+rules from Section 4.2. 3. Upon completion (zero matches), signals
+readiness via output. 4. Waits for next input, then repeats.</p>
+<p>The composition of meta-interpreter rules with boundary I/O rules
+creates a feedback loop: output from tick N becomes input for tick N+1.
+By Axiom 3, this is permitted because I/O is external to the grid.</p>
+<p><strong>Theorem 5 (Tag System Composition).</strong> A Cellaria
+meta-interpreter constructed as above can execute an arbitrary finite
+sequence of tag system steps by repeated boundary feedback without
+modification to the rule set.</p>
+<p>Thus, any tag system computation (which is a finite sequence of
+steps, or a potentially infinite sequence that terminates) is realised
+by Cellaria with external coordination through Axiom 3.</p>
+<p>We acknowledge that the meta-interpreter construction relies on
+boundary I/O (Axiom 3) for step composition. A fully internal tag system
+interpreter — where the entire computation cycle runs within the grid
+without external intervention — remains an open engineering challenge.
+However, this does not weaken the completeness result: Axiom 3 is part
+of the model, and external coordination is a legitimate use of it. This
+proof path demonstrates that tag system semantics are expressible in
+Cellaria; the direct TM simulation (Proof 1, Theorem 1) provides the
+stronger, fully internal completeness result.</p>
+<p><strong>Fully internal vs. I/O-assisted interpretation.</strong></p>
+<p>The meta-interpreter construction in this section achieves Turing
+completeness through boundary I/O feedback. An alternative, fully
+internal architecture is feasible: upon completion of a tag step (zero
+matches), an additional rule could detect this state and reinitialise
+the marker at position 0. Such a rule would match the pattern
+<code>[0, any]</code> at the grid start and write a new marker
+<code>enc(start)</code>, triggering the next step automatically.</p>
+<p>This internal restart is a natural extension of Cellaria’s
+capabilities (detection of empty cells, arbitrary writes via
+<code>changes</code>) and confirms that the meta-interpreter
+construction is not a fundamental limitation of the model, but rather a
+choice of implementation strategy.</p>
+<p><strong>Corollary 5.1.</strong> By Minsky’s theorem, tag systems with
+<code>m = 2</code> are Turing-complete. Therefore, Cellaria is
+Turing-complete. <em>Note: this completeness path assumes external
+coordination via Axiom 3 for step composition; Theorem 1 provides the
+stronger, fully internal result.</em></p>
+<h3 id="transitive-completeness">4.5. Transitive Completeness</h3>
+<ol type="1">
+<li>Tag systems (m=2) are Turing-complete [Minsky 1961]; the binary
+encoding is historically discussed in Cocke and Minsky (1964).</li>
+<li>One tag system step is simulated by Cellaria (Section 4.2).</li>
+<li>Step composition is orchestrated through boundary I/O (Axiom 3).
+Therefore, Cellaria is Turing-complete.</li>
+</ol>
+<h3 id="complexity-of-tag-system-simulation">4.6. Complexity of Tag
+System Simulation</h3>
+<p><strong>Theorem 4 (Tag step complexity).</strong> One tag system step
+on a string of length <code>k</code> requires <code>O(k)</code> Cellaria
+ticks.</p>
+<p><em>Proof.</em> The simulation consists of three phases: - Read and
+delete m=2: 2 ticks. - Traverse: <code>k - 2</code> ticks (one symbol
+shifted left per tick). - Write production: <code>|π(X)|</code> ticks
+(one symbol per tick). Total ticks:
+<code>2 + (k - 2) + |π(X)| = k + |π(X)| = O(k)</code>. ∎</p>
+<hr />
+<h2 id="discussion">5. Discussion</h2>
+<h3 id="two-independent-proofs">5.1. Two Independent Proofs</h3>
+<p>We have established Turing completeness by two independent paths:</p>
+<pre><code>Path 1:  Turing machine → Cellaria (direct encoding, turing.yaml)
+Path 2:  Tag system → Turing machine [Minsky] → Cellaria (tag_system.yaml)</code></pre>
+<p>The first path is constructive and direct: any TM transition table
+produces a Cellaria rule set. The second path is indirect but simpler in
+execution: a tag system step requires only forward movement, no
+back-and-forth head motion. Together, they rule out systematic
+translation errors.</p>
+<h3 id="limitations">5.2. Limitations</h3>
+<ul>
+<li><strong>Grid size:</strong> Cellaria supports both fixed-size
+(<code>VecStorage</code>) and unbounded (<code>ChunkStorage</code>)
+grids. For both completeness proofs, a finite grid is sufficient: the
+Turing machine tape grows only within its initial allocation, and the
+tag system string fits within the 1×32 row. No boundary I/O is required
+for these demonstrations.</li>
+<li><strong>Single head:</strong> Cellaria rules match a single head per
+pattern. Truly parallel multi-head computation is not demonstrated
+here.</li>
+<li><strong>Determinism:</strong> greedy arbitration is deterministic,
+but the model permits non-deterministic rule sets (overlapping patterns
+with equal priority). The completeness proofs assume deterministic
+arbitration. Lemma 1 shows that the constructed TM rule sets are always
+conflict-free.</li>
+</ul>
+<h3 id="comparison-with-other-models">5.3. Comparison with Other
+Models</h3>
+<p><strong>Interaction Nets (Lafont 1990):</strong> Interaction nets are
+graph-based and require port connections. Cellaria uses a homogeneous
+grid with geometric adjacency. Interaction nets have a stronger notion
+of locality (only active pairs interact); Cellaria rules can inspect
+longer patterns. Interaction nets are also Turing-complete, but their
+graph rewriting is more complex than Cellaria’s chained shift.</p>
+<p><strong>P-Systems (Păun 1998):</strong> P-systems use hierarchical
+membrane structures with evolution rules. Cellaria has no hierarchy; all
+cells are equal. P-systems achieve Turing completeness through membrane
+dissolution and creation, which have no analogue in Cellaria.</p>
+<p><strong>Chemical Abstract Machine (CHAM, Berry &amp; Boudol
+1992):</strong> CHAM uses multiset rewriting with no spatial structure.
+Cellaria adds geometry: cells have coordinates, distance matters, and
+chained shift provides directional movement. CHAM’s completeness relies
+on the ability to encode any multiset rewriting system; Cellaria’s
+completeness is proved by explicit simulation.</p>
+<p><strong>MGS (Giavitto 2002):</strong> MGS is a spatial computing
+language based on topological collections. It supports multiple spatial
+structures (arrays, graphs, Delaunay triangulations) and declarative
+rewriting. Cellaria is more constrained (grid only, chained shift only)
+but simpler to analyze.</p>
+<p><strong>Amorphous Computing (Abelson et al. 2000):</strong> Amorphous
+computing models computation in irregular, probabilistic environments.
+Cellaria is deterministic and grid-based, making it more suitable for
+formal verification.</p>
+<h3 id="complexity-analysis-summary">5.4. Complexity Analysis
+Summary</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Path 1 (TM)</th>
+<th>Path 2 (Tag system)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ticks per step</td>
+<td>1 (Theorem 2)</td>
+<td>O(k) per tag step (Theorem 4)</td>
+</tr>
+<tr>
+<td>Grid cells</td>
+<td>O(k + n) (Theorem 3)</td>
+<td>O(k)</td>
+</tr>
+<tr>
+<td>Rules</td>
+<td>O(</td>
+<td>Q</td>
+</tr>
+<tr>
+<td>Rules (demo)</td>
+<td>O(</td>
+<td>Q</td>
+</tr>
+</tbody>
+</table>
+<h3 id="implications">5.5. Implications</h3>
+<p>The result “local reduction suffices for universal computation” has
+both theoretical and practical implications:</p>
+<ul>
+<li>Theoretically, it establishes a lower bound: even minimal locality
+(fixed pattern matching, chained shift, greedy arbitration) is
+sufficient for universality. No global control, no shared memory, no
+central scheduler is required.</li>
+<li>Practically, the Cellaria model maps naturally to hardware without
+shared buses: each cell can be an independent processing element
+communicating only with immediate neighbors. This is relevant for novel
+computing substrates (e.g., molecular computing, optical computing,
+distributed sensor networks).</li>
+<li>The model’s determinism (Lemma 1) and the formal proof of
+conflict-free TM rules provide a foundation for verification of Cellaria
+programs.</li>
+<li>An additional implication is the model’s potential for parallelism.
+Lemma 1 demonstrates that for the constructed TM rule sets, rules never
+conflict, and thus all matches can be applied simultaneously in a single
+tick. For general rule sets, Cellaria’s semantics do not preclude
+parallel execution: any set of non-overlapping matches is guaranteed to
+produce the same result regardless of application order. However, the
+greedy arbitration algorithm as currently specified resolves overlaps
+sequentially by priority. Characterising exactly which rule sets admit
+fully parallel execution — and whether a static analysis can determine
+this — remains an open question.</li>
+<li>The relaxation of locality of speed, while preserving locality of
+effect, raises a fundamental question: what is the minimal speed of
+information propagation necessary for universality in a locally-acting
+system? Cellaria provides an upper bound: a single tick suffices for any
+finite jump.</li>
+</ul>
+<h3 id="open-questions-and-future-work">5.6. Open Questions and Future
+Work</h3>
+<p>Several directions remain open:</p>
+<ol type="1">
+<li><strong>Non-determinism:</strong> What is the expressiveness of
+Cellaria with non-deterministic rule sets (overlapping patterns with
+equal priority)?</li>
+<li><strong>Optimization:</strong> Can Cellaria programs be compiled to
+efficient machine code, e.g., for GPU execution?</li>
+<li><strong>Abstraction:</strong> What higher-level programming
+languages can be designed to translate naturally to Cellaria rules?</li>
+<li><strong>Spatial complexity:</strong> What spatial lower bounds exist
+for Cellaria programs? Can we prove that some computations inherently
+require Ω(n) grid cells?</li>
+<li><strong>Variants:</strong> What happens if we extend to 3D grids, or
+if we permit diagonal shifts?</li>
+</ol>
+<hr />
+<h2 id="conclusion">6. Conclusion</h2>
+<p>We have presented Cellaria, a computational model based entirely on
+local reduction. The model is defined by five axioms that ensure
+locality: homogeneous grid, computation through rules only, interface
+through boundary only, rules stored externally, and cleanup through
+rules.</p>
+<p>Two independent proofs demonstrate Turing completeness:</p>
+<ol type="1">
+<li><strong>Theorem 1</strong> provides a <em>strong, fully
+internal</em> completeness result: the entire computation runs within
+the grid, requiring no external intervention or I/O beyond the initial
+configuration.</li>
+<li><strong>Section 4</strong> provides an <em>I/O-assisted</em>
+completeness proof via tag systems (Minsky, m=2). While step composition
+here relies on boundary I/O (Axiom 3), this proof path independently
+confirms that tag system semantics are faithfully expressible in
+Cellaria.</li>
+</ol>
+<p>Both proofs rely solely on the primitive operations: pattern
+matching, chained shift, and greedy arbitration. No global control, no
+shared memory, and no central scheduler is required.</p>
+<p>The result establishes that local reduction, as formalized by
+Cellaria, is a sufficient basis for universal computation. Moreover,
+this work demonstrates that local reduction is not merely sufficient but
+also efficient for universal computation: the TM-to-Cellaria translation
+preserves both time (one tick per step) and space (linear in tape size).
+This suggests that locality imposes no asymptotic computational penalty
+in space or time for the class of Turing machines.</p>
+<hr />
+<h2 id="references">References</h2>
+<ol type="1">
+<li><p>Minsky, M. L. (1961). “Recursive Unsolvability of Post’s Problem
+of Tag and Other Topics in Theory of Turing Machines.” <em>Annals of
+Mathematics</em>, 74(3), 437–455.</p></li>
+<li><p>Cocke, J., &amp; Minsky, M. (1964). “Universality of Tag Systems
+with P=2.” <em>Journal of the ACM</em>, 11(1), 15–20.</p></li>
+<li><p>Lafont, Y. (1990). “Interaction Nets.” <em>Proceedings of the
+17th ACM SIGPLAN-SIGACT Symposium on Principles of Programming
+Languages</em>, 95–108.</p></li>
+<li><p>Păun, G. (1998). “Computing with Membranes.” <em>Journal of
+Computer and System Sciences</em>, 61(1), 108–143.</p></li>
+<li><p>Berry, G., &amp; Boudol, G. (1992). “The Chemical Abstract
+Machine.” <em>Theoretical Computer Science</em>, 96(1),
+217–248.</p></li>
+<li><p>Turing, A. M. (1936). “On Computable Numbers, with an Application
+to the Entscheidungsproblem.” <em>Proceedings of the London Mathematical
+Society</em>, s2-42(1), 230–265.</p></li>
+<li><p>Wolfram, S. (2002). <em>A New Kind of Science</em>. Wolfram
+Media. [On cellular automata and universality.]</p></li>
+<li><p>Cook, M. (2004). “Universality in Elementary Cellular Automata.”
+<em>Complex Systems</em>, 15(1), 1–40.</p></li>
+<li><p>Giavitto, J.-L., &amp; Michel, O. (2002). “The Topological
+Structures of Membrane Computing.” <em>Fundamenta Informaticae</em>,
+49(1-3), 123–145.</p></li>
+<li><p>Abelson, H., et al. (2000). “Amorphous Computing.”
+<em>Communications of the ACM</em>, 43(5), 74–82.</p></li>
+<li><p>Plump, D. (2012). “The Graph Programming Language GP 2.”
+<em>EATCS Bulletin</em>, 108, 49–68.</p></li>
+</ol>
+<hr />
+<h2 id="appendix-a-full-example-turing-machine-bit-inversion">Appendix
+A: Full Example — Turing Machine Bit Inversion</h2>
+<h3 id="a.1.-configuration">A.1. Configuration</h3>
+<p>The complete configuration <code>configs/turing.yaml</code>:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">grid</span><span class="kw">:</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">width</span><span class="kw">:</span><span class="at"> </span><span class="dv">16</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">height</span><span class="kw">:</span><span class="at"> </span><span class="dv">1</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">default_cell_type</span><span class="kw">:</span><span class="at"> </span><span class="dv">0</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">initial_cells</span><span class="kw">:</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">coord</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">0</span><span class="kw">,</span><span class="at"> </span><span class="dv">0</span><span class="kw">]</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">type</span><span class="kw">:</span><span class="at"> </span><span class="dv">10</span><span class="co">        # head marker (state Q₀)</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">coord</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">1</span><span class="kw">,</span><span class="at"> </span><span class="dv">0</span><span class="kw">]</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">type</span><span class="kw">:</span><span class="at"> </span><span class="dv">1</span><span class="co">         # tape symbol 1</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">coord</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">2</span><span class="kw">,</span><span class="at"> </span><span class="dv">0</span><span class="kw">]</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">type</span><span class="kw">:</span><span class="at"> </span><span class="dv">2</span><span class="co">         # tape symbol 0</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">coord</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">3</span><span class="kw">,</span><span class="at"> </span><span class="dv">0</span><span class="kw">]</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">type</span><span class="kw">:</span><span class="at"> </span><span class="dv">1</span><span class="co">         # tape symbol 1</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">coord</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">4</span><span class="kw">,</span><span class="at"> </span><span class="dv">0</span><span class="kw">]</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">type</span><span class="kw">:</span><span class="at"> </span><span class="dv">1</span><span class="co">         # tape symbol 1</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">coord</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">5</span><span class="kw">,</span><span class="at"> </span><span class="dv">0</span><span class="kw">]</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">type</span><span class="kw">:</span><span class="at"> </span><span class="dv">2</span><span class="co">         # tape symbol 0</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">boundaries</span><span class="kw">:</span><span class="at"> </span><span class="kw">[]</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a><span class="fu">rules</span><span class="kw">:</span></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="co">  # (Q₀, 0) → (Q₀, 1), move right</span></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="fu">id</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">10</span><span class="kw">,</span><span class="at"> </span><span class="dv">2</span><span class="kw">]</span><span class="co">       # 10=head, 2=enc(0)</span></span>
+<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">priority</span><span class="kw">:</span><span class="at"> </span><span class="dv">10</span></span>
+<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">shifts</span><span class="kw">:</span></span>
+<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="kw">-</span><span class="at"> </span><span class="fu">group</span><span class="kw">:</span></span>
+<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a><span class="at">          </span><span class="kw">-</span><span class="at"> </span><span class="fu">direction</span><span class="kw">:</span><span class="at"> east</span></span>
+<span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a><span class="at">            </span><span class="fu">steps</span><span class="kw">:</span><span class="at"> </span><span class="dv">1</span></span>
+<span id="cb13-30"><a href="#cb13-30" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">changes</span><span class="kw">:</span></span>
+<span id="cb13-31"><a href="#cb13-31" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="kw">-</span><span class="at"> </span><span class="kw">[</span><span class="dv">-1</span><span class="kw">,</span><span class="at"> </span><span class="dv">0</span><span class="kw">,</span><span class="at"> </span><span class="dv">1</span><span class="kw">]</span><span class="co">    # write 1 (enc(1)) at vacated position</span></span>
+<span id="cb13-32"><a href="#cb13-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-33"><a href="#cb13-33" aria-hidden="true" tabindex="-1"></a><span class="co">  # (Q₀, 1) → (Q₀, 0), move right</span></span>
+<span id="cb13-34"><a href="#cb13-34" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="fu">id</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">10</span><span class="kw">,</span><span class="at"> </span><span class="dv">1</span><span class="kw">]</span><span class="co">       # 10=head, 1=enc(1)</span></span>
+<span id="cb13-35"><a href="#cb13-35" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">priority</span><span class="kw">:</span><span class="at"> </span><span class="dv">10</span></span>
+<span id="cb13-36"><a href="#cb13-36" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">shifts</span><span class="kw">:</span></span>
+<span id="cb13-37"><a href="#cb13-37" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="kw">-</span><span class="at"> </span><span class="fu">group</span><span class="kw">:</span></span>
+<span id="cb13-38"><a href="#cb13-38" aria-hidden="true" tabindex="-1"></a><span class="at">          </span><span class="kw">-</span><span class="at"> </span><span class="fu">direction</span><span class="kw">:</span><span class="at"> east</span></span>
+<span id="cb13-39"><a href="#cb13-39" aria-hidden="true" tabindex="-1"></a><span class="at">            </span><span class="fu">steps</span><span class="kw">:</span><span class="at"> </span><span class="dv">1</span></span>
+<span id="cb13-40"><a href="#cb13-40" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">changes</span><span class="kw">:</span></span>
+<span id="cb13-41"><a href="#cb13-41" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="kw">-</span><span class="at"> </span><span class="kw">[</span><span class="dv">-1</span><span class="kw">,</span><span class="at"> </span><span class="dv">0</span><span class="kw">,</span><span class="at"> </span><span class="dv">2</span><span class="kw">]</span><span class="co">    # write 2 (enc(0)) at vacated position</span></span></code></pre></div>
+<h3 id="a.2.-encoding">A.2. Encoding</h3>
+<table>
+<thead>
+<tr>
+<th>TM component</th>
+<th>Cellaria type</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Head in state Q₀</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Tape symbol 1</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Tape symbol 0</td>
+<td>2</td>
+</tr>
+<tr>
+<td>Blank (end of tape)</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p>The inversion encoding (type 1 = symbol 1, type 2 = symbol 0) is a
+design choice for readability. The actual mapping is irrelevant to the
+proof.</p>
+<h3 id="a.3.-trace-simulation-output">A.3. Trace (simulation
+output)</h3>
+<p>Input: <code>1 0 1 1 0</code> (binary <code>10110</code>)</p>
+<pre><code>Tick 0: [10, 1, 2, 1, 1, 2, 0, 0, ...]   head at pos 0
+Tick 1: [2, 10, 2, 1, 1, 2, 0, 0, ...]    write 0, move right
+Tick 2: [2, 1, 10, 1, 1, 2, 0, 0, ...]    write 1, move right
+Tick 3: [2, 1, 2, 10, 1, 2, 0, 0, ...]    write 0, move right
+Tick 4: [2, 1, 2, 2, 10, 2, 0, 0, ...]    write 0, move right
+Tick 5: [2, 1, 2, 2, 1, 10, 0, 0, ...]    write 1, move right
+Tick 6: [2, 1, 2, 2, 1, 10, 0, 0, ...]    halt (no match for [10, 0])</code></pre>
+<p>At tick 6, the head is at position 5. The pattern
+<code>[10, 0]</code> (head followed by blank) does not match any rule
+(we only have <code>[10, 1]</code> and <code>[10, 2]</code>). The system
+enters a stable state with zero matches.</p>
+<p>Output: <code>2 1 2 2 1</code> = <code>0 1 0 0 1</code> (binary
+<code>01001</code> = bit-inverted <code>10110</code>).</p>
+<p>The head never turns around; it traverses the tape once, inverting
+each bit, and halts when it reaches the first blank cell. This simulates
+a TM with a single state and a right-moving head.</p>
+<h3 id="a.4.-decoding">A.4. Decoding</h3>
+<table>
+<thead>
+<tr>
+<th>Cellaria output</th>
+<th>Decoded value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2</td>
+<td>0</td>
+</tr>
+<tr>
+<td>1</td>
+<td>1</td>
+</tr>
+<tr>
+<td>2</td>
+<td>0</td>
+</tr>
+<tr>
+<td>2</td>
+<td>0</td>
+</tr>
+<tr>
+<td>1</td>
+<td>1</td>
+</tr>
+</tbody>
+</table>
+<p>Result: <code>01001</code> = bit-inverted input <code>10110</code>
+✓</p>
+<hr />
+<p><em>Cellaria source code and configurations: <a
+href="https://github.com/PixelDeus/Cellaria">https://github.com/PixelDeus/Cellaria</a></em></p>
+</body>
+</html>
