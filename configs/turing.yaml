@@ -46,7 +46,7 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 1]
+      - {dx: -1, dy: 0, value: 1}
 
   # (Q0, 1) → (Q0, 0), East
   - id: [10, 1]
@@ -56,4 +56,4 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 2]
+      - {dx: -1, dy: 0, value: 2}

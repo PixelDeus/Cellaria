@@ -1,6 +1,6 @@
 use cellaria::config::load_config;
 use cellaria::engine::Engine;
-use cellaria::VecStorage;
+use cellaria::render::{render_grid, render_grid_json};
 use clap::Parser;
 
 /// Cellaria — вычислительная модель на принципе локальной редукции.
@@ -19,46 +19,6 @@ struct Args {
     /// Вывод финального состояния решётки в JSON
     #[arg(long)]
     json: bool,
-}
-
-fn print_grid_line(grid: &cellaria::Grid<VecStorage>) {
-    let w = grid.width();
-    let h = grid.height();
-    for y in 0..h {
-        for x in 0..w {
-            let cell = grid
-                .get_cell(x, y)
-                .expect("print_grid_line: ячейка должна существовать в пределах решётки");
-            print!("{:3}", cell.value.0 .0);
-        }
-        println!();
-    }
-}
-
-fn print_grid_json(grid: &cellaria::Grid<VecStorage>) {
-    let w = grid.width();
-    let h = grid.height();
-    let mut cells: Vec<Vec<u8>> = Vec::with_capacity(h);
-    for y in 0..h {
-        let mut row = Vec::with_capacity(w);
-        for x in 0..w {
-            let cell = grid
-                .get_cell(x, y)
-                .expect("print_grid_json: ячейка должна существовать в пределах решётки");
-            row.push(cell.value.0 .0);
-        }
-        cells.push(row);
-    }
-    let output = serde_json::json!({
-        "width": w,
-        "height": h,
-        "cells": cells,
-    });
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&output)
-            .expect("print_grid_json: ошибка сериализации JSON")
-    );
 }
 
 fn main() {
@@ -86,7 +46,7 @@ fn main() {
         );
         println!();
         println!("Тик 0:");
-        print_grid_line(engine.grid());
+        render_grid(engine.grid());
         println!();
     }
 
@@ -103,7 +63,7 @@ fn main() {
 
         if !args.json && !has_io {
             println!("Тик {} ({} совпадений):", tick, accepted.len());
-            print_grid_line(engine.grid());
+            render_grid(engine.grid());
             println!();
             if accepted.is_empty() && tick > 1 {
                 println!("Система достигла устойчивого состояния. Остановка.");
@@ -115,6 +75,6 @@ fn main() {
     }
 
     if args.json {
-        print_grid_json(engine.grid());
+        println!("{}", render_grid_json(engine.grid()));
     }
 }

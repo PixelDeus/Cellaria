@@ -1,13 +1,12 @@
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use crate::error::CellariaError;
 use crate::grid::Grid;
-use crate::storage::GridStorage;
 use crate::storage::VecStorage;
 use crate::types::{
-    BoundaryBuffer, Cell, CellType, CellValue, Direction, OverflowAction, Rule,
+    BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule,
     ShiftSpec,
 };
 
@@ -26,18 +25,38 @@ struct YamlShiftGroup {
     group: Vec<YamlShift>,
 }
 
+/// Одно изменение: (смещение_x, смещение_y, значение).
+/// Значение может быть числом (литерал) или строкой вида "$0" (ссылка на паттерн).
+#[derive(Debug, Clone, Deserialize)]
+struct YamlChange {
+    dx: i32,
+    dy: i32,
+    value: serde_yaml::Value,
+}
+
+/// YAML-формат одной записи двумерного паттерна.
+#[derive(Debug, Deserialize)]
+struct YamlPatternEntry {
+    offset: [i8; 2],
+    #[serde(rename = "type")]
+    cell_type: u8,
+}
+
 /// YAML-формат одного правила.
 #[derive(Debug, Deserialize)]
 struct YamlRule {
     /// Внутренняя область — последовательность чисел (n-кортеж).
     id: Vec<u8>,
+    /// Двумерный паттерн (опционально, расширение одномерного id).
+    #[serde(default)]
+    pattern: Vec<YamlPatternEntry>,
     /// Приоритет.
     priority: u32,
     /// Сдвиги: каждая группа — Vec<ShiftSpec>.
     #[serde(default)]
     shifts: Vec<YamlShiftGroup>,
-    /// Изменения ячеек: (смещение_x, смещение_y, новое_значение).
-    changes: Vec<[i32; 3]>,
+    /// Изменения ячеек.
+    changes: Vec<YamlChange>,
     /// Если true — проверять только в активных ячейках.
     #[serde(default)]
     active_only: bool,
@@ -63,7 +82,7 @@ struct YamlBoundary {
     cell: [usize; 2],
     channel: u32,
     direction: String,
-    max_queue: u8,
+    max_queue: Option<u8>,
 }
 
 /// YAML-формат секции grid.
@@ -99,6 +118,41 @@ fn parse_direction(s: &str) -> Result<Direction, CellariaError> {
     }
 }
 
+/// Преобразовать serde_yaml::Value в ChangeValue.
+fn parse_change_value(value: &serde_yaml::Value) -> Result<ChangeValue, CellariaError> {
+    match value {
+        serde_yaml::Value::Number(n) => {
+            let v = n
+                .as_u64()
+                .ok_or_else(|| CellariaError::Config("Invalid number in changes".to_string()))?;
+            if v > 255 {
+                return Err(CellariaError::Config(format!(
+                    "Change value {} exceeds 255",
+                    v
+                )));
+            }
+            Ok(ChangeValue::Literal(v as u8))
+        }
+        serde_yaml::Value::String(s) => {
+            if let Some(rest) = s.strip_prefix('$') {
+                let idx: usize = rest
+                    .parse()
+                    .map_err(|_| CellariaError::Config(format!("Invalid pattern ref: {}", s)))?;
+                Ok(ChangeValue::Ref(idx))
+            } else {
+                Err(CellariaError::Config(format!(
+                    "Invalid change value: {} (use number or $N)",
+                    s
+                )))
+            }
+        }
+        other => Err(CellariaError::Config(format!(
+            "Invalid change value type: {:?}",
+            other
+        ))),
+    }
+}
+
 /// Результат загрузки конфига: решётка + индекс правил по типу центра.
 pub type ConfigResult = Result<(Grid<VecStorage>, RuleIndex), CellariaError>;
 
@@ -111,6 +165,25 @@ pub fn load_config(path: &str) -> ConfigResult {
         .map_err(|e| CellariaError::Config(format!("YAML parse error: {}", e)))?;
     let yg = yaml.grid;
 
+    // Собираем начальные активные координаты
+    let default_type = yg.default_cell_type;
+    let mut initial_active: HashSet<(usize, usize)> = HashSet::new();
+
+    // Ячейки с не-дефолтным типом — активны
+    for yc in &yg.initial_cells {
+        let [x, y] = yc.coord;
+        if yc.cell_type != default_type {
+            initial_active.insert((x, y));
+        }
+    }
+
+    // Граничные ячейки — всегда активны
+    if let Some(boundaries) = &yg.boundaries {
+        for b in boundaries {
+            initial_active.insert((b.cell[0], b.cell[1]));
+        }
+    }
+
     // Создаём решётку
     let mut storage = VecStorage::new(yg.width, yg.height);
 
@@ -119,11 +192,13 @@ pub fn load_config(path: &str) -> ConfigResult {
         cell.value = CellValue(CellType(yg.default_cell_type));
     }
 
+    let mut grid = Grid::new(storage, initial_active);
+
     // Устанавливаем явно указанные ячейки
     for yc in &yg.initial_cells {
         let [x, y] = yc.coord;
         if x < yg.width && y < yg.height {
-            storage.set(
+            grid.set_cell(
                 x,
                 y,
                 Cell {
@@ -134,15 +209,14 @@ pub fn load_config(path: &str) -> ConfigResult {
         }
     }
 
-    let mut grid = Grid::new(storage);
-
     // Устанавливаем граничные буферы с очередями
     if let Some(boundaries) = &yg.boundaries {
         for b in boundaries {
             let mut buf = BoundaryBuffer::new();
             // Создаём пустую очередь для указанного канала
-            buf.queues.insert(b.channel, Vec::new());
+            buf.queues.insert(b.channel, std::collections::VecDeque::new());
             buf.direction = b.direction.clone();
+            buf.max_queue = b.max_queue;
             grid.set_boundary(b.cell[0], b.cell[1], buf);
         }
     }
@@ -150,10 +224,10 @@ pub fn load_config(path: &str) -> ConfigResult {
     // Создаём правила
     let mut rules: Vec<Rule> = Vec::new();
     for yr in yaml.rules {
-        // Валидация: id не может быть пустым
-        if yr.id.is_empty() {
+        // Валидация: id не может быть пустым, если не задан pattern
+        if yr.id.is_empty() && yr.pattern.is_empty() {
             return Err(CellariaError::RuleValidation(
-                "Rule id must not be empty".to_string(),
+                "Rule id or pattern must not be empty".to_string(),
             ));
         }
 
@@ -181,16 +255,31 @@ pub fn load_config(path: &str) -> ConfigResult {
         }
 
         // Преобразуем изменения
-        let changes: Vec<(i32, i32, u8)> = yr
-            .changes
-            .iter()
-            .map(|c| (c[0], c[1], c[2] as u8))
-            .collect();
+        let mut changes: Vec<(i32, i32, ChangeValue)> = Vec::new();
+        for yc in yr.changes {
+            let cv = parse_change_value(&yc.value)?;
+            changes.push((yc.dx, yc.dy, cv));
+        }
 
         let rule_id: Vec<CellType> = yr.id.into_iter().map(CellType::new).collect();
 
-        // Строим pattern из rule.id (для совместимости)
-        let pattern: Vec<Vec<u8>> = vec![rule_id.iter().map(|ct| ct.0).collect()];
+        // Строим pattern: если задан явно — используем его, иначе из id
+        let pattern: Vec<(i8, i8, CellType)> = if !yr.pattern.is_empty() {
+            yr.pattern
+                .into_iter()
+                .map(|entry| {
+                    let [dx, dy] = entry.offset;
+                    (dx, dy, CellType::new(entry.cell_type))
+                })
+                .collect()
+        } else {
+            // Из id: (0,0, id[0]), (1,0, id[1]), ...
+            rule_id
+                .iter()
+                .enumerate()
+                .map(|(i, ct)| (i as i8, 0i8, *ct))
+                .collect()
+        };
 
         rules.push(Rule {
             id: rule_id,
@@ -200,15 +289,21 @@ pub fn load_config(path: &str) -> ConfigResult {
             active_only: yr.active_only,
             priority: yr.priority,
             min_age: yr.min_age,
-            overflow: Default::default(),
+            overflow: yr.overflow,
         });
     }
 
-    // Строим индекс
+    // Строим индекс: ключ — первый элемент id или первый элемент pattern
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     for rule in rules {
-        if let Some(center) = rule.id.first() {
-            rule_index.entry(*center).or_default().push(rule);
+        // Определяем центральный тип для индексации
+        let center_type = rule.id.first().copied().or_else(|| {
+            rule.pattern
+                .first()
+                .map(|&(_, _, ct)| ct)
+        });
+        if let Some(ct) = center_type {
+            rule_index.entry(ct).or_default().push(rule);
         }
     }
 
@@ -251,5 +346,31 @@ mod tests {
     fn test_load_config_invalid_path() {
         let result = load_config("nonexistent.yaml");
         assert!(result.is_err(), "Should fail for nonexistent file");
+    }
+
+    #[test]
+    fn test_parse_change_value_literal() {
+        let v = serde_yaml::Value::Number(serde_yaml::Number::from(42));
+        assert_eq!(parse_change_value(&v).unwrap(), ChangeValue::Literal(42));
+    }
+
+    #[test]
+    fn test_parse_change_value_ref() {
+        let v = serde_yaml::Value::String("$0".to_string());
+        assert_eq!(parse_change_value(&v).unwrap(), ChangeValue::Ref(0));
+        let v = serde_yaml::Value::String("$3".to_string());
+        assert_eq!(parse_change_value(&v).unwrap(), ChangeValue::Ref(3));
+    }
+
+    #[test]
+    fn test_parse_change_value_invalid_string() {
+        let v = serde_yaml::Value::String("foo".to_string());
+        assert!(parse_change_value(&v).is_err());
+    }
+
+    #[test]
+    fn test_parse_change_value_overflow() {
+        let v = serde_yaml::Value::Number(serde_yaml::Number::from(300u64));
+        assert!(parse_change_value(&v).is_err());
     }
 }

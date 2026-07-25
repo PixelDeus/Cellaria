@@ -36,8 +36,8 @@ rules:
           - direction: east
             steps: 2
     changes:
-      - [0, 0, 0]
-      - [1, 0, 1]
+      - {dx: 0, dy: 0, value: 0}
+      - {dx: 1, dy: 0, value: 1}
 
   # сдвиг на 2 → вытекает на (4, 1) и затирается default_cell_type=0
   - id: [3, 4]
@@ -47,5 +47,5 @@ rules:
           - direction: east
             steps: 2
     changes:
-      - [0, 0, 0]
-      - [1, 0, 3]
+      - {dx: 0, dy: 0, value: 0}
+      - {dx: 1, dy: 0, value: 3}

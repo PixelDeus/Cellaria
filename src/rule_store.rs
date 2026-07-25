@@ -101,19 +101,23 @@ impl RuleStore {
     /// Вызывается после `run_tick` (когда `flush_output` уже перенёс данные).
     /// Дренирует только канал 0 (rule-канал), не затрагивая другие каналы.
     pub fn drain_rule_channel<S: GridStorage>(&mut self, grid: &mut Grid<S>) -> Vec<CompletedOp> {
-        // Собираем все значения из канала 0 граничных буферов
+        // Собираем все значения из канала 0 граничных буферов c direction == "output"
         let mut drained: Vec<u8> = Vec::new();
         for (_coord, boundary) in grid.iter_boundaries() {
-            if let Some(queue) = boundary.queues.get(&0) {
-                for cell in queue {
-                    drained.push(cell.value.0 .0);
+            if boundary.direction == "output" {
+                if let Some(queue) = boundary.queues.get(&0) {
+                    for cell in queue {
+                        drained.push(cell.value.0 .0);
+                    }
                 }
             }
         }
 
-        // Очищаем только очередь канала 0 в буферах
+        // Очищаем только очередь канала 0 в output-буферах
         for (_, boundary) in grid.iter_boundaries_mut() {
-            boundary.queues.remove(&0);
+            if boundary.direction == "output" {
+                boundary.queues.remove(&0);
+            }
         }
 
         // Накопляем байты в буфер
@@ -262,7 +266,7 @@ fn deserialize_packet(data: &[u8], _next_id: u8) -> Result<RuleOp, String> {
 
             let mut offset = type_end;
             let mut shifts: Vec<Vec<crate::types::ShiftSpec>> = Vec::new();
-            let mut changes: Vec<(i32, i32, u8)> = Vec::new();
+            let mut changes: Vec<(i32, i32, crate::types::ChangeValue)> = Vec::new();
 
             // Парсим сдвиги (опционально)
             while offset < data.len() && data[offset] == SHIFT_FLAG {
@@ -284,7 +288,7 @@ fn deserialize_packet(data: &[u8], _next_id: u8) -> Result<RuleOp, String> {
                     }
                 };
 
-                if shifts.is_empty() || !shifts.last().unwrap().is_empty() {
+                if shifts.is_empty() || !shifts.last().is_some_and(|last| last.is_empty()) {
                     shifts.push(Vec::new());
                 }
                 if let Some(last) = shifts.last_mut() {
@@ -302,16 +306,23 @@ fn deserialize_packet(data: &[u8], _next_id: u8) -> Result<RuleOp, String> {
                     return Err("AddRule: not enough bytes for change".to_string());
                 }
                 // Простой формат: dx, dy, value — все байты
+                // Protocol limitation: only ChangeValue::Literal is supported in packets.
+                // ChangeValue::Ref is not encoded and will be rejected by the parser.
                 let dx = data[offset] as i8 as i32;
                 let dy = data[offset + 1] as i8 as i32;
                 let value = data[offset + 2];
-                changes.push((dx, dy, value));
+                changes.push((dx, dy, crate::types::ChangeValue::Literal(value)));
                 offset += 3;
             }
 
+            // Строим pattern из id (обратная совместимость)
+            let pattern: Vec<(i8, i8, CellType)> = id.iter().enumerate()
+                .map(|(i, &ct)| (i as i8, 0i8, ct))
+                .collect();
+
             let rule = Rule {
                 id,
-                pattern: vec![],
+                pattern,
                 shifts,
                 changes,
                 active_only: false,
@@ -331,6 +342,7 @@ mod tests {
     use crate::grid::Grid;
     use crate::storage::VecStorage;
     use crate::types::{BoundaryBuffer, Cell, CellType, CellValue};
+    use std::collections::HashSet;
 
     fn make_grid_from_vec(width: usize, height: usize) -> Grid<VecStorage> {
         let storage = VecStorage {
@@ -338,7 +350,7 @@ mod tests {
             width,
             height,
         };
-        Grid::new(storage)
+        Grid::new(storage, HashSet::new())
     }
 
     #[test]
@@ -376,7 +388,7 @@ mod tests {
         assert_eq!(op, RuleOp::ClearAll);
     }
 
-    fn make_rule(id: Vec<CellType>, priority: u32, changes: Vec<(i32, i32, u8)>) -> Rule {
+    fn make_rule(id: Vec<CellType>, priority: u32, changes: Vec<(i32, i32, crate::types::ChangeValue)>) -> Rule {
         Rule {
             id,
             pattern: vec![],
@@ -392,7 +404,7 @@ mod tests {
     #[test]
     fn test_rule_store_apply_add() {
         let mut store = RuleStore::new();
-        let rule = make_rule(vec![CellType(1)], 10, vec![(0, 0, 2)]);
+        let rule = make_rule(vec![CellType(1)], 10, vec![(0, 0, crate::types::ChangeValue::Literal(2))]);
         assert!(store.apply(CompletedOp {
             op: RuleOp::AddRule(rule)
         }));
@@ -402,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_rule_store_apply_remove() {
-        let rule = make_rule(vec![CellType(1)], 10, vec![(0, 0, 2)]);
+        let rule = make_rule(vec![CellType(1)], 10, vec![(0, 0, crate::types::ChangeValue::Literal(2))]);
         let mut store = RuleStore::with_rules(vec![rule]);
         store.dirty = false;
         assert!(store.apply(CompletedOp {
@@ -414,8 +426,8 @@ mod tests {
     #[test]
     fn test_rule_store_apply_clear() {
         let rules = vec![
-            make_rule(vec![CellType(1)], 10, vec![(0, 0, 2)]),
-            make_rule(vec![CellType(3)], 5, vec![(0, 0, 4)]),
+            make_rule(vec![CellType(1)], 10, vec![(0, 0, crate::types::ChangeValue::Literal(2))]),
+            make_rule(vec![CellType(3)], 5, vec![(0, 0, crate::types::ChangeValue::Literal(4))]),
         ];
         let mut store = RuleStore::with_rules(rules);
         store.dirty = false;
@@ -427,11 +439,11 @@ mod tests {
 
     #[test]
     fn test_get_index_rebuilds_when_dirty() {
-        let rule = make_rule(vec![CellType(5)], 10, vec![(0, 0, 6)]);
+        let rule = make_rule(vec![CellType(5)], 10, vec![(0, 0, crate::types::ChangeValue::Literal(6))]);
         let mut store = RuleStore::with_rules(vec![rule]);
         store.get_index();
 
-        let new_rule = make_rule(vec![CellType(7)], 5, vec![(0, 0, 8)]);
+        let new_rule = make_rule(vec![CellType(7)], 5, vec![(0, 0, crate::types::ChangeValue::Literal(8))]);
         store.apply(CompletedOp {
             op: RuleOp::AddRule(new_rule),
         });
@@ -460,7 +472,9 @@ mod tests {
     #[test]
     fn test_drain_rule_channel_basic() {
         let mut grid = make_grid_from_vec(1, 1);
-        grid.set_boundary(0, 0, BoundaryBuffer::new());
+        let mut bb = BoundaryBuffer::new();
+        bb.direction = "output".to_string();
+        grid.set_boundary(0, 0, bb);
         // Симулируем вывод в граничный буфер (через канал 0)
         if let Some(buf) = grid.get_boundary_mut(0, 0) {
             buf.enqueue(0, Cell {
@@ -497,7 +511,9 @@ mod tests {
     #[test]
     fn test_decode_errors_increments_on_bad_packet() {
         let mut grid = make_grid_from_vec(1, 1);
-        grid.set_boundary(0, 0, BoundaryBuffer::new());
+        let mut bb = BoundaryBuffer::new();
+        bb.direction = "output".to_string();
+        grid.set_boundary(0, 0, bb);
         // Corrupted data: just 255 (empty packet = error)
         if let Some(buf) = grid.get_boundary_mut(0, 0) {
             buf.enqueue(0, Cell {
@@ -523,5 +539,87 @@ mod tests {
     fn test_error_stats() {
         let store = RuleStore::new();
         assert_eq!(store.error_stats(), 0);
+    }
+
+    // ====================================================================
+    // Интеграционный тест: RuleStore + Engine (самомодификация)
+    // ====================================================================
+
+    #[test]
+    fn test_integration_self_modification() {
+        use crate::types::ChangeValue;
+
+        // 1) Создаём решётку 3×3 с VecStorage
+        let mut grid = make_grid_from_vec(3, 3);
+
+        // 2) Правило 1: id=[7], priority=10, changes=[(0,0,0)]
+        let rule1 = Rule {
+            id: vec![CellType(7)],
+            pattern: vec![],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(0))],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+        };
+
+        // 3) Правило 2: id=[9], priority=5,
+        let _rule2 = Rule {
+            id: vec![CellType(9)],
+            pattern: vec![],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(42))],
+            active_only: false,
+            priority: 5,
+            min_age: 0,
+            overflow: Default::default(),
+        };
+
+        // 4) RuleStore с правилом 1
+        let mut store = RuleStore::with_rules(vec![rule1]);
+
+        // 5) Симулируем внешний пакет: кладём rule2 в граничный буфер
+        if grid.get_boundary(0, 0).is_none() {
+            let mut bb = BoundaryBuffer::new();
+            bb.direction = "output".to_string();
+            grid.set_boundary(0, 0, bb);
+        }
+        if let Some(buf) = grid.get_boundary_mut(0, 0) {
+            buf.enqueue(0, Cell { value: CellValue(CellType(5)), age: 0 });
+            buf.enqueue(0, Cell { value: CellValue(CellType(1)), age: 0 });
+            buf.enqueue(0, Cell { value: CellValue(CellType(9)), age: 0 });
+            buf.enqueue(0, Cell { value: CellValue(CellType(255)), age: 0 });
+        }
+
+        // 6) Дренируем канал и применяем
+        let ops = store.drain_rule_channel(&mut grid);
+        assert_eq!(ops.len(), 1, "should decode one AddRule packet");
+        for op in ops {
+            store.apply(op);
+        }
+
+        // 7) Проверяем, что в store теперь два правила
+        assert_eq!(
+            store.rules().len(),
+            2,
+            "should have 2 rules after self-modification"
+        );
+
+        // 8) Проверяем, что индекс перестроился и включает новое правило
+        let idx = store.get_index();
+        assert!(
+            idx.contains_key(&CellType(7)),
+            "index should contain rule1"
+        );
+        assert!(
+            idx.contains_key(&CellType(9)),
+            "index should contain rule2 after self-modification"
+        );
+        assert_eq!(
+            idx[&CellType(9)].len(),
+            1,
+            "index should have exactly 1 rule for CellType(9)"
+        );
     }
 }

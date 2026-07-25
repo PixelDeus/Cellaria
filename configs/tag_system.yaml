@@ -42,8 +42,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 0]
-      - [0, 0, 11]
+      - {dx: -1, dy: 0, value: 0}
+      - {dx: 0, dy: 0, value: 11}
 
   - id: [10, 2]
     priority: 10
@@ -52,8 +52,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 0]
-      - [0, 0, 12]
+      - {dx: -1, dy: 0, value: 0}
+      - {dx: 0, dy: 0, value: 12}
 
   # ==========================================================================
   # ФАЗА 2: Удаление второго символа (m=2 завершено)
@@ -66,8 +66,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 0]
-      - [0, 0, 13]
+      - {dx: -1, dy: 0, value: 0}
+      - {dx: 0, dy: 0, value: 13}
 
   - id: [11, 2]
     priority: 10
@@ -76,8 +76,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 0]
-      - [0, 0, 13]
+      - {dx: -1, dy: 0, value: 0}
+      - {dx: 0, dy: 0, value: 13}
 
   - id: [12, 1]
     priority: 10
@@ -86,8 +86,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 0]
-      - [0, 0, 14]
+      - {dx: -1, dy: 0, value: 0}
+      - {dx: 0, dy: 0, value: 14}
 
   - id: [12, 2]
     priority: 10
@@ -96,8 +96,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 0]
-      - [0, 0, 14]
+      - {dx: -1, dy: 0, value: 0}
+      - {dx: 0, dy: 0, value: 14}
 
   # ==========================================================================
   # ФАЗА 3: Traverse — перенос символов налево
@@ -110,8 +110,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 1]
-      - [0, 0, 13]
+      - {dx: -1, dy: 0, value: 1}
+      - {dx: 0, dy: 0, value: 13}
 
   - id: [13, 2]
     priority: 10
@@ -120,8 +120,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 2]
-      - [0, 0, 13]
+      - {dx: -1, dy: 0, value: 2}
+      - {dx: 0, dy: 0, value: 13}
 
   - id: [14, 1]
     priority: 10
@@ -130,8 +130,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 1]
-      - [0, 0, 14]
+      - {dx: -1, dy: 0, value: 1}
+      - {dx: 0, dy: 0, value: 14}
 
   - id: [14, 2]
     priority: 10
@@ -140,8 +140,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 2]
-      - [0, 0, 14]
+      - {dx: -1, dy: 0, value: 2}
+      - {dx: 0, dy: 0, value: 14}
 
   # ==========================================================================
   # ФАЗА 4: Конец строки — запись продукции, маркер исчезает
@@ -156,8 +156,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 1]
-      - [0, 0, 15]
+      - {dx: -1, dy: 0, value: 1}
+      - {dx: 0, dy: 0, value: 15}
 
   # A→AB: пишем B, маркер 15 → 0 (исчезает). Сдвиг east, чтобы не перезаписать A.
   - id: [15, 0]
@@ -167,8 +167,8 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 2]
-      - [0, 0, 0]
+      - {dx: -1, dy: 0, value: 2}
+      - {dx: 0, dy: 0, value: 0}
 
   # B→A: пишем A, маркер 14 → 0 (исчезает). Сдвиг east, чтобы освободить место.
   - id: [14, 0]
@@ -178,5 +178,5 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 1]
-      - [0, 0, 0]
+      - {dx: -1, dy: 0, value: 1}
+      - {dx: 0, dy: 0, value: 0}

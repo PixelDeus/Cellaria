@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 // ============================================================================
 // Базовые типы данных
 // ============================================================================
+
+/// Значение пустой ячейки по умолчанию.
+pub const DEFAULT_CELL_VALUE: u8 = 0;
 
 /// Вещественное значение ячейки (обёртка для будущих расширений).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -25,6 +28,12 @@ impl CellValue {
     }
 }
 
+impl Default for CellValue {
+    fn default() -> Self {
+        Self(CellType::new(DEFAULT_CELL_VALUE))
+    }
+}
+
 /// Полное представление ячейки.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
@@ -41,9 +50,16 @@ impl Cell {
         }
     }
 
-    /// Пустая ячейка (значение 0, возраст 0).
+    /// Пустая ячейка (значение DEFAULT_CELL_VALUE, возраст 0).
     pub const fn empty() -> Self {
-        Self::new(0)
+        Self::new(DEFAULT_CELL_VALUE)
+    }
+
+    /// Проверяет, является ли ячейка "дефолтной": значение 0, возраст 0.
+    /// Граничная ячейка (с привязанным BoundaryBuffer) не считается дефолтной,
+    /// но эта проверка не учитывает границу — она на уровне Grid::set_cell.
+    pub fn is_default(&self) -> bool {
+        self.value == CellValue::default() && self.age == 0
     }
 }
 
@@ -51,6 +67,30 @@ impl Default for Cell {
     fn default() -> Self {
         Self::empty()
     }
+}
+
+// ============================================================================
+// ChangeValue — значение изменения: литерал или ссылка на паттерн
+// ============================================================================
+
+/// Значение для записи в changes: либо литерал (u8), либо ссылка на позицию
+/// в паттерне ($0, $1, ...).
+///
+/// ## Examples
+///
+/// ```
+/// use cellaria::types::ChangeValue;
+///
+/// let lit = ChangeValue::Literal(42);
+/// let ref0 = ChangeValue::Ref(0);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChangeValue {
+    /// Числовой литерал, например 5.
+    Literal(u8),
+    /// Ссылка на позицию в паттерне (0-based), например "$0" = Ref(0).
+    Ref(usize),
 }
 
 // ============================================================================
@@ -87,6 +127,20 @@ impl ShiftSpec {
 pub type RuleId = Vec<CellType>;
 
 /// Хранит позицию совпадения и идентификатор (список CellType) сработавшего правила.
+///
+/// ## Examples
+///
+/// ```
+/// use cellaria::types::{RuleMatch, CellType};
+///
+/// let m = RuleMatch {
+///     x: 0,
+///     y: 0,
+///     pattern: vec![vec![1, 2]],
+///     rule_id: vec![CellType::new(1), CellType::new(2)],
+/// };
+/// assert_eq!(m.x, 0);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuleMatch {
     pub x: u32,
@@ -96,20 +150,24 @@ pub struct RuleMatch {
 }
 
 /// Действие при выходе ячейки за границу решётки (overflow).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// ## Examples
+///
+/// ```
+/// use cellaria::types::OverflowAction;
+///
+/// let discard = OverflowAction::Discard;
+/// let write = OverflowAction::Write(1);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OverflowAction {
     /// Отбросить ячейку (не писать в граничный буфер).
     #[serde(rename = "discard")]
+    #[default]
     Discard,
     /// Записать ячейку в граничный буфер с указанным типом-заменителем.
     #[serde(rename = "write")]
     Write(u8),
-}
-
-impl Default for OverflowAction {
-    fn default() -> Self {
-        Self::Discard
-    }
 }
 
 // ============================================================================
@@ -117,17 +175,36 @@ impl Default for OverflowAction {
 // ============================================================================
 
 /// Полное определение правила.
+///
+/// ## Examples
+///
+/// ```
+/// use cellaria::types::{Rule, CellType, ShiftSpec, Direction, ChangeValue, OverflowAction};
+///
+/// let rule = Rule {
+///     id: vec![CellType::new(1), CellType::new(2)],
+///     pattern: vec![(0, 0, CellType::new(1)), (1, 0, CellType::new(2))],
+///     shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+///     changes: vec![(1, 0, ChangeValue::Literal(3))],
+///     active_only: false,
+///     priority: 10,
+///     min_age: 0,
+///     overflow: OverflowAction::Discard,
+/// };
+/// assert_eq!(rule.priority, 10);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rule {
     /// Внутренняя область (n-кортеж CellType).
     pub id: RuleId,
-    /// Паттерн для сопоставления (как правило выглядит на решётке).
-    pub pattern: Vec<Vec<u8>>,
+    /// Двумерный паттерн для сопоставления: (dx, dy, тип).
+    /// Если пуст — строится из `id` как `(dx=0..n, dy=0, id[dx])`.
+    pub pattern: Vec<(i8, i8, CellType)>,
     /// Сдвиги: каждая группа срабатывает в порядке приоритета.
     pub shifts: Vec<Vec<ShiftSpec>>,
     /// Изменения ячеек: (смещение_x, смещение_y, новое_значение).
     /// ВАЖНО: эти изменения применяются только если хотя бы один сдвиг был выполнен.
-    pub changes: Vec<(i32, i32, u8)>,
+    pub changes: Vec<(i32, i32, ChangeValue)>,
     /// Если true — правило проверяется только в активных ячейках.
     /// Если false — проверяется везде.
     pub active_only: bool,
@@ -162,9 +239,11 @@ impl Rule {
 #[derive(Debug, Clone)]
 pub struct BoundaryBuffer {
     /// Очереди данных: channel_number → [значения]
-    pub queues: HashMap<u32, Vec<Cell>>,
+    pub queues: HashMap<u32, VecDeque<Cell>>,
     /// Направление: "input" (ввод из stdin) или "output" (вывод в stdout).
     pub direction: String,
+    /// Максимальный размер очереди (None = без ограничения).
+    pub max_queue: Option<u8>,
 }
 
 impl BoundaryBuffer {
@@ -172,17 +251,25 @@ impl BoundaryBuffer {
         Self {
             queues: HashMap::new(),
             direction: String::new(),
+            max_queue: None,
         }
     }
 
     /// Записать ячейку в очередь указанного канала.
+    /// Если очередь превышает max_queue — удаляется самый старый элемент (pop_front).
     pub fn enqueue(&mut self, channel: u32, cell: Cell) {
-        self.queues.entry(channel).or_default().push(cell);
+        let queue = self.queues.entry(channel).or_default();
+        if let Some(max) = self.max_queue {
+            if queue.len() >= max as usize {
+                queue.pop_front();
+            }
+        }
+        queue.push_back(cell);
     }
 
     /// Извлечь все ячейки из очереди указанного канала.
     pub fn dequeue(&mut self, channel: u32) -> Vec<Cell> {
-        self.queues.remove(&channel).unwrap_or_default()
+        self.queues.remove(&channel).map_or_else(Vec::new, |qd| qd.into_iter().collect())
     }
 
     /// Очистить все очереди.

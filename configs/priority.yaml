@@ -21,11 +21,11 @@ rules:
   - id: [1, 2]
     priority: 10
     changes:
-      - [0, 0, 5]
-      - [1, 0, 5]
+      - {dx: 0, dy: 0, value: 5}
+      - {dx: 1, dy: 0, value: 5}
 
   - id: [1, 2]
     priority: 5
     changes:
-      - [0, 0, 6]
-      - [1, 0, 6]
+      - {dx: 0, dy: 0, value: 6}
+      - {dx: 1, dy: 0, value: 6}

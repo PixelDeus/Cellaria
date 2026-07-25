@@ -1,0 +1,125 @@
+# =============================================================================
+# Одномерный CA: правило "большинство" (majority)
+#
+# Алфавит: {0, 1}. Радиус: 1 (k=3). f(a,b,c) = 1 если a+b+c ≥ 2, иначе 0.
+#
+# Маркер M=99 на позиции 0, начальные данные на позициях 1..N.
+# За N+2 тика маркер проходит строку, вычисляя следующее поколение.
+# Результат: позиция i содержит f(data[i], data[i+1], data[i+2]).
+# (Сдвиг на -1 относительно исходной нумерации — фиксированное смещение.)
+#
+# Начало: M=99, строка 0 1 0 1 0 0 1 1 1 0 (N=10).
+# =============================================================================
+
+grid:
+  width: 14
+  height: 1
+  default_cell_type: 0
+
+  initial_cells:
+    - coord: [0, 0]
+      type: 99        # маркер
+    # data: 0 1 0 1 0 0 1 1 1 0
+    - coord: [1, 0]
+      type: 0
+    - coord: [2, 0]
+      type: 1
+    - coord: [3, 0]
+      type: 0
+    - coord: [4, 0]
+      type: 1
+    - coord: [5, 0]
+      type: 0
+    - coord: [6, 0]
+      type: 0
+    - coord: [7, 0]
+      type: 1
+    - coord: [8, 0]
+      type: 1
+    - coord: [9, 0]
+      type: 1
+    - coord: [10, 0]
+      type: 0
+
+  boundaries: []
+
+rules:
+  # f(0,0,0) = 0
+  - id: [99, 0, 0, 0]
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - {dx: -1, dy: 0, value: 0}
+
+  # f(0,0,1) = 0
+  - id: [99, 0, 0, 1]
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - {dx: -1, dy: 0, value: 0}
+
+  # f(0,1,0) = 0
+  - id: [99, 0, 1, 0]
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - {dx: -1, dy: 0, value: 0}
+
+  # f(0,1,1) = 1
+  - id: [99, 0, 1, 1]
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - {dx: -1, dy: 0, value: 1}
+
+  # f(1,0,0) = 0
+  - id: [99, 1, 0, 0]
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - {dx: -1, dy: 0, value: 0}
+
+  # f(1,0,1) = 1
+  - id: [99, 1, 0, 1]
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - {dx: -1, dy: 0, value: 1}
+
+  # f(1,1,0) = 1
+  - id: [99, 1, 1, 0]
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - {dx: -1, dy: 0, value: 1}
+
+  # f(1,1,1) = 1
+  - id: [99, 1, 1, 1]
+    priority: 10
+    shifts:
+      - group:
+          - direction: east
+            steps: 1
+    changes:
+      - {dx: -1, dy: 0, value: 1}

@@ -33,7 +33,7 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 0]
+      - {dx: -1, dy: 0, value: 0}
 
   # [10, 0, 1] → 0 XOR 1 = 1
   - id: [10, 0, 1]
@@ -43,7 +43,7 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 1]
+      - {dx: -1, dy: 0, value: 1}
 
   # [10, 1, 0] → 1 XOR 0 = 1
   - id: [10, 1, 0]
@@ -53,7 +53,7 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 1]
+      - {dx: -1, dy: 0, value: 1}
 
   # [10, 1, 1] → 1 XOR 1 = 0
   - id: [10, 1, 1]
@@ -63,4 +63,4 @@ rules:
           - direction: east
             steps: 1
     changes:
-      - [-1, 0, 0]
+      - {dx: -1, dy: 0, value: 0}

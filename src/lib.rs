@@ -40,11 +40,15 @@
 //! use cellaria::engine::run_tick;
 //!
 //! // Загрузка конфига с правилами
-//! let (mut grid, rule_index) = load_config("configs/collision.yaml").unwrap();
-//! let initial = grid.get_cell(0, 0).unwrap().value.0 .0;
+//! let (mut grid, rule_index) = load_config("configs/collision.yaml")
+//!     .expect("YAML parsing failed: check configs/collision.yaml");
+//! let initial = grid.get_cell(0, 0)
+//!     .expect("Cell (0,0) not found")
+//!     .value.0 .0;
 //!
 //! // Один тик симуляции
-//! let (accepted, _outputs) = run_tick(&mut grid, &rule_index);
+//! let active: Vec<(usize, usize)> = grid.iter_active().collect();
+//! let (accepted, _outputs) = run_tick(&mut grid, &rule_index, &active);
 //!
 //! // После тика состояние могло измениться
 //! println!("Начальное: {}, совпадений: {}", initial, accepted.len());
@@ -57,7 +61,8 @@
 //!
 //! // Создание решётки 3×3 с VecStorage
 //! let storage = VecStorage::new(3, 3);
-//! let mut grid = Grid::new(storage);
+//! use std::collections::HashSet;
+//! let mut grid = Grid::new(storage, HashSet::new());
 //!
 //! // Установка ячейки
 //! grid.set_cell(1, 1, Cell {
@@ -88,19 +93,22 @@ pub mod conflict_analyzer;
 pub mod engine;
 pub mod error;
 mod grid;
+pub mod render;
+pub mod tm_translator;
 pub mod rule_store;
 mod storage;
 pub mod types;
 
 // Явные реэкспорты публичного API
 pub use config::load_config;
-pub use engine::{run_tick, Engine, TerminationVerdict};
+pub use conflict_analyzer::ConflictGraph;
+pub use engine::{run_tick, Engine, TerminationVerdict, CompositionVerdict};
 pub use error::CellariaError;
 pub use grid::{Grid, SimpleGrid};
+pub use render::{render_grid, render_grid_json};
 pub use rule_store::RuleStore;
 pub use storage::{ChunkStorage, GridStorage, VecStorage};
 pub use types::{
-    AffectedRegion, BoundaryBuffer, Cell, CellType, CellValue, Direction, OverflowAction,
-    Rule, RuleId, RuleMatch, ShiftSpec,
+    AffectedRegion, BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction,
+    OverflowAction, Rule, RuleId, RuleMatch, ShiftSpec,
 };
-pub use conflict_analyzer::ConflictGraph;

@@ -34,10 +34,8 @@ impl ConflictGraph {
     ///    (относительно позиции совпадения (0,0)).
     ///    b. Для каждого взаимного смещения (dx, dy), где bounding box'ы
     ///    affected regions пересекаются:
-    ///       - Если паттерны пересекаются (dy = 0, dx в диапазоне
-    ///         пересечения id'шников): проверить совместимость типов
-    ///         в пересекающихся ячейках. Если типы разные — не конфликтуют
-    ///         (не могут совпасть одновременно).
+    ///       - Если паттерны пересекаются: проверить совместимость типов
+    ///         в пересекающихся ячейках.
     ///       - Если паттерны не пересекаются: нет ограничения на типы,
     ///         оба правила могут совпасть независимо.
     ///       - Если affected regions пересекаются → ребро (i, j).
@@ -46,6 +44,10 @@ impl ConflictGraph {
     /// так как min_age — это нижняя граница, а не точное время активации.
     /// Если у клетки возраст ≥ max(min_age_i, min_age_j), оба правила
     /// могут сработать в одном тике.
+    ///
+    /// min_age deliberately не используется как фильтр в анализе конфликтов.
+    /// Это консервативная over-approximation: ложные срабатывания для правил
+    /// с разными min_age допустимы, ложные пропуски — нет.
     pub fn build(rules: &[Rule]) -> Self {
         let rule_count = rules.len();
         let mut edges: Vec<(usize, usize)> = Vec::new();
@@ -122,8 +124,8 @@ pub struct RuleData {
     pub affected_cells: Vec<(i32, i32)>,
     /// Bounding box affected cells: (min_x, max_x, min_y, max_y)
     pub bbox: (i32, i32, i32, i32),
-    /// Длина id (количество ячеек в паттерне).
-    pub id_len: usize,
+    /// Ячейки паттерна: (dx, dy) для каждой ячейки в порядке rule.pattern
+    pub pattern_cells: Vec<(i32, i32)>,
     /// Суммарный сдвиг (dx, dy).
     pub total_shift: (i32, i32),
 }
@@ -131,17 +133,16 @@ pub struct RuleData {
 /// Вычислить affected cells для правила относительно позиции совпадения (0,0).
 ///
 /// Affected cells включают:
-/// 1. Ячейки паттерна (id) — читаются при сопоставлении.
+/// 1. Ячейки паттерна (pattern) — читаются при сопоставлении.
 /// 2. Начальная позиция головки (0,0) — очищается.
 /// 3. Конечная позиция головки после сдвигов — записывается.
 /// 4. Ячейки изменений (changes) после сдвигов — записываются.
 pub fn compute_affected_cells(rule: &Rule) -> Vec<(i32, i32)> {
     let mut cells = Vec::new();
-    let n = rule.id.len() as i32;
 
-    // 1. Ячейки паттерна (id) — читаются
-    for i in 0..n {
-        cells.push((i, 0));
+    // 1. Ячейки паттерна — читаются
+    for (dx, dy, _) in &rule.pattern {
+        cells.push((*dx as i32, *dy as i32));
     }
 
     // 2. Начальная позиция головки (0,0) — очищается
@@ -207,13 +208,13 @@ fn compute_bbox(cells: &[(i32, i32)]) -> (i32, i32, i32, i32) {
 fn compute_rule_data(rule: &Rule) -> RuleData {
     let affected_cells = compute_affected_cells(rule);
     let bbox = compute_bbox(&affected_cells);
-    let id_len = rule.id.len();
+    let pattern_cells: Vec<(i32, i32)> = rule.pattern.iter().map(|(dx, dy, _)| (*dx as i32, *dy as i32)).collect();
     let total_shift = compute_total_shift(rule);
 
     RuleData {
         affected_cells,
         bbox,
-        id_len,
+        pattern_cells,
         total_shift,
     }
 }
@@ -272,47 +273,52 @@ fn rules_conflict(
 
 /// Проверить, могут ли два правила совпасть одновременно при данном смещении.
 ///
-/// Если паттерны пересекаются (dy = 0, dx в диапазоне пересечения id'шников):
-/// проверяем совместимость типов в пересекающихся ячейках.
+/// Если паттерны пересекаются: проверяем совместимость типов в пересекающихся ячейках.
 /// Если паттерны не пересекаются — нет ограничения.
 fn can_match_simultaneously(
     rule_i: &Rule,
     rule_j: &Rule,
     data_i: &RuleData,
-    _data_j: &RuleData,
+    data_j: &RuleData,
     dx: i32,
     dy: i32,
 ) -> bool {
-    // Паттерны всегда на одной строке (y = 0 для обоих правил)
-    if dy != 0 {
-        // Паттерны на разных строках — не пересекаются, могут совпасть независимо
-        return true;
-    }
-
-    let len_i = data_i.id_len as i32;
-    let len_j = rule_j.id.len() as i32;
-
-    // Проверяем пересечение паттернов: [0, len_i) ∩ [dx, dx + len_j)
-    let overlap_start = 0.max(dx);
-    let overlap_end = len_i.min(dx + len_j);
-
-    if overlap_end <= overlap_start {
-        // Паттерны не пересекаются — могут совпасть независимо
-        return true;
-    }
-
-    // Паттерны пересекаются — проверяем совместимость типов
-    for x in overlap_start..overlap_end {
-        let type_i = rule_i.id[x as usize];
-        let type_j = rule_j.id[(x - dx) as usize];
-        if type_i != type_j {
-            // Разные типы — не могут совпасть одновременно
-            return false;
+    // Проверяем пересечение паттернов: ищем общие ячейки
+    // Ячейка паттерна i: (dx_i, dy_i), ячейка паттерна j: (dx_j + dx, dy_j + dy)
+    for &(px_i, py_i) in &data_i.pattern_cells {
+        for &(px_j, py_j) in data_j.pattern_cells.iter() {
+            if px_i == px_j + dx && py_i == py_j + dy {
+                // Ячейки пересекаются — проверяем совместимость типов
+                // Находим индекс ячейки в pattern для каждого правила
+                let type_i = get_pattern_type(rule_i, px_i, py_i);
+                let type_j = get_pattern_type(rule_j, px_j, py_j);
+                if type_i != type_j {
+                    // Разные типы — не могут совпасть одновременно
+                    return false;
+                }
+            }
         }
     }
 
-    // Типы совместимы — могут совпасть одновременно
+    // Типы совместимы (или паттерны не пересекаются) — могут совпасть одновременно
     true
+}
+
+/// Получить тип ячейки из паттерна правила по координатам.
+fn get_pattern_type(rule: &Rule, x: i32, y: i32) -> u8 {
+    for (dx, dy, ct) in &rule.pattern {
+        if *dx as i32 == x && *dy as i32 == y {
+            return ct.0;
+        }
+    }
+    // Если не найдено — fallback на старый id (для обратной совместимости)
+    if y == 0 {
+        let idx = x as usize;
+        if idx < rule.id.len() {
+            return rule.id[idx].0;
+        }
+    }
+    0
 }
 
 /// Проверить, пересекаются ли affected regions двух правил при данном смещении.
@@ -367,9 +373,13 @@ mod tests {
         priority: u32,
         min_age: u64,
     ) -> Rule {
+        // Строим pattern из id: [(0,0, id[0]), (1,0, id[1]), ...]
+        let pattern: Vec<(i8, i8, CellType)> = id.iter().enumerate()
+            .map(|(i, &v)| (i as i8, 0i8, CellType(v)))
+            .collect();
         Rule {
             id: id.iter().map(|&v| CellType(v)).collect(),
-            pattern: vec![],
+            pattern,
             shifts: shifts
                 .into_iter()
                 .map(|group| {
@@ -379,7 +389,7 @@ mod tests {
                         .collect()
                 })
                 .collect(),
-            changes,
+            changes: changes.into_iter().map(|(dx, dy, v)| (dx, dy, crate::types::ChangeValue::Literal(v))).collect(),
             active_only: false,
             priority,
             min_age,
@@ -473,12 +483,8 @@ mod tests {
 
     #[test]
     fn test_different_min_age_can_conflict() {
-        // Правило 1: id=[1,2], shift east 1, change -> (0,0,5), min_age=0
-        // Правило 2: id=[3,4], shift west 1, change -> (-1,0,6), min_age=1
-        // При dx=2: паттерны не пересекаются, но affected regions
-        // пересекаются (R0 пишет в (2,0), R1 пишет в (2,0) через change).
-        // Разные min_age не препятствуют конфликту — при возрасте >= 1
-        // оба правила могут сработать в одном тике.
+        // Правило 1: pattern=[(0,0,1),(1,0,2)], shift east 1, change -> (0,0,5), min_age=0
+        // Правило 2: pattern=[(0,0,3),(1,0,4)], shift west 1, change -> (-1,0,6), min_age=1
         let rules = vec![
             make_rule(
                 vec![1, 2],
@@ -497,8 +503,6 @@ mod tests {
         ];
 
         let graph = ConflictGraph::build(&rules);
-        // Проверяем, что конфликт обнаружен: при dx=2 affected regions
-        // пересекаются, а паттерны не пересекаются (могут совпасть независимо)
         assert!(
             !graph.is_conflict_free(),
             "Правила с разными min_age МОГУТ конфликтовать (affected regions пересекаются)"
@@ -511,12 +515,8 @@ mod tests {
 
     #[test]
     fn test_different_head_and_min_age_no_conflict() {
-        // Правило 1: id=[1], min_age=0
-        // Правило 2: id=[2], min_age=10
-        // Разные head-типы: правило 1 ищет тип 1, правило 2 ищет тип 2.
-        // Они не могут совпасть на одной и той же клетке (разные типы).
-        // Даже если совпадут на разных клетках, их affected regions
-        // не пересекаются (каждое затрагивает только свою клетку (0,0)).
+        // Правило 1: pattern=[(0,0,1)], min_age=0
+        // Правило 2: pattern=[(0,0,2)], min_age=10
         let rules = vec![
             make_rule(
                 vec![1],
@@ -547,13 +547,8 @@ mod tests {
 
     #[test]
     fn test_overlap_incompatible_types_no_conflict() {
-        // Правило 1: id = [1, 2] — требует типы 1 и 2 на соседних ячейках
-        // Правило 2: id = [1, 3] — требует типы 1 и 3 на соседних ячейках
-        // При смещении dx=0, dy=0:
-        //   Пересечение: [0, 2) ∩ [0, 2) = [0, 2)
-        //   В ячейке 0: оба требуют тип 1 → совместимо
-        //   В ячейке 1: R1 требует 2, R2 требует 3 → несовместимо
-        // → Не могут совпасть одновременно → нет конфликта
+        // Правило 1: pattern = [(0,0,1), (1,0,2)]
+        // Правило 2: pattern = [(0,0,1), (1,0,3)]
         let rules = vec![
             make_rule(
                 vec![1, 2],
@@ -584,18 +579,6 @@ mod tests {
 
     #[test]
     fn test_overlap_compatible_types_has_conflict() {
-        // Правило 1: id = [1, 2], shift = east 1, change = (0, 0, 5)
-        // Правило 2: id = [2, 3], shift = west 1, change = (0, 0, 6)
-        // При смещении dx=0, dy=0:
-        //   Пересечение: [0, 2) ∩ [0, 2) = [0, 2)
-        //   В ячейке 0: R1 требует 1, R2 требует 2 → несовместимо
-        // При смещении dx=1, dy=0:
-        //   R1 паттерн: [0, 2), R2 паттерн: [1, 3)
-        //   Пересечение: [1, 2)
-        //   В ячейке 1: R1 требует 2, R2 требует 2 → совместимо
-        //   R1 affected: {(0,0) [cleared], (1,0) [head+change], (2,0) [change]}
-        //   R2 affected: {(1,0) [pat+head], (0,0) [head dest+change], (-1,0) [change]}
-        //   Пересечение: (1,0) и (0,0) → конфликт!
         let rules = vec![
             make_rule(
                 vec![1, 2],
@@ -614,9 +597,6 @@ mod tests {
         ];
 
         let graph = ConflictGraph::build(&rules);
-        // Проверяем, что конфликт обнаружен (правила перекрываются)
-        // или не обнаружен (если алгоритм не находит пересечение)
-        // В любом случае, тест должен быть детерминированным
         if graph.is_conflict_free() {
             println!("ПРЕДУПРЕЖДЕНИЕ: тест overlap_compatible_types не обнаружил конфликт (возможно, алгоритм консервативен)");
         } else {
@@ -630,28 +610,17 @@ mod tests {
 
     // ========================================================================
     // Тест: cascade.yaml — каскадные правила могут конфликтовать
-    //
-    // Rule 0: [1,2] → east 1, changes = [(0,0,3), (1,0,4)]
-    //   Head dest: (1,0), changes: (1,0)=3, (2,0)=4
-    // Rule 1: [3,4] → no shift, changes = [(0,0,5), (1,0,6)]
-    //   Head dest: (0,0), changes: (0,0)=5, (1,0)=6
-    //
-    // При совпадении Rule 0 в P и Rule 1 в P+2:
-    //   Rule 0 пишет в (P+2,0) (change), Rule 1 читает/пишет в (P+2,0) (pattern+head+change)
-    //   → пересечение affected regions — это настоящий потенциальный конфликт.
     // ========================================================================
 
     #[test]
     fn test_cascade_rules_have_potential_conflict() {
         let rules = load_rules_from_config("configs/cascade.yaml");
         let graph = ConflictGraph::build(&rules);
-        // Каскадные правила могут конфликтовать при совпадении на разных позициях
         assert!(
             rules.len() >= 2,
             "cascade.yaml должен содержать минимум 2 правила"
         );
         assert_eq!(graph.rule_count, rules.len());
-        // Конфликт может быть обнаружен (консервативная оценка)
         if !graph.is_conflict_free() {
             println!(
                 "cascade.yaml: обнаружен потенциальный конфликт {:?} (консервативная оценка)",
@@ -668,7 +637,6 @@ mod tests {
     fn test_collision_rules() {
         let rules = load_rules_from_config("configs/collision.yaml");
         let graph = ConflictGraph::build(&rules);
-        // Просто проверяем, что граф построен корректно
         assert_eq!(graph.rule_count, rules.len());
     }
 
@@ -709,7 +677,6 @@ mod tests {
     // Тесты: check_composition
     // ========================================================================
 
-    /// test_composition_unique_head — R₁ с типом 10, R₂ с типом 20 → Safe
     #[test]
     fn test_composition_unique_head() {
         let rules_a = vec![make_rule(
@@ -730,7 +697,6 @@ mod tests {
         assert_eq!(verdict, CompositionVerdict::Safe);
     }
 
-    /// test_composition_same_head — R₁ и R₂ с одинаковым head-типом → Unsafe
     #[test]
     fn test_composition_same_head() {
         let rules_a = vec![make_rule(
@@ -755,10 +721,6 @@ mod tests {
         );
     }
 
-    /// test_composition_min_age — R₁ без min_age, R₂ с min_age=10.
-    /// Оба правила имеют одинаковый head-тип (10) и одинаковые affected
-    /// regions (0,0). При возрасте клетки >= 10 оба правила могут сработать
-    /// в одном тике → Unsafe.
     #[test]
     fn test_composition_min_age() {
         let rules_a = vec![make_rule(
@@ -766,18 +728,16 @@ mod tests {
             vec![],
             vec![(0, 0, 5)],
             10,
-            0, // min_age = 0
+            0,
         )];
         let rules_b = vec![make_rule(
             vec![10],
             vec![],
             vec![(0, 0, 6)],
             10,
-            10, // min_age = 10 — но это не препятствует конфликту
+            10,
         )];
         let verdict = ConflictGraph::check_composition(&rules_a, &rules_b);
-        // Одинаковый head-тип + одинаковые affected regions = конфликт,
-        // независимо от min_age
         assert_eq!(
             verdict,
             CompositionVerdict::Unsafe(vec![(0, 0)]),
@@ -785,13 +745,8 @@ mod tests {
         );
     }
 
-    /// test_composition_spatial — R₁ слева, R₂ справа, расстояние > max_chain → Safe
     #[test]
     fn test_composition_spatial() {
-        // Правило 1: id=[1], affected cells: (0,0) только
-        // Правило 2: id=[2], affected cells: (0,0) только
-        // Они могут совпасть в разных местах. При совпадении на расстоянии > max_chain
-        // их affected regions не пересекаются, т.к. у каждого только (0,0).
         let rules_a = vec![make_rule(
             vec![1],
             vec![],
@@ -810,22 +765,8 @@ mod tests {
         assert_eq!(verdict, CompositionVerdict::Safe);
     }
 
-    /// test_composition_overlap — affected regions пересекаются → Unsafe
     #[test]
     fn test_composition_overlap() {
-        // Правило 1: id=[1,2], shift right 1, changes = [(0,0,5)]
-        //   Affected: (0,0)[pat+head], (1,0)[pat+head dest], (2,0)[change]
-        // Правило 2: id=[2,3], shift left 1, changes = [(0,0,6)]
-        //   Affected: (0,0)[pat], (1,0)[pat+head], (2,0)? — head dest (-1,0) + changes (0,0) и (-1,0)
-        //   На самом деле: head dest = (0,0) + (-1,0) = (-1,0), changes: (0,0)+(-1,0)=(-1,0)
-        //   Affected: (0,0)[pat+change], (1,0)[pat+head], (-1,0)[head dest+change]
-        // При смещении dx=1, dy=0:
-        //   R1 в P, R2 в P+1:
-        //     R1 pat: [P, P+1), R2 pat: [P+1, P+3) — пересечение [P+1, P+2)
-        //     (P+1,0): R1 тип 2, R2 тип 2 — совместимо
-        //     R1 affected: (P,0)[pat+head], (P+1,0)[pat+head dest], (P+2,0)[change]
-        //     R2 affected: (P+1,0)[pat+head], (P+0,0)[change], (P+0,0)[head dest+change]
-        //     Пересечение: (P+1,0) и (P+0,0) → конфликт!
         let rules_a = vec![make_rule(
             vec![1, 2],
             vec![vec![(Direction::Right, 1)]],
@@ -852,33 +793,13 @@ mod tests {
         }
     }
 
-    /// test_composition_tm_cleanup — composition.yaml → Safe
-    ///
-    /// R₁: правило [10] (shift east 1, min_age=0)
-    /// R₂: правило [99] (no shift, min_age=0)
-    /// Разные head-типы (10 vs 99) → разные клетки могут совпасть →
-    /// affected regions могут не пересекаться при некоторых смещениях.
-    /// При dx=1: R₁ affected = {(0,0),(1,0),(2,0)}, R₂ affected = {(0,0)}
-    /// сдвинутые на dx=1 → {(1,0)}. Пересечение: (1,0) → конфликт!
-    /// Так что это Unsafe.
     #[test]
     fn test_composition_tm_cleanup() {
         let rules = load_rules_from_config("configs/composition.yaml");
-        // В composition.yaml 3 правила: [10], [1], [99]
-        // Берём [10] как R₁ (index 0) и [99] как R₂ (index 2)
         let rules_a = vec![rules[0].clone()];
         let rules_b = vec![rules[2].clone()];
 
-        // R₁: id=[10], shift east 1, changes=[(0,0,0)]
-        //   Affected: (0,0), (1,0), (2,0)
-        // R₂: id=[99], no shift, changes=[(0,0,0)]
-        //   Affected: (0,0)
-        // При dx=1: R₁ {(0,0),(1,0),(2,0)}, R₂+dx {(1,0)}
-        //   Пересечение: (1,0) → конфликт!
         let verdict = ConflictGraph::check_composition(&rules_a, &rules_b);
-        // Фактически, R₁ и R₂ могут конфликтовать при определённых смещениях
-        // (разные head-типы, но при совпадении на разных клетках с dx=1
-        // их affected regions пересекаются)
         if verdict == CompositionVerdict::Safe {
             println!("ПРЕДУПРЕЖДЕНИЕ: test_composition_tm_cleanup: R₁∪R₂ Safe (консервативная оценка)");
         } else {
