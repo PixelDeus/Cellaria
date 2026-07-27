@@ -12,18 +12,39 @@ use crate::types::{BoundaryBuffer, Cell};
 /// Граничные буферы ввода-вывода вынесены в отдельную HashMap,
 /// а не в каждую ячейку (пункт 3.3 рефакторинга).
 ///
-/// Кэш `active_coords` содержит координаты всех не-дефолтных ячеек.
-/// Ячейка считается не-дефолтной, если её значение ≠ 0 или возраст ≠ 0,
+/// Кэш `active_coords_vec` содержит координаты всех не-дефолтных ячеек.
+/// Ячейка считается не-дефолтной, если её значение ≠ 0 или born_at != 0,
 /// или к ней привязан граничный буфер (BoundaryBuffer).
+///
+/// Возраст ячейки вычисляется как `generation - cell.born_at`.
+/// `advance_age` — O(1): просто инкремент `generation`.
+///
+/// Для итерации используется `active_coords_vec` — cache-friendly линейный
+/// Vec. Рядом с ним хранится `active_index: HashMap<coord, usize>` —
+/// позиция координаты в этом Vec. Вставка — push + запись индекса, O(1).
+/// Удаление — `swap_remove` по известному индексу с обновлением индекса
+/// переставленного элемента, тоже O(1) амортизированно. Порядок элементов
+/// в `active_coords_vec` при этом не сохраняется, но нигде в кодовой базе
+/// на порядок итерации не полагаются.
+///
+/// (До этой оптимизации кэш был парой `HashSet` + `Vec`, и каждое удаление
+/// пересобирало весь Vec из HashSet — O(A) на одно удаление. Поскольку сдвиг
+/// головки всегда очищает исходную позицию, это давало O(A) на каждый сдвиг
+/// вместо O(1).)
 #[derive(Clone)]
 pub struct Grid<S: GridStorage> {
     /// Внутреннее хранилище.
     pub storage: S,
     /// Граничные буферы: координата → буфер.
     pub boundaries: HashMap<(usize, usize), BoundaryBuffer>,
-    /// Кэш координат активных (не-дефолтных) ячеек.
-    /// Поддерживается в актуальном состоянии методами set_cell/set_boundary.
-    active_coords: HashSet<(usize, usize)>,
+    /// Cache-friendly линейный Vec активных (не-дефолтных) координат.
+    /// Порядок элементов не гарантирован (swap_remove при удалении).
+    active_coords_vec: Vec<(usize, usize)>,
+    /// Индекс координаты в `active_coords_vec` — для O(1) contains/remove.
+    active_index: HashMap<(usize, usize), usize>,
+    /// Глобальный счётчик поколений. Инкрементится каждый tick.
+    /// Используется для вычисления возраста ячейки: age = generation - cell.born_at.
+    generation: u64,
 }
 
 impl<S: GridStorage + Default> Default for Grid<S> {
@@ -31,7 +52,9 @@ impl<S: GridStorage + Default> Default for Grid<S> {
         Self {
             storage: S::default(),
             boundaries: HashMap::new(),
-            active_coords: HashSet::new(),
+            active_coords_vec: Vec::new(),
+            active_index: HashMap::new(),
+            generation: 0,
         }
     }
 }
@@ -40,11 +63,87 @@ impl<S: GridStorage> Grid<S> {
     /// Создать решётку с указанным хранилищем и предварительно заполненным
     /// кэшем активных ячеек.
     pub fn new(storage: S, active_coords: HashSet<(usize, usize)>) -> Self {
+        let active_coords_vec: Vec<(usize, usize)> = active_coords.iter().copied().collect();
+        let active_index: HashMap<(usize, usize), usize> = active_coords_vec
+            .iter()
+            .enumerate()
+            .map(|(i, &coord)| (coord, i))
+            .collect();
         Self {
             storage,
             boundaries: HashMap::new(),
-            active_coords,
+            active_coords_vec,
+            active_index,
+            generation: 0,
         }
+    }
+
+    /// Вставить координату в кэш активных, если её там ещё нет. O(1).
+    fn active_insert(&mut self, coord: (usize, usize)) {
+        if self.active_index.contains_key(&coord) {
+            return;
+        }
+        let idx = self.active_coords_vec.len();
+        self.active_coords_vec.push(coord);
+        self.active_index.insert(coord, idx);
+    }
+
+    /// Убрать координату из кэша активных через swap_remove. O(1) амортизированно.
+    fn active_remove(&mut self, coord: (usize, usize)) {
+        if let Some(idx) = self.active_index.remove(&coord) {
+            self.active_coords_vec.swap_remove(idx);
+            // swap_remove переместил последний элемент на место idx (если это
+            // не был сам удаляемый элемент) — обновляем его индекс.
+            if let Some(&moved) = self.active_coords_vec.get(idx) {
+                self.active_index.insert(moved, idx);
+            }
+        }
+    }
+
+    /// Проверить, находится ли координата в кэше активных. O(1).
+    fn active_contains(&self, coord: &(usize, usize)) -> bool {
+        self.active_index.contains_key(coord)
+    }
+
+    /// Получить ссылку на Vec активных координат для итерации.
+    /// Используется в detect_matches для быстрого линейного прохода.
+    pub fn active_coords(&self) -> &Vec<(usize, usize)> {
+        &self.active_coords_vec
+    }
+
+    /// Перестроить `active_index` из `active_coords_vec`.
+    /// Публичный хук на случай внешней мутации Vec (если она станет доступна).
+    pub fn rebuild_active_coords(&mut self) {
+        self.active_index.clear();
+        for (i, &coord) in self.active_coords_vec.iter().enumerate() {
+            self.active_index.insert(coord, i);
+        }
+    }
+
+    /// Текущее поколение (глобальный счётчик).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Вычислить возраст ячейки по координатам.
+    /// Возвращает 0 для дефолтных/отсутствующих ячеек.
+    pub fn get_age(&self, x: usize, y: usize) -> u64 {
+        self.storage
+            .get(x, y)
+            .map(|c| {
+                if c.is_default() {
+                    0
+                } else {
+                    self.generation - c.born_at
+                }
+            })
+            .unwrap_or(0)
+    }
+
+    /// Увеличить возраст всех активных ячеек на 1 — O(1).
+    /// Просто инкрементирует глобальный счётчик поколений.
+    pub fn advance_age(&mut self) {
+        self.generation += 1;
     }
 
     /// Ширина решётки.
@@ -70,31 +169,34 @@ impl<S: GridStorage> Grid<S> {
     /// Граничная ячейка (с привязанным BoundaryBuffer) никогда не считается дефолтной,
     /// даже если её значение 0 и возраст 0.
     pub fn set_cell(&mut self, x: usize, y: usize, cell: Cell) {
-        let was_in_active = self.active_coords.contains(&(x, y));
+        let was_in_active = self.active_contains(&(x, y));
         let was_default = self.storage.get(x, y).map_or(true, |c| c.is_default());
         let is_default = cell.is_default() && !self.boundaries.contains_key(&(x, y));
         self.storage.set(x, y, cell);
         match (was_default, is_default) {
             (true, false) => {
-                self.active_coords.insert((x, y));
+                // Вставка (active_insert сама проверяет, нет ли координаты уже
+                // в кэше — например, она могла попасть туда через set_boundary,
+                // пока хранимое значение оставалось дефолтным).
+                self.active_insert((x, y));
             }
             (false, true) => {
-                self.active_coords.remove(&(x, y));
+                self.active_remove((x, y));
             }
             _ => {
                 // Если ячейка была в active_coords из-за границы (не из-за storage),
                 // а теперь граница удалена и значение дефолтное — убираем из кэша.
                 if is_default && was_in_active {
-                    self.active_coords.remove(&(x, y));
+                    self.active_remove((x, y));
                 }
             }
         }
     }
 
     /// Итератор по активным (не-дефолтным) ячейкам.
-    /// Использует кэш `active_coords` — O(1) вместо O(N) по всей решётке.
+    /// Использует кэш `active_coords_vec` — cache-friendly линейный проход.
     pub fn iter_active(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        self.active_coords.iter().copied()
+        self.active_coords_vec.iter().copied()
     }
 
     /// Получить граничный буфер по координатам.
@@ -110,7 +212,7 @@ impl<S: GridStorage> Grid<S> {
     /// Установить граничный буфер для координат.
     /// Граничная ячейка всегда добавляется в active_coords.
     pub fn set_boundary(&mut self, x: usize, y: usize, buf: BoundaryBuffer) {
-        self.active_coords.insert((x, y));
+        self.active_insert((x, y));
         self.boundaries.insert((x, y), buf);
     }
 
@@ -121,7 +223,7 @@ impl<S: GridStorage> Grid<S> {
         self.boundaries.remove(&(x, y));
         // Если ячейка стала дефолтной — убираем из active_coords
         if self.storage.get(x, y).map_or(true, |c| c.is_default()) {
-            self.active_coords.remove(&(x, y));
+            self.active_remove((x, y));
         }
     }
 
@@ -229,4 +331,33 @@ mod tests {
         assert_eq!(grid.iter_active().count(), 0);
     }
 
+    #[test]
+    fn test_rebuild_active_coords() {
+        let mut grid = make_grid(10, 10);
+
+        // Добавляем ячейки
+        grid.set_cell(0, 0, Cell::new(1));
+        grid.set_cell(1, 1, Cell::new(2));
+        grid.set_cell(2, 2, Cell::new(3));
+        assert_eq!(grid.iter_active().count(), 3);
+
+        // Удаляем одну — Vec перестраивается сразу
+        grid.set_cell(1, 1, Cell::default());
+        assert_eq!(grid.iter_active().count(), 2);
+        assert!(grid.iter_active().any(|(x, y)| x == 0 && y == 0));
+        assert!(grid.iter_active().any(|(x, y)| x == 2 && y == 2));
+    }
+
+    #[test]
+    fn test_active_coords_contains_after_set() {
+        let mut grid = make_grid(10, 10);
+
+        // set_cell добавляет в active_coords
+        grid.set_cell(7, 7, Cell::new(5));
+        assert!(grid.active_contains(&(7, 7)));
+
+        // set_cell с дефолтом убирает
+        grid.set_cell(7, 7, Cell::default());
+        assert!(!grid.active_contains(&(7, 7)));
+    }
 }

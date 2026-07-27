@@ -1,0 +1,46 @@
+# Свёртка 3×3 с ReLU
+#
+# Паттерн из 9 ячеек (3×3): каждая ячейка = 0 или 1.
+# Правило: сложить все 9 значений, применить ReLU (max(0, sum)).
+# Записать результат в центр (0,0).
+#
+# Начальный паттерн:
+#   1 0 1
+#   1 0 1  → сумма = 5 → ReLU = 5 → центр становится 5
+#   1 0 1
+#
+# Grid 3×3.
+
+grid:
+  width: 3
+  height: 3
+  default_cell_type: 0
+  initial_cells:
+    - coord: [0, 0]
+      type: 1
+    - coord: [2, 0]
+      type: 1
+    - coord: [0, 1]
+      type: 1
+    - coord: [2, 1]
+      type: 1
+    - coord: [0, 2]
+      type: 1
+    - coord: [2, 2]
+      type: 1
+
+rules:
+  - id: [1]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [1, 0], type: 0 }
+      - { offset: [2, 0], type: 1 }
+      - { offset: [0, 1], type: 1 }
+      - { offset: [1, 1], type: 0 }
+      - { offset: [2, 1], type: 1 }
+      - { offset: [0, 2], type: 1 }
+      - { offset: [1, 2], type: 0 }
+      - { offset: [2, 2], type: 1 }
+    changes:
+      - {dx: 1, dy: 1, value: 5}

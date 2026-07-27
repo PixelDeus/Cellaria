@@ -1,0 +1,55 @@
+# Blinker (период 2) — Game of Life
+# Горизонтальный ↔ Вертикальный
+
+grid:
+  width: 5
+  height: 5
+  default_cell_type: 0
+  initial_cells:
+    - coord: [1, 1]
+      type: 1
+    - coord: [2, 1]
+      type: 1
+    - coord: [3, 1]
+      type: 1
+
+rules:
+  # Горизонтальный → Вертикальный
+  - id: [1]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+      - {dx: 0, dy: -1, value: 1}
+      - {dx: 0, dy: 1, value: 1}
+      - {dx: -1, dy: 0, value: 0}
+      - {dx: 1, dy: 0, value: 0}
+
+  # Вертикальный → Горизонтальный
+  - id: [1]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [0, -1], type: 1 }
+      - { offset: [0, 1], type: 1 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 0 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+      - {dx: -1, dy: 0, value: 1}
+      - {dx: 1, dy: 0, value: 1}
+      - {dx: 0, dy: -1, value: 0}
+      - {dx: 0, dy: 1, value: 0}

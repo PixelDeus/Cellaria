@@ -1,0 +1,59 @@
+# Волна — препятствие
+# Маркер (type=1) слева, стена (type=2) посередине с проходом.
+# Волна огибает стену через проход, не проходит сквозь стену.
+
+grid:
+  width: 11
+  height: 9
+  default_cell_type: 0
+  initial_cells:
+    # Маркер слева
+    - coord: [1, 4]
+      type: 1
+    # Стена посередине (с проходом на (5,4))
+    - coord: [5, 2]
+      type: 2
+    - coord: [5, 3]
+      type: 2
+    # проход (5,4) пустой
+    - coord: [5, 5]
+      type: 2
+    - coord: [5, 6]
+      type: 2
+
+rules:
+  # Волна вправо: если (0,0)=1, (1,0)=0 → (1,0)=1
+  - id: [70]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [1, 0], type: 0 }
+    changes:
+      - {dx: 1, dy: 0, value: 1}
+
+  # Волна влево: если (0,0)=1, (-1,0)=0 → (-1,0)=1
+  - id: [71]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, 0], type: 0 }
+    changes:
+      - {dx: -1, dy: 0, value: 1}
+
+  # Волна вниз: если (0,0)=1, (0,1)=0 → (0,1)=1
+  - id: [72]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [0, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 1, value: 1}
+
+  # Волна вверх: если (0,0)=1, (0,-1)=0 → (0,-1)=1
+  - id: [73]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [0, -1], type: 0 }
+    changes:
+      - {dx: 0, dy: -1, value: 1}

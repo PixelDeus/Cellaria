@@ -5,7 +5,7 @@ use std::collections::HashMap;
 ///
 /// Позволяет реализовать как конечную решётку фиксированного размера
 /// ([`VecStorage`]), так и бесконечную, разбитую на чанки ([`ChunkStorage`]).
-pub trait GridStorage {
+pub trait GridStorage: Sync {
     /// Получить ссылку на ячейку по координатам.
     fn get(&self, x: usize, y: usize) -> Option<&Cell>;
     /// Установить значение ячейки по координатам.
@@ -91,7 +91,7 @@ impl GridStorage for VecStorage {
                 .enumerate()
                 .filter_map(move |(idx, cell)| {
                     if cell.value != default.value
-                        || cell.age != default.age
+                        || cell.born_at != default.born_at
                     {
                         Some((idx % self.width, idx / self.width))
                     } else {
@@ -145,7 +145,7 @@ impl Chunk {
             None => true,
             Some(c) => {
                 let default = Cell::default();
-                c.value == default.value && c.age == default.age
+                c.value == default.value && c.born_at == default.born_at
             }
         }
     }
@@ -213,7 +213,7 @@ impl ChunkStorage {
         let was_default = Chunk::is_default(&chunk.cells[idx]);
 
         let default = Cell::default();
-        let is_default = cell.value == default.value && cell.age == default.age;
+        let is_default = cell.value == default.value && cell.born_at == default.born_at;
 
         let old = chunk.cells[idx].take();
 
@@ -269,7 +269,7 @@ impl GridStorage for ChunkStorage {
                 .enumerate()
                 .filter_map(move |(idx, cell)| {
                     cell.as_ref().and_then(|c| {
-                        if c.value != default.value || c.age != default.age {
+                        if c.value != default.value || c.born_at != default.born_at {
                             let lx = idx % CHUNK_SIZE;
                             let ly = idx / CHUNK_SIZE;
                             Some((cx * CHUNK_SIZE + lx, cy * CHUNK_SIZE + ly))
@@ -283,268 +283,6 @@ impl GridStorage for ChunkStorage {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{CellType, CellValue};
+#[path = "storage_tests.rs"]
+mod tests;
 
-    #[test]
-    fn test_vec_storage_basic() {
-        let mut storage = VecStorage {
-            cells: vec![Cell::default(); 4],
-            width: 2,
-            height: 2,
-        };
-        assert_eq!(storage.get(0, 0).unwrap().value, CellValue(CellType(0)));
-        storage.set(
-            0,
-            0,
-            Cell {
-                value: CellValue(CellType(5)),
-                age: 0,
-            },
-        );
-        assert_eq!(storage.get(0, 0).unwrap().value, CellValue(CellType(5)));
-    }
-
-    #[test]
-    fn test_vec_storage_out_of_bounds() {
-        let storage = VecStorage {
-            cells: vec![Cell::default(); 4],
-            width: 2,
-            height: 2,
-        };
-        assert!(storage.get(5, 5).is_none());
-    }
-
-    #[test]
-    fn test_chunk_storage_basic() {
-        let mut storage = ChunkStorage::new();
-        assert_eq!(storage.width(), usize::MAX);
-        assert_eq!(storage.height(), usize::MAX);
-        // Default cell
-        assert_eq!(storage.get(0, 0).unwrap().value, CellValue(CellType(0)));
-        // Set and get
-        storage.set(
-            10,
-            20,
-            Cell {
-                value: CellValue(CellType(5)),
-                age: 0,
-            },
-        );
-        assert_eq!(storage.get(10, 20).unwrap().value, CellValue(CellType(5)));
-        // Active cells
-        let active: Vec<_> = storage.active_cells().collect();
-        assert!(
-            active.contains(&(10, 20)),
-            "Active cells should include (10, 20)"
-        );
-    }
-
-    #[test]
-    fn test_chunk_storage_get_mut_existing_cell() {
-        let mut storage = ChunkStorage::new();
-        // Сначала создаём ячейку через set() — единственный корректный способ
-        storage.set(
-            100,
-            200,
-            Cell {
-                value: CellValue(CellType(42)),
-                age: 0,
-            },
-        );
-        assert_eq!(
-            storage.get(100, 200).unwrap().value,
-            CellValue(CellType(42))
-        );
-        let active: Vec<_> = storage.active_cells().collect();
-        assert!(
-            active.contains(&(100, 200)),
-            "set should produce active cell"
-        );
-        // active_cells count should be 1 since we set one cell
-        assert_eq!(active.len(), 1);
-    }
-
-    #[test]
-    fn test_chunk_storage_set_preserves_count() {
-        let mut storage = ChunkStorage::new();
-        // Устанавливаем не-дефолтную ячейку
-        storage.set(
-            0,
-            0,
-            Cell {
-                value: CellValue(CellType(42)),
-                age: 0,
-            },
-        );
-        assert_eq!(storage.active_cells().count(), 1);
-
-        // Меняем на дефолт
-        storage.set(0, 0, Cell::default());
-        assert_eq!(storage.active_cells().count(), 0);
-
-        // Снова устанавливаем
-        storage.set(
-            0,
-            0,
-            Cell {
-                value: CellValue(CellType(7)),
-                age: 0,
-            },
-        );
-        assert_eq!(storage.active_cells().count(), 1);
-    }
-
-    #[test]
-    fn test_vec_storage_bounds() {
-        let storage = VecStorage {
-            cells: vec![Cell::default(); 4],
-            width: 2,
-            height: 2,
-        };
-        assert_eq!(storage.bounds(), Some((2, 2)));
-    }
-
-    #[test]
-    fn test_chunk_storage_bounds() {
-        let storage = ChunkStorage::new();
-        assert_eq!(storage.bounds(), None);
-    }
-
-    #[test]
-    fn test_chunk_storage_active_cells_after_set_default() {
-        let mut storage = ChunkStorage::new();
-        storage.set(
-            5,
-            5,
-            Cell {
-                value: CellValue(CellType(99)),
-                age: 0,
-            },
-        );
-        assert_eq!(storage.active_cells().count(), 1);
-
-        // set back to default
-        storage.set(5, 5, Cell::default());
-        assert_eq!(storage.active_cells().count(), 0);
-    }
-
-    #[test]
-    fn test_chunk_storage_iter_active_respects_chunk_bounds() {
-        let mut storage = ChunkStorage::new();
-        // Ячейка в первом чанке (0..64, 0..64)
-        storage.set(10, 10, Cell { value: CellValue(CellType(1)), age: 0 });
-        // Ячейка во втором чанке (64..128, 64..128)
-        storage.set(100, 100, Cell { value: CellValue(CellType(2)), age: 0 });
-        // Ячейка на границе чанков
-        storage.set(63, 63, Cell { value: CellValue(CellType(3)), age: 0 });
-
-        let mut active: Vec<_> = storage.active_cells().collect();
-        active.sort();
-
-        assert_eq!(active.len(), 3, "All three cells should be active");
-        assert!(active.contains(&(10, 10)), "Chunk 0,0");
-        assert!(active.contains(&(100, 100)), "Chunk 1,1");
-        assert!(active.contains(&(63, 63)), "Chunk boundary");
-    }
-
-    #[test]
-    fn test_chunk_storage_chunk_isolation() {
-        let mut storage = ChunkStorage::new();
-
-        // Записываем ячейку на границе двух чанков
-        // Чанк (0,0): x=63, y=63 (последняя ячейка первого чанка)
-        storage.set(63, 63, Cell { value: CellValue(CellType(10)), age: 0 });
-
-        // Проверяем, что соседние чанки не затронуты
-        // (64, 63) — уже следующий чанк по x, должен быть default
-        assert_eq!(
-            storage.get(64, 63).unwrap().value,
-            CellValue(CellType(0)),
-            "Cell (64, 63) should be default (different chunk)"
-        );
-
-        // (63, 64) — следующий чанк по y, должен быть default
-        assert_eq!(
-            storage.get(63, 64).unwrap().value,
-            CellValue(CellType(0)),
-            "Cell (63, 64) should be default (different chunk)"
-        );
-
-        // Ячейка (63, 63) должна сохранить значение
-        assert_eq!(
-            storage.get(63, 63).unwrap().value,
-            CellValue(CellType(10)),
-            "Cell (63, 63) should retain its value"
-        );
-    }
-
-    #[test]
-    fn test_chunk_storage_get_unloaded_chunk() {
-        let storage = ChunkStorage::new();
-        // Чтение из незагруженного чанка должно вернуть default
-        assert_eq!(
-            storage.get(1000, 2000).unwrap().value,
-            CellValue(CellType(0)),
-            "Unloaded chunk should return default cell"
-        );
-    }
-
-    #[test]
-    fn test_chunk_storage_remove_cell() {
-        let mut storage = ChunkStorage::new();
-
-        // Устанавливаем ячейку
-        storage.set(42, 42, Cell { value: CellValue(CellType(7)), age: 0 });
-        assert_eq!(storage.active_cells().count(), 1);
-
-        // Удаляем — устанавливаем default
-        storage.set(42, 42, Cell::default());
-        assert_eq!(
-            storage.get(42, 42).unwrap().value,
-            CellValue(CellType(0)),
-            "After removal, cell should be default"
-        );
-        assert_eq!(storage.active_cells().count(), 0, "No active cells after removal");
-    }
-
-    #[test]
-    fn test_chunk_storage_multiple_writes_same_cell() {
-        let mut storage = ChunkStorage::new();
-
-        storage.set(0, 0, Cell { value: CellValue(CellType(1)), age: 0 });
-        storage.set(0, 0, Cell { value: CellValue(CellType(2)), age: 0 });
-        storage.set(0, 0, Cell { value: CellValue(CellType(3)), age: 0 });
-
-        assert_eq!(
-            storage.get(0, 0).unwrap().value,
-            CellValue(CellType(3)),
-            "Last write should win"
-        );
-        assert_eq!(storage.active_cells().count(), 1, "Still exactly one active cell");
-    }
-
-    #[test]
-    fn test_chunk_storage_write_and_clear_chunk() {
-        let mut storage = ChunkStorage::new();
-
-        // Заполняем 3 ячейки в одном чанке
-        storage.set(0, 0, Cell { value: CellValue(CellType(1)), age: 0 });
-        storage.set(1, 0, Cell { value: CellValue(CellType(2)), age: 0 });
-        storage.set(0, 1, Cell { value: CellValue(CellType(3)), age: 0 });
-        assert_eq!(storage.active_cells().count(), 3);
-
-        // Затираем всё дефолтом
-        storage.set(0, 0, Cell::default());
-        storage.set(1, 0, Cell::default());
-        storage.set(0, 1, Cell::default());
-        assert_eq!(
-            storage.active_cells().count(),
-            0,
-            "Chunk should become empty after all cells set to default"
-        );
-        // Чанк должен быть удалён из HashMap (пустой чанк не хранится)
-        assert_eq!(storage.chunks.len(), 0, "Empty chunk should be removed from HashMap");
-    }
-}

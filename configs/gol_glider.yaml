@@ -1,0 +1,35 @@
+# Glider (движение) — Game of Life
+# Тест реализован программно в engine::tests::test_gol_glider
+
+grid:
+  width: 8
+  height: 8
+  default_cell_type: 0
+  initial_cells:
+    - coord: [2, 1]
+      type: 1
+    - coord: [3, 2]
+      type: 1
+    - coord: [1, 3]
+      type: 1
+    - coord: [2, 3]
+      type: 1
+    - coord: [3, 3]
+      type: 1
+
+rules:
+  - id: [1]
+    priority: 10
+    # Survival: 2 neighbours
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 1 }
+      - { offset: [0, -1], type: 1 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}

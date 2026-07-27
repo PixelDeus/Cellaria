@@ -1,0 +1,49 @@
+# Саморепликация 2D
+# Маркер (type=1) в центре, правило: создаёт копии вверх/вниз/влево/вправо.
+# После 3 тиков популяция = 1 + 4 + 8 + 12 = 25 клеток (ромб).
+
+grid:
+  width: 11
+  height: 11
+  default_cell_type: 0
+  initial_cells:
+    # Маркер в центре
+    - coord: [5, 5]
+      type: 1
+
+rules:
+  # Репликация вверх: если (0,0)=1, (0,-1)=0 → (0,-1)=1
+  - id: [110]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [0, -1], type: 0 }
+    changes:
+      - {dx: 0, dy: -1, value: 1}
+
+  # Репликация вниз: если (0,0)=1, (0,1)=0 → (0,1)=1
+  - id: [111]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [0, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 1, value: 1}
+
+  # Репликация влево: если (0,0)=1, (-1,0)=0 → (-1,0)=1
+  - id: [112]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, 0], type: 0 }
+    changes:
+      - {dx: -1, dy: 0, value: 1}
+
+  # Репликация вправо: если (0,0)=1, (1,0)=0 → (1,0)=1
+  - id: [113]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [1, 0], type: 0 }
+    changes:
+      - {dx: 1, dy: 0, value: 1}

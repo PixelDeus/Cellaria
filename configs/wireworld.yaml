@@ -1,0 +1,38 @@
+# Wireworld — проводник и электрон
+# Тест: engine::tests::test_wireworld_signal
+
+grid:
+  width: 8
+  height: 6
+  default_cell_type: 0
+  initial_cells:
+    - coord: [1, 1]
+      type: 2
+    - coord: [2, 1]
+      type: 1
+
+rules:
+  # Головка (2) → хвост (3)
+  - id: [2]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 2 }
+    changes:
+      - {dx: 0, dy: 0, value: 3}
+
+  # Хвост (3) → проводник (1)
+  - id: [3]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 3 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  # Проводник (1) с головкой слева (-1,0)→2 → головка (2)
+  - id: [4]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, 0], type: 2 }
+    changes:
+      - {dx: 0, dy: 0, value: 2}

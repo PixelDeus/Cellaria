@@ -1,0 +1,53 @@
+# Волна — столкновение
+# Два маркера (type=1): слева и справа. Волны идут навстречу.
+# Правило: волна распространяется во все 4 стороны.
+# После столкновения волны проходят друг сквозь друга.
+
+grid:
+  width: 13
+  height: 7
+  default_cell_type: 0
+  initial_cells:
+    # Маркер слева
+    - coord: [1, 3]
+      type: 1
+    # Маркер справа
+    - coord: [11, 3]
+      type: 1
+
+rules:
+  # Волна вправо: если (0,0)=1 и (1,0)=0 → (1,0)=1
+  - id: [60]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [1, 0], type: 0 }
+    changes:
+      - {dx: 1, dy: 0, value: 1}
+
+  # Волна влево: если (0,0)=1 и (-1,0)=0 → (-1,0)=1
+  - id: [61]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, 0], type: 0 }
+    changes:
+      - {dx: -1, dy: 0, value: 1}
+
+  # Волна вниз: если (0,0)=1 и (0,1)=0 → (0,1)=1
+  - id: [62]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [0, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 1, value: 1}
+
+  # Волна вверх: если (0,0)=1 и (0,-1)=0 → (0,-1)=1
+  - id: [63]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [0, -1], type: 0 }
+    changes:
+      - {dx: 0, dy: -1, value: 1}

@@ -1,0 +1,74 @@
+# Нейросетевой слой — полный проход 3×3→2×2
+# Вход 3×3, свёртка 2×2 с ядром [[1,0],[0,1]].
+# Каждое правило: pattern 2×2 → изменение центрального элемента.
+
+grid:
+  width: 7
+  height: 7
+  default_cell_type: 0
+  initial_cells:
+    # Входная матрица 3×3 в позиции (1,1)-(3,3)
+    - coord: [1, 1]
+      type: 1
+    - coord: [2, 1]
+      type: 2
+    - coord: [3, 1]
+      type: 3
+    - coord: [1, 2]
+      type: 4
+    - coord: [2, 2]
+      type: 5
+    - coord: [3, 2]
+      type: 6
+    - coord: [1, 3]
+      type: 7
+    - coord: [2, 3]
+      type: 8
+    - coord: [3, 3]
+      type: 9
+
+rules:
+  # Свёртка ядром [[1,0],[0,1]]: новая матрица 2×2
+  # Выход (1,1) = вход(1,1)*1 + вход(2,2)*1 = 1 + 5 = 6
+  - id: [80]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [1, 0], type: 2 }
+      - { offset: [0, 1], type: 4 }
+      - { offset: [1, 1], type: 5 }
+    changes:
+      - {dx: 0, dy: 0, value: 6}
+
+  # Выход (2,1) = вход(2,1)*1 + вход(3,2)*1 = 2 + 6 = 8
+  - id: [81]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 2 }
+      - { offset: [1, 0], type: 3 }
+      - { offset: [0, 1], type: 5 }
+      - { offset: [1, 1], type: 6 }
+    changes:
+      - {dx: 0, dy: 0, value: 8}
+
+  # Выход (1,2) = вход(1,2)*1 + вход(2,3)*1 = 4 + 8 = 12
+  - id: [82]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 4 }
+      - { offset: [1, 0], type: 5 }
+      - { offset: [0, 1], type: 7 }
+      - { offset: [1, 1], type: 8 }
+    changes:
+      - {dx: 0, dy: 0, value: 12}
+
+  # Выход (2,2) = вход(2,2)*1 + вход(3,3)*1 = 5 + 9 = 14
+  - id: [83]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 5 }
+      - { offset: [1, 0], type: 6 }
+      - { offset: [0, 1], type: 8 }
+      - { offset: [1, 1], type: 9 }
+    changes:
+      - {dx: 0, dy: 0, value: 14}

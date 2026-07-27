@@ -1,0 +1,132 @@
+# Game of Life — Still life (блок 2×2)
+# Тест: инвариантность после 10 тиков
+# Паттерн: 2×2 квадрат из живых клеток (type=1)
+# Правило: 3 соседа → выживание, иначе смерть
+
+grid:
+  width: 8
+  height: 8
+  default_cell_type: 0
+  initial_cells:
+    - coord: [2, 2]
+      type: 1
+    - coord: [2, 3]
+      type: 1
+    - coord: [3, 2]
+      type: 1
+    - coord: [3, 3]
+      type: 1
+
+rules:
+  # --- Выживание: каждая из 4 живых клеток блока имеет ровно 3 живых соседа ---
+  # Клетка (2,2): соседи (2,3),(3,2),(3,3)=1, остальные=0
+  - id: [10]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 1 }
+      - { offset: [1, 1], type: 1 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  # Клетка (2,3): соседи (2,2),(3,2),(3,3)=1, остальные=0
+  - id: [11]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [0, -1], type: 1 }
+      - { offset: [1, -1], type: 1 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  # Клетка (3,2): соседи (2,2),(2,3),(3,3)=1, остальные=0
+  - id: [12]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [-1, 1], type: 1 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  # Клетка (3,3): соседи (2,2),(2,3),(3,2)=1, остальные=0
+  - id: [13]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 1 }
+      - { offset: [0, -1], type: 1 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [1, 0], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  # --- Смерть: живая клетка с НЕ 3 живыми соседями → 0 ---
+  - id: [14]
+    priority: 5
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 0}
+
+  # Живая клетка с 1 соседом → смерть
+  - id: [15]
+    priority: 5
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 1 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 0}
+
+  # Живая клетка с 4+ соседями → смерть (пример: 4 соседа)
+  - id: [16]
+    priority: 5
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 1 }
+      - { offset: [0, -1], type: 1 }
+      - { offset: [1, -1], type: 1 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [1, 0], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 0}

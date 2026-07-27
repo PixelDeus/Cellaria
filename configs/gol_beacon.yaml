@@ -1,0 +1,217 @@
+# Game of Life — Beacon (период 2)
+# Паттерн: два блока 2×2 на расстоянии 2
+# Состояние A: блоки (2,2)-(3,3) и (5,2)-(6,3)
+# Состояние B: блоки (2,2)-(3,2) и (5,3)-(6,3) — пульсирующие углы
+# Правило: стандартный Game of Life (3 соседа → рождение/выживание, иначе смерть)
+
+grid:
+  width: 10
+  height: 10
+  default_cell_type: 0
+  initial_cells:
+    # Левый блок 2×2
+    - coord: [2, 2]
+      type: 1
+    - coord: [2, 3]
+      type: 1
+    - coord: [3, 2]
+      type: 1
+    - coord: [3, 3]
+      type: 1
+    # Правый блок 2×2
+    - coord: [5, 2]
+      type: 1
+    - coord: [5, 3]
+      type: 1
+    - coord: [6, 2]
+      type: 1
+    - coord: [6, 3]
+      type: 1
+
+rules:
+  # --- Состояние A: два компактных блока ---
+  # Левый блок: выживание каждой из 4 клеток (3 соседа)
+  - id: [20]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 1 }
+      - { offset: [1, 1], type: 1 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  - id: [21]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [0, -1], type: 1 }
+      - { offset: [1, -1], type: 1 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  - id: [22]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [-1, 1], type: 1 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  - id: [23]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 1 }
+      - { offset: [0, -1], type: 1 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [1, 0], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  # --- Смерть для левого блока (0-2 или 4+ соседей) ---
+  - id: [24]
+    priority: 5
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 0}
+
+  # --- Рождение: клетка с 3 живыми соседями в зоне контакта блоков ---
+  # Клетка (4,2): соседи (3,2),(3,3),(4,3),(5,2),(5,3) — из них 3 живых
+  - id: [30]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 0 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [-1, 1], type: 1 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 1 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  # Клетка (4,3): соседи (3,2),(3,3),(4,2),(5,2),(5,3) — из них 3 живых
+  - id: [31]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 0 }
+      - { offset: [-1, -1], type: 1 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, -1], type: 1 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  # Клетка (4,1): рождение (соседи сверху от блоков)
+  - id: [32]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 0 }
+      - { offset: [-2, 0], type: 0 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [-1, 1], type: 1 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 0}
+
+  # --- Рождение: клетка с 3 соседями (общие случаи для beacon) ---
+  - id: [33]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 0 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [0, -1], type: 1 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  - id: [34]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 0 }
+      - { offset: [0, -1], type: 1 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [0, 1], type: 1 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  - id: [35]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 0 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [0, 1], type: 1 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}
+
+  - id: [36]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 0 }
+      - { offset: [-1, 0], type: 1 }
+      - { offset: [0, 1], type: 1 }
+      - { offset: [1, 0], type: 1 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [-1, -1], type: 0 }
+      - { offset: [1, -1], type: 0 }
+      - { offset: [-1, 1], type: 0 }
+      - { offset: [1, 1], type: 0 }
+    changes:
+      - {dx: 0, dy: 0, value: 1}

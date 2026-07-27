@@ -1,0 +1,27 @@
+# Диагональный паттерн
+#
+# Правило с двумерным паттерном:
+#   (0,0, A=1), (1,1, B=2) → changes: (0,0)→C=3, (1,1)→D=4
+# Проверка, что двумерные смещения (dx, dy) работают корректно.
+#
+# Grid 4×4, начальные ячейки (1,1)=1, (2,2)=2.
+
+grid:
+  width: 4
+  height: 4
+  default_cell_type: 0
+  initial_cells:
+    - coord: [1, 1]
+      type: 1
+    - coord: [2, 2]
+      type: 2
+
+rules:
+  - id: [1, 2]
+    priority: 10
+    pattern:
+      - { offset: [0, 0], type: 1 }
+      - { offset: [1, 1], type: 2 }
+    changes:
+      - {dx: 0, dy: 0, value: 3}
+      - {dx: 1, dy: 1, value: 4}

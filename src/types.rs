@@ -9,7 +9,12 @@ use std::collections::{HashMap, VecDeque};
 pub const DEFAULT_CELL_VALUE: u8 = 0;
 
 /// Вещественное значение ячейки (обёртка для будущих расширений).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// `Ord`/`PartialOrd` (лексикографически по внутреннему `u8`) нужны, чтобы
+/// `RuleId` (`Vec<CellType>`) можно было сравнивать — используется как
+/// один из уровней детерминированного тай-брейка в арбитраже
+/// (`priority → age → rule_id → coords → rule_idx`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CellType(pub u8);
 
 impl CellType {
@@ -35,31 +40,34 @@ impl Default for CellValue {
 }
 
 /// Полное представление ячейки.
+/// Возраст ячейки вычисляется как `generation - born_at`, где `generation` —
+/// глобальный счётчик поколений в `Grid`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     pub value: CellValue,
-    pub age: u64,
+    /// Поколение (tick), в котором ячейка была создана/изменена.
+    pub born_at: u64,
 }
 
 impl Cell {
-    /// Создаёт ячейку с возрастом 0.
+    /// Создаёт ячейку с born_at = 0.
     pub const fn new(value: u8) -> Self {
         Self {
             value: CellValue::new(value),
-            age: 0,
+            born_at: 0,
         }
     }
 
-    /// Пустая ячейка (значение DEFAULT_CELL_VALUE, возраст 0).
+    /// Пустая ячейка (значение DEFAULT_CELL_VALUE, born_at = 0).
     pub const fn empty() -> Self {
         Self::new(DEFAULT_CELL_VALUE)
     }
 
-    /// Проверяет, является ли ячейка "дефолтной": значение 0, возраст 0.
+    /// Проверяет, является ли ячейка "дефолтной": значение 0, born_at = 0.
     /// Граничная ячейка (с привязанным BoundaryBuffer) не считается дефолтной,
     /// но эта проверка не учитывает границу — она на уровне Grid::set_cell.
     pub fn is_default(&self) -> bool {
-        self.value == CellValue::default() && self.age == 0
+        self.value == CellValue::default() && self.born_at == 0
     }
 }
 
@@ -138,6 +146,7 @@ pub type RuleId = Vec<CellType>;
 ///     y: 0,
 ///     pattern: vec![vec![1, 2]],
 ///     rule_id: vec![CellType::new(1), CellType::new(2)],
+///     rule_idx: 0,
 /// };
 /// assert_eq!(m.x, 0);
 /// ```
@@ -147,6 +156,11 @@ pub struct RuleMatch {
     pub y: u32,
     pub pattern: Vec<Vec<u8>>,
     pub rule_id: RuleId,
+    /// Позиция сработавшего правила в `rule_index[rule_id[0]]` (после сортировки
+    /// по приоритету). `rule_id` сам по себе не уникален — несколько правил могут
+    /// иметь одинаковый `id` (паттерн недетерминированного выбора), поэтому именно
+    /// `rule_idx` однозначно определяет, какое именно правило сработало.
+    pub rule_idx: usize,
 }
 
 /// Действие при выходе ячейки за границу решётки (overflow).
@@ -200,10 +214,19 @@ pub struct Rule {
     /// Двумерный паттерн для сопоставления: (dx, dy, тип).
     /// Если пуст — строится из `id` как `(dx=0..n, dy=0, id[dx])`.
     pub pattern: Vec<(i8, i8, CellType)>,
-    /// Сдвиги: каждая группа срабатывает в порядке приоритета.
+    /// Сдвиги, выполняемые правилом при срабатывании.
+    ///
+    /// Каждый `ShiftSpec` — независимая операция: читает исходную позицию
+    /// головки (до сдвигов) и пишет её значение в свою собственную цель.
+    /// Вложенность в группы (`Vec<Vec<_>>`) не влияет на применение — все
+    /// сдвиги любых групп выполняются одинаково и независимо друг от друга.
+    /// Поэтому правило с 2+ сдвигами — это репликация значения в несколько
+    /// направлений одновременно, а не цепочка последовательных сдвигов.
     pub shifts: Vec<Vec<ShiftSpec>>,
     /// Изменения ячеек: (смещение_x, смещение_y, новое_значение).
-    /// ВАЖНО: эти изменения применяются только если хотя бы один сдвиг был выполнен.
+    /// Применяются относительно КАЖДОЙ цели сдвига независимо (если сдвигов
+    /// несколько — один раз на каждую); если сдвигов нет — относительно
+    /// исходной позиции головки (0,0).
     pub changes: Vec<(i32, i32, ChangeValue)>,
     /// Если true — правило проверяется только в активных ячейках.
     /// Если false — проверяется везде.

@@ -1,7 +1,11 @@
+[profile.dev]
+debug = false
+
 [package]
 name = "cellaria"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
+autobenches = false
 
 [[bin]]
 name = "cellaria"
@@ -16,9 +20,11 @@ serde_yaml = "0.9.34"
 thiserror = "1.0.69"
 clap = { version = "4.5", features = ["derive"] }
 serde_json = "1.0"
+rayon = "1.12.0"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { version = "0.5", features = ["plotters"] }
+proptest = "1"
 
 [[bench]]
 name = "cellaria_bench"

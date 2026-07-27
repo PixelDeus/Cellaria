@@ -47,8 +47,7 @@
 //!     .value.0 .0;
 //!
 //! // Один тик симуляции
-//! let active: Vec<(usize, usize)> = grid.iter_active().collect();
-//! let (accepted, _outputs) = run_tick(&mut grid, &rule_index, &active);
+//! let (accepted, _outputs) = run_tick(&mut grid, &rule_index);
 //!
 //! // После тика состояние могло измениться
 //! println!("Начальное: {}, совпадений: {}", initial, accepted.len());
@@ -67,7 +66,7 @@
 //! // Установка ячейки
 //! grid.set_cell(1, 1, Cell {
 //!     value: CellValue(CellType(5)),
-//!     age: 0,
+//!     born_at: 0,
 //! });
 //!
 //! // Чтение ячейки

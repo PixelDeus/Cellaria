@@ -203,7 +203,7 @@ pub fn load_config(path: &str) -> ConfigResult {
                 y,
                 Cell {
                     value: CellValue(CellType(yc.cell_type)),
-                    age: 0,
+                    born_at: 0,
                 },
             );
         }
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn test_load_test_config() {
         let (grid, rule_index) =
-            load_config("test_config.yaml").expect("Should load test_config.yaml");
+            load_config("configs/test_config.yaml").expect("Should load test_config.yaml");
         assert_eq!(grid.width(), 8);
         assert_eq!(grid.height(), 8);
         // Initial cells: (1,1)=1, (2,1)=2, (5,3)=1, (6,3)=2

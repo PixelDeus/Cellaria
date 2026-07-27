@@ -1,439 +1,320 @@
-use std::collections::{HashMap, HashSet};
-use std::time::Instant;
+//! # Cellaria Benchmark Suite
+//!
+//! Точка входа для всех бенчмарков.
+//!
+//! ## Запуск
+//!
+//! Это `[[bench]]`-таргет (не `[[bin]]`) — запускается через
+//! `cargo bench --bench cellaria_bench -- <флаги>`, не `cargo run`.
+//! `cargo bench` сама всегда дописывает `--bench` в конец argv (стандартное
+//! поведение Cargo для bench-таргетов) — поэтому переключатель на
+//! Criterion называется `--criterion`, а не `--bench`, во избежание
+//! коллизии с тем, что подставляет сама Cargo.
+//!
+//! ```bash
+//! # Все тесты производительности + peak-тесты (кастомный репортер)
+//! cargo bench --bench cellaria_bench
+//!
+//! # Вывод в JSON
+//! cargo bench --bench cellaria_bench -- --json
+//!
+//! # Сохранить результаты в файл
+//! cargo bench --bench cellaria_bench -- --json --output bench_results.json
+//!
+//! # Сравнить с эталоном
+//! cargo bench --bench cellaria_bench -- --check bench_baseline.json
+//!
+//! # Только Criterion-бенчмарки
+//! cargo bench --bench cellaria_bench -- --criterion
+//!
+//! # Criterion + фильтрация по имени группы
+//! cargo bench --bench cellaria_bench -- --criterion throughput
+//! ```
 
-use cellaria::engine::run_tick;
-use cellaria::Grid;
-use cellaria::ChunkStorage;
-use cellaria::VecStorage;
-use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Direction, Rule, RuleMatch, ShiftSpec};
+mod helpers;
+mod existing;
+mod throughput;
+mod rules;
+mod reporter;
+
+use reporter::{Reporter, BenchResult};
 
 // ============================================================================
-// Helper: создать решётку с VecStorage
+// ФАЗА 1: Максимальный throughput
 // ============================================================================
 
-fn make_grid(width: usize, height: usize) -> Grid<VecStorage> {
-    let storage = VecStorage::new(width, height);
-    Grid::new(storage, HashSet::new())
-}
+fn run_phase1(reporter: &mut Reporter) {
+    reporter.print_header("ФАЗА 1: Максимальный throughput");
 
-/// Создать решётку с ChunkStorage (бесконечная).
-fn make_grid_chunk() -> Grid<ChunkStorage> {
-    let storage = ChunkStorage::new();
-    Grid::new(storage, HashSet::new())
-}
-
-fn make_rule_index(rules: Vec<Rule>) -> HashMap<CellType, Vec<Rule>> {
-    let mut index: HashMap<CellType, Vec<Rule>> = HashMap::new();
-    for rule in rules {
-        if let Some(center) = rule.id.first() {
-            index.entry(*center).or_default().push(rule);
+    // 1A: Без сдвига
+    reporter.print_subheader("1A: Без сдвига (N×N, чередование, apply)");
+    let mut results_1a = Vec::new();
+    for &n in &[10, 50, 100, 200, 500] {
+        let (elapsed_us, ticks) = throughput::max_throughput_no_shift(n);
+        let tps = if elapsed_us > 0 {
+            (ticks as u128 * 1_000_000) / elapsed_us
+        } else {
+            0
+        };
+        let mut r = BenchResult::new("1A", &format!("N={}", n), &ticks.to_string(), "тиков")
+            .with_extra("tps", &reporter::format_number(tps))
+            .pass();
+        // Пик throughput
+        if n == 500 {
+            r = r.peak();
         }
+        results_1a.push(r);
     }
-    for rules in index.values_mut() {
-        rules.sort_by_key(|b| std::cmp::Reverse(b.priority));
+    reporter.add_all(results_1a.clone());
+    reporter.print_table(&results_1a, &["Параметр", "Значение", "Дополнительно", "Статус"]);
+
+    // 1B: Со сдвигом
+    reporter.print_subheader("1B: Со сдвигом (TM-лента длины N)");
+    let mut results_1b = Vec::new();
+    for &n in &[10, 100, 1000, 5000] {
+        let (elapsed_us, ticks) = throughput::max_throughput_with_shift(n);
+        let tps = if elapsed_us > 0 {
+            (ticks as u128 * 1_000_000) / elapsed_us
+        } else {
+            0
+        };
+        let r = BenchResult::new("1B", &format!("N={}", n), &ticks.to_string(), "тиков")
+            .with_extra("tps", &reporter::format_number(tps))
+            .pass();
+        results_1b.push(r);
     }
-    index
-}
+    reporter.add_all(results_1b.clone());
+    reporter.print_table(&results_1b, &["Параметр", "Значение", "Дополнительно", "Статус"]);
 
-// ============================================================================
-// TM-симуляция
-// ============================================================================
-
-fn turing_rules() -> Vec<Rule> {
-    vec![
-        Rule {
-            id: vec![CellType(10), CellType(2)],
-            pattern: vec![(0i8, 0i8, CellType(10)), (1i8, 0i8, CellType(2))],
-            shifts: vec![vec![ShiftSpec {
-                direction: Direction::Right,
-                steps: 1,
-            }]],
-            changes: vec![(-1, 0, ChangeValue::Literal(1))],
-            active_only: false,
-            priority: 10,
-            min_age: 0,
-            overflow: Default::default(),
-        },
-        Rule {
-            id: vec![CellType(10), CellType(1)],
-            pattern: vec![(0i8, 0i8, CellType(10)), (1i8, 0i8, CellType(1))],
-            shifts: vec![vec![ShiftSpec {
-                direction: Direction::Right,
-                steps: 1,
-            }]],
-            changes: vec![(-1, 0, ChangeValue::Literal(2))],
-            active_only: false,
-            priority: 10,
-            min_age: 0,
-            overflow: Default::default(),
-        },
-    ]
-}
-
-/// Запустить TM-симуляцию и вернуть количество тиков до остановки.
-#[allow(clippy::manual_is_multiple_of)]
-fn tm_bench(len: usize) -> usize {
-    let width = len + 2;
-    let mut grid = make_grid(width, 1);
-
-    for i in 0..len {
-        let val = if (i + len) % 2 == 0 { 1 } else { 2 };
-        grid.set_cell(i + 1, 0, Cell {
-            value: CellValue(CellType(val)),
-            age: 0,
-        });
+    // 1C: Конфликт
+    reporter.print_subheader("1C: Конфликт (M правил на одной ячейке)");
+    let mut results_1c = Vec::new();
+    for &m in &[10, 50, 100, 200] {
+        let (elapsed_us, ticks) = throughput::max_throughput_conflict(m);
+        let tps = if elapsed_us > 0 {
+            (ticks as u128 * 1_000_000) / elapsed_us
+        } else {
+            0
+        };
+        let r = BenchResult::new("1C", &format!("M={}", m), &ticks.to_string(), "тиков")
+            .with_extra("tps", &reporter::format_number(tps))
+            .pass();
+        results_1c.push(r);
     }
+    reporter.add_all(results_1c.clone());
+    reporter.print_table(&results_1c, &["Параметр", "Значение", "Дополнительно", "Статус"]);
 
-    grid.set_cell(0, 0, Cell {
-        value: CellValue(CellType(10)),
-        age: 0,
-    });
+    // 1D: Пустой тик
+    reporter.print_subheader("1D: Пустой тик (0 активных ячеек)");
+    let (elapsed_ns, total_ticks) = throughput::empty_tick_bench();
+    let avg_ns = if total_ticks > 0 { elapsed_ns / total_ticks } else { 0 };
+    let r = BenchResult::new("1D", "пустой тик", &reporter::format_number(total_ticks), "тиков")
+        .with_extra("ns/tick", &format!("{}", avg_ns))
+        .pass();
+    reporter.add(r.clone());
+    reporter.print_table(&[r], &["Параметр", "Значение", "Дополнительно", "Статус"]);
 
-    let rule_index = make_rule_index(turing_rules());
-
-    let mut ticks = 0;
-    loop {
-        let active: Vec<(usize, usize)> = grid.iter_active().collect();
-        let (accepted, _) = run_tick(&mut grid, &rule_index, &active);
-        if accepted.is_empty() {
-            break;
-        }
-        ticks += 1;
-    }
-
-    ticks
-}
-
-// ============================================================================
-// Tag system (однопроходный маркер)
-// ============================================================================
-
-fn tag_rules() -> Vec<Rule> {
-    vec![
-        Rule {
-            id: vec![CellType(10), CellType(1)],
-            pattern: vec![(0i8, 0i8, CellType(10)), (1i8, 0i8, CellType(1))],
-            shifts: vec![vec![ShiftSpec {
-                direction: Direction::Right,
-                steps: 1,
-            }]],
-            changes: vec![(-1, 0, ChangeValue::Literal(0))],
-            active_only: false,
-            priority: 10,
-            min_age: 0,
-            overflow: Default::default(),
-        },
-        Rule {
-            id: vec![CellType(10), CellType(2)],
-            pattern: vec![(0i8, 0i8, CellType(10)), (1i8, 0i8, CellType(2))],
-            shifts: vec![vec![ShiftSpec {
-                direction: Direction::Right,
-                steps: 1,
-            }]],
-            changes: vec![(-1, 0, ChangeValue::Literal(0))],
-            active_only: false,
-            priority: 10,
-            min_age: 0,
-            overflow: Default::default(),
-        },
-    ]
-}
-
-/// Запустить tag system симуляцию и вернуть количество тиков.
-fn tag_bench(len: usize) -> usize {
-    let width = len + 10;
-    let mut grid = make_grid(width, 1);
-
-    for i in 0..len {
-        let val = if (i + 7).is_multiple_of(2) { 1 } else { 2 };
-        grid.set_cell(i + 1, 0, Cell {
-            value: CellValue(CellType(val)),
-            age: 0,
-        });
-    }
-
-    grid.set_cell(0, 0, Cell {
-        value: CellValue(CellType(10)),
-        age: 0,
-    });
-
-    let rule_index = make_rule_index(tag_rules());
-
-    let mut ticks = 0;
-    loop {
-        let active: Vec<(usize, usize)> = grid.iter_active().collect();
-        let (accepted, _) = run_tick(&mut grid, &rule_index, &active);
-        if accepted.is_empty() {
-            break;
-        }
-        ticks += 1;
-    }
-
-    ticks
-}
-
-// ============================================================================
-// Conflict-free правила
-// ============================================================================
-
-fn conflict_free_rules() -> Vec<Rule> {
-    vec![
-        Rule {
-            id: vec![CellType(1), CellType(2)],
-            pattern: vec![(0i8, 0i8, CellType(1)), (1i8, 0i8, CellType(2))],
-            shifts: vec![],
-            changes: vec![(0, 0, ChangeValue::Literal(5)), (1, 0, ChangeValue::Literal(5))],
-            active_only: false,
-            priority: 10,
-            min_age: 0,
-            overflow: Default::default(),
-        },
-        Rule {
-            id: vec![CellType(3), CellType(4)],
-            pattern: vec![(0i8, 0i8, CellType(3)), (1i8, 0i8, CellType(4))],
-            shifts: vec![],
-            changes: vec![(0, 0, ChangeValue::Literal(6)), (1, 0, ChangeValue::Literal(6))],
-            active_only: false,
-            priority: 10,
-            min_age: 0,
-            overflow: Default::default(),
-        },
-    ]
-}
-
-/// Запустить симуляцию conflict-free правил и вернуть количество тиков.
-#[allow(clippy::implicit_saturating_sub)]
-fn conflict_free_bench(width: usize) -> usize {
-    let mut grid = make_grid(width, 1);
-
-    grid.set_cell(0, 0, Cell {
-        value: CellValue(CellType(1)),
-        age: 0,
-    });
-    grid.set_cell(1, 0, Cell {
-        value: CellValue(CellType(2)),
-        age: 0,
-    });
-
-    let p2_start = if width > 3 { width - 3 } else { 0 };
-    grid.set_cell(p2_start, 0, Cell {
-        value: CellValue(CellType(3)),
-        age: 0,
-    });
-    grid.set_cell(p2_start + 1, 0, Cell {
-        value: CellValue(CellType(4)),
-        age: 0,
-    });
-
-    let rule_index = make_rule_index(conflict_free_rules());
-
-    let mut ticks = 0;
-    loop {
-        let active: Vec<(usize, usize)> = grid.iter_active().collect();
-        let (accepted, _) = run_tick(&mut grid, &rule_index, &active);
-        if accepted.is_empty() {
-            break;
-        }
-        ticks += 1;
-    }
-
-    ticks
-}
-
-// ============================================================================
-// Бенчмарк 1: Worst-case arbitration
-//
-// Для M правил с id: [1, 0] и changes: [(0,0,Literal(...))] affected cells = [(0,0), (1,0)].
-// Первое совпадение проверяет обе (принимается), остальные M-1 конфликтуют на (0,0).
-// Итого проверок: 2 + (M-1)*1 = M + 1 (линейно, не квадратично).
-// ============================================================================
-
-/// Локальная копия arbitrate с дополнительным счётчиком used_cells.contains.
-/// Используется ТОЛЬКО для benches/cellaria_bench.rs, не для production.
-fn arbitrate_with_counter(
-    all_matches: Vec<RuleMatch>,
-    rule_index: &HashMap<CellType, Vec<Rule>>,
-    _get_cell_age: impl Fn(usize, usize) -> u32,
-    counter: &mut u64,
-) -> Vec<RuleMatch> {
-    use std::collections::HashSet;
-
-    if all_matches.is_empty() {
-        return Vec::new();
-    }
-
-    let mut accepted: Vec<RuleMatch> = Vec::new();
-    let mut used_cells: HashSet<(u32, u32)> = HashSet::new();
-
-    let mut sorted = all_matches;
-    sorted.sort_by(|a, b| {
-        let priority_a = get_priority_bench(&a.rule_id, rule_index);
-        let priority_b = get_priority_bench(&b.rule_id, rule_index);
-        priority_b.cmp(&priority_a).then_with(|| {
-            let age_a = _get_cell_age(a.x as usize, a.y as usize);
-            let age_b = _get_cell_age(b.x as usize, b.y as usize);
-            age_b.cmp(&age_a)
-        })
-    });
-
-    for m in sorted {
-        let affected = get_match_affected_cells_bench(&m, rule_index);
-        let mut conflict = false;
-
-        for &(px, py) in &affected {
-            if px >= 0 && py >= 0 {
-                let coord = (px as u32, py as u32);
-                *counter += 1;
-                if used_cells.contains(&coord) {
-                    conflict = true;
-                    break;
-                }
-            }
-        }
-
-        if !conflict {
-            for &(px, py) in &affected {
-                if px >= 0 && py >= 0 {
-                    used_cells.insert((px as u32, py as u32));
-                }
-            }
-            accepted.push(m);
-        }
-    }
-
-    accepted
-}
-
-fn get_priority_bench(rule_id: &[CellType], rule_index: &HashMap<CellType, Vec<Rule>>) -> u32 {
-    if let Some(first) = rule_id.first() {
-        if let Some(rules) = rule_index.get(first) {
-            for rule in rules {
-                if rule.id == rule_id {
-                    return rule.priority;
-                }
-            }
-        }
-    }
-    0
-}
-
-fn get_match_affected_cells_bench(
-    m: &RuleMatch,
-    rule_index: &HashMap<CellType, Vec<Rule>>,
-) -> Vec<(i32, i32)> {
-    use cellaria::conflict_analyzer::compute_affected_cells;
-    let rule = find_rule_bench(&m.rule_id, rule_index);
-    if let Some(rule) = rule {
-        let relative = compute_affected_cells(rule);
-        relative
-            .iter()
-            .map(|&(dx, dy)| (m.x as i32 + dx, m.y as i32 + dy))
-            .collect()
+    // 1E: Одна ячейка
+    reporter.print_subheader("1E: Одна ячейка, одно правило");
+    let (elapsed_us, ticks) = throughput::single_cell_max_tps();
+    let tps = if elapsed_us > 0 {
+        (ticks as u128 * 1_000_000) / elapsed_us
     } else {
-        let mut cells = Vec::new();
-        for (i, _) in m.rule_id.iter().enumerate() {
-            cells.push((m.x as i32 + i as i32, m.y as i32));
-        }
-        cells
+        0
+    };
+    let avg_ns = if ticks > 0 {
+        (elapsed_us as u128 * 1000) / ticks as u128
+    } else {
+        0
+    };
+    let r = BenchResult::new("1E", "1 ячейка", &ticks.to_string(), "тиков")
+        .with_extra("tps", &reporter::format_number(tps))
+        .with_extra("ns/tick", &format!("{}", avg_ns))
+        .pass();
+    reporter.add(r.clone());
+    reporter.print_table(&[r], &["Параметр", "Значение", "Дополнительно", "Статус"]);
+
+    // 1F: Длинная цепочка сдвигов
+    reporter.print_subheader("1F: Длинная цепочка сдвигов (N)");
+    let mut results_1f = Vec::new();
+    for &n in &[10, 100, 500] {
+        let (elapsed_us, ticks) = throughput::long_shift_chain_bench(n);
+        let tps = if elapsed_us > 0 {
+            (ticks as u128 * 1_000_000) / elapsed_us
+        } else {
+            0
+        };
+        let r = BenchResult::new("1F", &format!("N={}", n), &ticks.to_string(), "тиков")
+            .with_extra("tps", &reporter::format_number(tps))
+            .pass();
+        results_1f.push(r);
     }
-}
-
-fn find_rule_bench<'a>(
-    rule_id: &[CellType],
-    rule_index: &'a HashMap<CellType, Vec<Rule>>,
-) -> Option<&'a Rule> {
-    if let Some(first) = rule_id.first() {
-        if let Some(rules) = rule_index.get(first) {
-            for rule in rules {
-                if rule.id == rule_id {
-                    return Some(rule);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Создать M конфликтующих правил с уникальными id: [1, 0, i].
-/// Все имеют одинаковый pattern [1, 0] и priority:10.
-/// Каждое правило меняет ячейку (0,0) на своё уникальное значение,
-/// поэтому все M совпадений конфликтуют за ячейку (0,0).
-fn make_conflicting_rules(m: usize) -> Vec<Rule> {
-    (0..m)
-        .map(|i| Rule {
-            id: vec![CellType(1), CellType(0), CellType(i as u8)],
-            pattern: vec![(0i8, 0i8, CellType(1)), (1i8, 0i8, CellType(0))],
-            shifts: vec![],
-            changes: vec![(0, 0, ChangeValue::Literal(100 + i as u8))],
-            active_only: false,
-            priority: 10,
-            min_age: 0,
-            overflow: Default::default(),
-        })
-        .collect()
-}
-
-/// Запустить worst-case арбитраж и вернуть число проверок used_cells.contains.
-fn worst_case_bench(m: usize) -> u64 {
-    let mut grid = make_grid(2, 1);
-    grid.set_cell(
-        0,
-        0,
-        Cell {
-            value: CellValue(CellType(1)),
-            age: 0,
-        },
-    );
-    grid.set_cell(
-        1,
-        0,
-        Cell {
-            value: CellValue(CellType(0)),
-            age: 0,
-        },
-    );
-
-    let rules = make_conflicting_rules(m);
-    let rule_index = make_rule_index(rules);
-
-    let active: Vec<(usize, usize)> = grid.iter_active().collect();
-    let matches = cellaria::engine::detect_matches(&grid, &rule_index, &active);
-    assert_eq!(matches.len(), m, "Должно быть M={} совпадений", m);
-
-    let mut counter = 0u64;
-    let _accepted = arbitrate_with_counter(matches, &rule_index, |_x, _y| 0u32, &mut counter);
-
-    counter
+    reporter.add_all(results_1f.clone());
+    reporter.print_table(&results_1f, &["Параметр", "Значение", "Дополнительно", "Статус"]);
 }
 
 // ============================================================================
-// Бенчмарк 2: ChunkStorage vs VecStorage
-//
-// Гипотеза: ChunkStorage не добавляет накладных расходов на малых решётках
-// по сравнению с VecStorage. Время ChunkStorage ≤ 2× время VecStorage.
+// ФАЗА 2: Разложение по фазам
 // ============================================================================
 
-/// Заполнить решётку чередованием [1, 2, 1, 2, ...] в каждой строке.
-/// Это гарантирует, что правило id: [1, 2] матчится на каждой соседней паре.
-fn fill_alternating<S: cellaria::GridStorage>(grid: &mut Grid<S>, w: usize, h: usize) {
-    for y in 0..h {
-        for x in 0..w {
-            let val = if x % 2 == 0 { 1 } else { 2 };
-            grid.set_cell(
-                x,
-                y,
-                Cell {
-                    value: CellValue(CellType(val)),
-                    age: 0,
-                },
-            );
+fn run_phase2(reporter: &mut Reporter) {
+    reporter.print_header("ФАЗА 2: Разложение по фазам + полный tick");
+
+    for &n in &[10, 100, 500] {
+        reporter.print_subheader(&format!("N={}", n));
+        let phases = phase_breakdown(n);
+        let total_phases: u128 = phases.iter().map(|(_, t)| t).sum();
+
+        let mut results = Vec::new();
+        for (name, t) in &phases {
+            let pct = if total_phases > 0 { (*t as f64 / total_phases as f64) * 100.0 } else { 0.0 };
+            let r = BenchResult::new(&format!("2:N={}", n), name, &t.to_string(), "ns")
+                .with_extra("%", &reporter::format_f64(pct, 1))
+                .pass();
+            results.push(r);
         }
+
+        // Сумма фаз
+        let r_sum = BenchResult::new(&format!("2:N={}", n), "Сумма фаз", &total_phases.to_string(), "ns")
+            .pass();
+        results.push(r_sum);
+
+        // Полный run_tick
+        let full = full_tick_bench(n);
+        let r_full = BenchResult::new(&format!("2:N={}", n), "Полный run_tick", &full.to_string(), "ns")
+            .pass();
+        results.push(r_full);
+
+        // Overhead
+        if full > 0 {
+            let overhead = if total_phases > full { total_phases - full } else { full - total_phases };
+            let pct = (overhead as f64 / full as f64) * 100.0;
+            let r_over = BenchResult::new(&format!("2:N={}", n), "Overhead", &overhead.to_string(), "ns")
+                .with_extra("%", &reporter::format_f64(pct, 1))
+                .pass();
+            results.push(r_over);
+        }
+
+        reporter.add_all(results.clone());
+        reporter.print_table(&results, &["Параметр", "Значение", "Дополнительно", "Статус"]);
     }
 }
 
-/// Правило id: [1, 2] меняет обе ячейки на 3 и 4.
-fn storage_rule() -> Vec<Rule> {
-    vec![Rule {
+// ============================================================================
+// ФАЗА 3: Память
+// ============================================================================
+
+fn run_phase3(reporter: &mut Reporter) {
+    reporter.print_header("ФАЗА 3: Память");
+
+    reporter.print_subheader("VecStorage: оценочный размер N×N");
+    let mut results_vec = Vec::new();
+    for &n in &[10, 100, 500, 1000] {
+        let bytes = memory_vec(n);
+        let mb = bytes as f64 / 1_000_000.0;
+        let r = BenchResult::new("3A:Vec", &format!("N={}", n), &reporter::format_f64(mb, 2), "MB")
+            .pass();
+        results_vec.push(r);
+    }
+    reporter.add_all(results_vec.clone());
+    reporter.print_table(&results_vec, &["Параметр", "Значение", "Статус"]);
+
+    reporter.print_subheader("ChunkStorage: оценочный размер N×N (32×32 chunks)");
+    let mut results_chunk = Vec::new();
+    for &n in &[10, 100, 500, 1000, 5000] {
+        let bytes = memory_chunk_estimate(n);
+        let kb = bytes / 1024;
+        let unit = if kb >= 1024 {
+            format!("{:.1} MB", kb as f64 / 1024.0)
+        } else {
+            format!("{} KB", kb)
+        };
+        let r = BenchResult::new("3B:Chunk", &format!("N={}", n), &unit, "")
+            .pass();
+        results_chunk.push(r);
+    }
+    reporter.add_all(results_chunk.clone());
+    reporter.print_table(&results_chunk, &["Параметр", "Значение", "Статус"]);
+}
+
+// ============================================================================
+// ФАЗА 4: Сложность правил
+// ============================================================================
+
+fn run_phase4(reporter: &mut Reporter) {
+    reporter.print_header("ФАЗА 4: Сложность правил");
+
+    reporter.print_subheader("4A: Размер паттерна");
+    let mut results_4a = Vec::new();
+    for &size in &[1, 2, 4, 9] {
+        let elapsed = rules::pattern_size_bench(size);
+        let r = BenchResult::new("4A", &format!("size={}", size), &elapsed.to_string(), "µs")
+            .pass();
+        results_4a.push(r);
+    }
+    reporter.add_all(results_4a.clone());
+    reporter.print_table(&results_4a, &["Параметр", "Значение", "Статус"]);
+
+    reporter.print_subheader("4B: Правил на один head-тип");
+    let mut results_4b = Vec::new();
+    for &k in &[1, 10, 50, 100, 200] {
+        let elapsed = rules::rules_per_head_bench(k);
+        let r = BenchResult::new("4B", &format!("K={}", k), &elapsed.to_string(), "µs")
+            .pass();
+        results_4b.push(r);
+    }
+    reporter.add_all(results_4b.clone());
+    reporter.print_table(&results_4b, &["Параметр", "Значение", "Статус"]);
+}
+
+// ============================================================================
+// ФАЗА 5: Профилирование find_rule
+// ============================================================================
+
+fn run_phase5(reporter: &mut Reporter) {
+    reporter.print_header("ФАЗА 5: Профилирование find_rule");
+
+    reporter.print_subheader("Среднее время поиска правила (10000 итераций)");
+    let mut results = Vec::new();
+    for &k in &[1, 10, 50, 100, 200, 500] {
+        let (avg_ns, count) = rules::profile_find_rule(k);
+        let r = BenchResult::new("5", &format!("K={}", k), &avg_ns.to_string(), "ns/поиск")
+            .with_extra("найдено", &count.to_string())
+            .pass();
+        results.push(r);
+    }
+    reporter.add_all(results.clone());
+    reporter.print_table(&results, &["Параметр", "Значение", "Дополнительно", "Статус"]);
+}
+
+// ============================================================================
+// ФАЗА 2: Разложение времени тика по фазам (внутренняя)
+// ============================================================================
+
+/// Разложить run_tick на фазы и замерить каждую отдельно.
+fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
+    use std::time::Instant;
+    use std::collections::HashSet;
+    use cellaria::Grid;
+    use cellaria::VecStorage;
+    use cellaria::GridStorage;
+    use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Rule};
+    
+    let storage = VecStorage::new(n, n);
+    let mut grid = Grid::new(storage, HashSet::new());
+
+    // Шахматный паттерн
+    for y in 0..n {
+        for x in 0..n {
+            let val = if (x + y) % 2 == 0 { 1 } else { 2 };
+            grid.set_cell(x, y, Cell {
+                value: CellValue(CellType(val)),
+                born_at: grid.generation(),
+            });
+        }
+    }
+
+    let rule = Rule {
         id: vec![CellType(1), CellType(2)],
         pattern: vec![(0i8, 0i8, CellType(1)), (1i8, 0i8, CellType(2))],
         shifts: vec![],
@@ -442,416 +323,129 @@ fn storage_rule() -> Vec<Rule> {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
-    }]
-}
+    };
+    let rule_index = helpers::make_rule_index(vec![rule]);
+    let rule_cache = cellaria::conflict_analyzer::build_rule_data_cache(&rule_index);
 
-/// Замерить время одного тика на решётке width×height.
-fn storage_bench_vec(width: usize, height: usize) -> u128 {
-    let mut grid = make_grid(width, height);
-    fill_alternating(&mut grid, width, height);
-    let rule_index = make_rule_index(storage_rule());
+    // Первый тик (может быть outlier из-за аллокаций)
+    cellaria::engine::run_tick(&mut grid, &rule_index);
 
-    let start = Instant::now();
-    let active: Vec<(usize, usize)> = grid.iter_active().collect();
-    let (accepted, _) = run_tick(&mut grid, &rule_index, &active);
-    let elapsed = start.elapsed().as_micros();
+    // Второй тик — измеряем
 
-    assert!(!accepted.is_empty(), "storage_bench_vec: тик не дал совпадений");
-    elapsed
-}
+    // detect_matches
+    let t0 = Instant::now();
+    let matches = cellaria::engine::detect_matches(&grid, &rule_index, grid.active_coords());
+    let t_detect = t0.elapsed().as_nanos() as u128;
 
-fn storage_bench_chunk(width: usize, height: usize) -> u128 {
-    let mut grid = make_grid_chunk();
-    fill_alternating(&mut grid, width, height);
-    let rule_index = make_rule_index(storage_rule());
+    // arbitrate
+    let t1 = Instant::now();
+    let accepted = cellaria::engine::arbitrate(matches, &rule_index, &rule_cache, (grid.width(), grid.height()), |x, y| {
+        grid.get_age(x, y) as u32
+    });
+    let t_arbitrate = t1.elapsed().as_nanos() as u128;
 
-    let start = Instant::now();
-    let active: Vec<(usize, usize)> = grid.iter_active().collect();
-    let (accepted, _) = run_tick(&mut grid, &rule_index, &active);
-    let elapsed = start.elapsed().as_micros();
+    // apply_matches
+    let t2 = Instant::now();
+    let (regions, _outputs) = if !accepted.is_empty() {
+        cellaria::engine::apply_matches(&mut grid, accepted, &rule_index, &rule_cache)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let t_apply = t2.elapsed().as_nanos() as u128;
 
-    assert!(!accepted.is_empty(), "storage_bench_chunk: тик не дал совпадений");
-    elapsed
-}
+    // advance_age
+    let t3 = Instant::now();
+    // advance_age — O(1): просто инкремент generation
+    grid.advance_age();
+    let t_age = t3.elapsed().as_nanos() as u128;
 
-// ============================================================================
-// Бенчмарк 3: Рост решётки — O(активные ячейки)
-//
-// Гипотеза: время тика линейно по числу активных ячеек.
-// ============================================================================
-
-/// Правило для TM-головки: id: [10, 1] → сдвиг вправо, стирает head, пишет 2 слева.
-fn grid_growth_rule() -> Vec<Rule> {
-    vec![Rule {
-        id: vec![CellType(10), CellType(1)],
-        pattern: vec![(0i8, 0i8, CellType(10)), (1i8, 0i8, CellType(1))],
-        shifts: vec![vec![ShiftSpec {
-            direction: Direction::Right,
-            steps: 1,
-        }]],
-        changes: vec![(-1, 0, ChangeValue::Literal(2))],
-        active_only: false,
-        priority: 10,
-        min_age: 0,
-        overflow: Default::default(),
-    }]
-}
-
-/// Замерить время одного тика на ленте длины N.
-fn grid_growth_bench(n: usize) -> u128 {
-    let width = n + 2;
-    let mut grid = make_grid(width, 1);
-
-    for i in 0..n {
-        let val = if (i + n) % 2 == 0 { 1 } else { 2 };
-        grid.set_cell(
-            i + 1,
-            0,
-            Cell {
-                value: CellValue(CellType(val)),
-                age: 0,
-            },
-        );
-    }
-
-    grid.set_cell(
-        0,
-        0,
-        Cell {
-            value: CellValue(CellType(10)),
-            age: 0,
-        },
-    );
-
-    let rule_index = make_rule_index(grid_growth_rule());
-
-    let start = Instant::now();
-    let active: Vec<(usize, usize)> = grid.iter_active().collect();
-    let (accepted, _) = run_tick(&mut grid, &rule_index, &active);
-    let elapsed = start.elapsed().as_micros();
-
-    assert!(!accepted.is_empty(), "grid_growth_bench: тик не дал совпадений для N={}", n);
-    elapsed
-}
-
-// ============================================================================
-// Бенчмарк 4: Множество правил — O(K)
-//
-// Гипотеза: поиск правила по head-типу не зависит от общего числа правил.
-// ============================================================================
-
-fn make_many_rules(k: usize) -> Vec<Rule> {
-    (0..k)
-        .map(|i| Rule {
-            id: vec![CellType(i as u8 + 1)],
-            pattern: vec![(0i8, 0i8, CellType(i as u8 + 1))],
-            shifts: vec![],
-            changes: vec![(0, 0, ChangeValue::Literal(99))],
-            active_only: false,
-            priority: 10,
-            min_age: 0,
-            overflow: Default::default(),
-        })
-        .collect()
-}
-
-fn rule_count_bench(k: usize) -> u128 {
-    let mut grid = make_grid(k, 1);
-
-    for i in 0..k {
-        grid.set_cell(
-            i,
-            0,
-            Cell {
-                value: CellValue(CellType(i as u8 + 1)),
-                age: 0,
-            },
-        );
-    }
-
-    let rules = make_many_rules(k);
-    let rule_index = make_rule_index(rules);
-
-    let start = Instant::now();
-    let active: Vec<(usize, usize)> = grid.iter_active().collect();
-    let (accepted, _) = run_tick(&mut grid, &rule_index, &active);
-    let elapsed = start.elapsed().as_micros();
-
-    assert_eq!(accepted.len(), k, "rule_count_bench: должны сматчиться все K={} правил", k);
-    elapsed
-}
-
-// ============================================================================
-// Бенчмарк 5: Саморепликация
-//
-// Гипотеза: total_time(len) ~ O(len²).
-// ============================================================================
-
-fn replication_rule() -> Vec<Rule> {
-    vec![Rule {
-        id: vec![CellType(10), CellType(0)],
-        pattern: vec![(0i8, 0i8, CellType(10)), (1i8, 0i8, CellType(0))],
-        shifts: vec![vec![ShiftSpec {
-            direction: Direction::Right,
-            steps: 1,
-        }]],
-        changes: vec![(-1, 0, ChangeValue::Literal(10))],
-        active_only: false,
-        priority: 10,
-        min_age: 0,
-        overflow: Default::default(),
-    }]
-}
-
-fn replication_bench(len: usize) -> u128 {
-    let width = len + 10;
-    let mut grid = make_grid(width, 1);
-
-    grid.set_cell(
-        0,
-        0,
-        Cell {
-            value: CellValue(CellType(10)),
-            age: 0,
-        },
-    );
-
-    let rule_index = make_rule_index(replication_rule());
-
-    let start = Instant::now();
-    for _ in 0..len {
-        let active: Vec<(usize, usize)> = grid.iter_active().collect();
-        let (accepted, _) = run_tick(&mut grid, &rule_index, &active);
-        if accepted.is_empty() {
-            break;
+    // reset_age
+    let t4 = Instant::now();
+    for region in &regions {
+        for y in region.y_start..region.y_end {
+            for x in region.x_start..region.x_end {
+                if let Some(cell) = grid.get_cell(x as usize, y as usize) {
+                    grid.storage.set(x as usize, y as usize, Cell {
+                        value: cell.value,
+                        born_at: grid.generation(),
+                    });
+                }
+            }
         }
     }
-    let elapsed = start.elapsed().as_micros();
-    elapsed
+    let t_reset = t4.elapsed().as_nanos() as u128;
+
+    vec![
+        ("detect_matches", t_detect),
+        ("arbitrate", t_arbitrate),
+        ("apply_matches", t_apply),
+        ("advance_age", t_age),
+        ("reset_age", t_reset),
+    ]
 }
 
 // ============================================================================
-// Тесты сложности (старые)
+// Полный tick (для сравнения с суммой фаз)
 // ============================================================================
 
-fn run_complexity_tests() {
-    println!("\n--- TM-симуляция ---");
-    let mut results: Vec<(usize, usize)> = Vec::new();
+/// Замерить полный run_tick от начала до конца (создаёт новую решётку, как phase_breakdown).
+fn full_tick_bench(n: usize) -> u128 {
+    use std::time::Instant;
+    use std::collections::HashSet;
+    use cellaria::Grid;
+    use cellaria::VecStorage;
+    use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Rule};
+    
+    let storage = VecStorage::new(n, n);
+    let mut grid = Grid::new(storage, HashSet::new());
 
-    for &len in &[10, 50, 100, 200] {
-        let ticks = tm_bench(len);
-        println!("len={}, ticks={}", len, ticks);
-        results.push((len, ticks));
+    for y in 0..n {
+        for x in 0..n {
+            let val = if (x + y) % 2 == 0 { 1 } else { 2 };
+            grid.set_cell(x, y, Cell {
+                value: CellValue(CellType(val)),
+                born_at: grid.generation(),
+            });
+        }
     }
 
-    for &(len, ticks) in &results {
-        assert!(
-            ticks <= 3 * len,
-            "TM: len={} ticks={} превышает 3*len={}",
-            len,
-            ticks,
-            3 * len
-        );
-    }
+    let rule = Rule {
+        id: vec![CellType(1), CellType(2)],
+        pattern: vec![(0i8, 0i8, CellType(1)), (1i8, 0i8, CellType(2))],
+        shifts: vec![],
+        changes: vec![(0, 0, ChangeValue::Literal(3)), (1, 0, ChangeValue::Literal(4))],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+    };
+    let rule_index = helpers::make_rule_index(vec![rule]);
 
-    let ratios: Vec<f64> = results.iter().map(|&(l, t)| t as f64 / l as f64).collect();
-    for i in 1..ratios.len() {
-        assert!(
-            ratios[i] <= ratios[i - 1] * 1.5,
-            "TM: отношение ticks/len растёт слишком быстро: {} -> {}",
-            ratios[i - 1],
-            ratios[i]
-        );
-    }
+    // Прогрев
+    cellaria::engine::run_tick(&mut grid, &rule_index);
 
-    println!("\n--- Tag system ---");
-    let mut results2: Vec<(usize, usize)> = Vec::new();
-
-    for &len in &[5, 10, 20, 50] {
-        let ticks = tag_bench(len);
-        println!("len={}, ticks={}", len, ticks);
-        results2.push((len, ticks));
-    }
-
-    for &(len, ticks) in &results2 {
-        assert!(
-            ticks <= 2 * len,
-            "Tag: len={} ticks={} превышает 2*len={}",
-            len,
-            ticks,
-            2 * len
-        );
-    }
-
-    let ratios2: Vec<f64> = results2.iter().map(|&(l, t)| t as f64 / l as f64).collect();
-    for i in 1..ratios2.len() {
-        assert!(
-            ratios2[i] <= ratios2[i - 1] * 1.5,
-            "Tag: отношение ticks/len растёт слишком быстро: {} -> {}",
-            ratios2[i - 1],
-            ratios2[i]
-        );
-    }
-
-    println!("\n--- Conflict-free ---");
-    let mut results3: Vec<(usize, usize)> = Vec::new();
-
-    for &width in &[8, 16, 32, 64] {
-        let ticks = conflict_free_bench(width);
-        println!("width={}, ticks={}", width, ticks);
-        results3.push((width, ticks));
-    }
-
-    for &(width, ticks) in &results3 {
-        assert!(
-            ticks <= 5,
-            "Conflict-free: width={} ticks={} превышает 5",
-            width,
-            ticks
-        );
-    }
-
-    println!("\nВсе оригинальные тесты сложности пройдены.");
+    // Измерение
+    let t0 = Instant::now();
+    cellaria::engine::run_tick(&mut grid, &rule_index);
+    t0.elapsed().as_nanos() as u128
 }
 
 // ============================================================================
-// Тесты для новых бенчмарков
+// ФАЗА 3: Память — Vec vs Chunk, max size
 // ============================================================================
 
-fn run_bench_tests() {
-    // Бенчмарк 1: worst-case arbitration
-    let count_10 = worst_case_bench(10);
-    let count_20 = worst_case_bench(20);
-    // affected = [(0,0), (1,0)]; первое проверяет обе, остальные конфликтуют на (0,0)
-    // counter = 2 + (M-1)*1 = M + 1
-    assert_eq!(count_10, 11, "Worst-case M=10: expected 11, got {}", count_10);
-    assert_eq!(count_20, 21, "Worst-case M=20: expected 21, got {}", count_20);
-    println!("Worst-case arbitration: M=10 → {} (exp 11), M=20 → {} (exp 21) OK", count_10, count_20);
-
-    // Бенчмарк 2: storage
-    let vec_time = storage_bench_vec(100, 100);
-    let chunk_time = storage_bench_chunk(100, 100);
-    assert!(vec_time < 100_000, "VecStorage 100×100: {}µs > 100ms", vec_time);
-    assert!(chunk_time < 200_000, "ChunkStorage 100×100: {}µs > 200ms", chunk_time);
-    assert!(chunk_time <= vec_time * 2 || vec_time < 1000,
-        "Chunk {}µs > 2× Vec {}µs", chunk_time, vec_time);
-    println!("Storage 100×100: Vec={}µs, Chunk={}µs OK", vec_time, chunk_time);
-
-    // Бенчмарк 3: grid growth
-    let time_100 = grid_growth_bench(100);
-    let time_1000 = grid_growth_bench(1000);
-    assert!(time_1000 <= time_100 * 10 || time_100 < 10,
-        "Grid growth N=1000 {}µs > 10× N=100 {}µs", time_1000, time_100);
-    println!("Grid growth: N=100 → {}µs, N=1000 → {}µs OK", time_100, time_1000);
-
-    // Бенчмарк 4: rule count
-    let time_10 = rule_count_bench(10);
-    let time_200 = rule_count_bench(200);
-    assert!(time_200 <= time_10 * 50 || time_10 < 10,
-        "Rule count K=200 {}µs > 50× K=10 {}µs", time_200, time_10);
-    println!("Rule count: K=10 → {}µs, K=200 → {}µs OK", time_10, time_200);
-
-    // Бенчмарк 5: replication
-    let repl_time_10 = replication_bench(10);
-    let repl_time_100 = replication_bench(100);
-    assert!(repl_time_100 <= repl_time_10 * 100 || repl_time_10 < 50,
-        "Replication len=100 {}µs > 100× len=10 {}µs", repl_time_100, repl_time_10);
-    println!("Replication: len=10 → {}µs, len=100 → {}µs OK", repl_time_10, repl_time_100);
-
-    println!("\nВсе новые бенчмарк-тесты пройдены.");
+/// Замерить потребление памяти VecStorage.
+fn memory_vec(n: usize) -> u128 {
+    use cellaria::types::Cell;
+    let cell_size = std::mem::size_of::<Cell>(); // 12 bytes (u8+padding, u32)
+    (n * n) as u128 * cell_size as u128
 }
 
-// ============================================================================
-// Criterion-бенчмарки
-// ============================================================================
-
-fn bench_turing(c: &mut criterion::Criterion) {
-    c.bench_function("turing_len_100", |b| {
-        b.iter(|| {
-            let _ticks = tm_bench(100);
-        })
-    });
-}
-
-fn bench_tag(c: &mut criterion::Criterion) {
-    c.bench_function("tag_len_20", |b| {
-        b.iter(|| {
-            let _ticks = tag_bench(20);
-        })
-    });
-}
-
-fn bench_conflict_free(c: &mut criterion::Criterion) {
-    c.bench_function("conflict_free_width_32", |b| {
-        b.iter(|| {
-            let _ticks = conflict_free_bench(32);
-        })
-    });
-}
-
-fn bench_worst_case(c: &mut criterion::Criterion) {
-    let mut group = c.benchmark_group("worst_case_arbitration");
-    for &m in &[10, 20, 50, 100] {
-        group.bench_function(format!("M_{}", m), |b| {
-            b.iter(|| {
-                let _count = worst_case_bench(m);
-            })
-        });
-    }
-    group.finish();
-}
-
-fn bench_storage(c: &mut criterion::Criterion) {
-    let mut group = c.benchmark_group("storage");
-    for &(w, h) in &[(10, 10), (50, 50), (100, 100)] {
-        group.bench_function(format!("vec_{}x{}", w, h), |b| {
-            b.iter(|| {
-                let _time = storage_bench_vec(w, h);
-            })
-        });
-        group.bench_function(format!("chunk_{}x{}", w, h), |b| {
-            b.iter(|| {
-                let _time = storage_bench_chunk(w, h);
-            })
-        });
-    }
-    group.finish();
-}
-
-fn bench_grid_growth(c: &mut criterion::Criterion) {
-    let mut group = c.benchmark_group("grid_growth");
-    for &n in &[100, 500, 1000, 5000, 10000] {
-        group.bench_function(format!("N_{}", n), |b| {
-            b.iter(|| {
-                let _time = grid_growth_bench(n);
-            })
-        });
-    }
-    group.finish();
-}
-
-fn bench_rule_count(c: &mut criterion::Criterion) {
-    let mut group = c.benchmark_group("rule_count");
-    for &k in &[10, 50, 100, 200] {
-        group.bench_function(format!("K_{}", k), |b| {
-            b.iter(|| {
-                let _time = rule_count_bench(k);
-            })
-        });
-    }
-    group.finish();
-}
-
-fn bench_replication(c: &mut criterion::Criterion) {
-    let mut group = c.benchmark_group("replication");
-    for &len in &[10, 50, 100, 500] {
-        group.bench_function(format!("len_{}", len), |b| {
-            b.iter(|| {
-                let _time = replication_bench(len);
-            })
-        });
-    }
-    group.finish();
+/// Замерить потребление ChunkStorage для заполненной N×N области.
+fn memory_chunk_estimate(n: usize) -> usize {
+    let chunks_per_side = (n + 31) / 32;
+    let num_chunks = chunks_per_side * chunks_per_side;
+    num_chunks * 4096 // примерный оверхед на чанк
 }
 
 // ============================================================================
@@ -860,21 +454,86 @@ fn bench_replication(c: &mut criterion::Criterion) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--bench") {
-        let mut criterion = criterion::Criterion::default()
-            .configure_from_args();
-        bench_turing(&mut criterion);
-        bench_tag(&mut criterion);
-        bench_conflict_free(&mut criterion);
-        bench_worst_case(&mut criterion);
-        bench_storage(&mut criterion);
-        bench_grid_growth(&mut criterion);
-        bench_rule_count(&mut criterion);
-        bench_replication(&mut criterion);
+    let is_json = args.iter().any(|a| a == "--json");
+    let is_quick = args.iter().any(|a| a == "--quick");
+    let is_quiet = args.iter().any(|a| a == "--quiet");
+    let is_compact = args.iter().any(|a| a == "--compact");
+    // `cargo bench --bench cellaria_bench -- <...>` ВСЕГДА дописывает
+    // `--bench` в конец argv сама — это стандартное поведение Cargo для
+    // bench-таргетов, даже при harness = false в Cargo.toml. Раньше именно
+    // этот флаг выбирал ветку Criterion — то есть кастомный репортер
+    // (--compact/--quiet/--json) был недостижим ЛЮБЫМ запуском через
+    // `cargo bench`: --bench там есть всегда, независимо от того, что
+    // ввёл пользователь после `--`. Отдельный `--criterion` не пересекается
+    // с тем, что cargo подставляет сама.
+    let is_criterion = args.iter().any(|a| a == "--criterion");
+
+    // Если --criterion: запускаем Criterion-бенчмарки с быстрой конфигурацией
+    if is_criterion {
+        let mut criterion = {
+            let mut cb = criterion::Criterion::default();
+            // Быстрый режим для Criterion
+            if is_quick {
+                cb = cb
+                    .warm_up_time(std::time::Duration::from_secs(1))
+                    .measurement_time(std::time::Duration::from_secs(2))
+                    .sample_size(10)
+                    .noise_threshold(0.10);
+            }
+            cb.configure_from_args()
+        };
+        existing::register_all(&mut criterion);
+        throughput::register_all(&mut criterion);
+        rules::register_all(&mut criterion);
         criterion.final_summary();
-    } else {
-        run_complexity_tests();
-        println!("\n--- Новые бенчмарк-тесты ---");
-        run_bench_tests();
+        return;
     }
+
+    // --quick для обычного (не-Criterion) пути: раньше флаг парсился, но
+    // нигде не читался вне ветки is_bench — окна throughput::*_bench
+    // оставались жёстко 100ms/1s независимо от него. Теперь делит их на 10.
+    if is_quick {
+        throughput::QUICK.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    let mut reporter = Reporter::new();
+    reporter.set_json(is_json);
+    reporter.set_compact(is_compact);
+    reporter.set_quiet(is_quiet);
+
+    // Проверка на --check
+    if let Some(pos) = args.iter().position(|a| a == "--check") {
+        if let Some(path) = args.get(pos + 1) {
+            if let Err(e) = reporter.load_baseline(path) {
+                eprintln!("Ошибка загрузки baseline: {}", e);
+            }
+        }
+    }
+
+    // Проверка на --output
+    if let Some(pos) = args.iter().position(|a| a == "--output") {
+        if let Some(path) = args.get(pos + 1) {
+            reporter.set_output_path(path);
+        }
+    }
+
+    // Peak-тесты
+    run_phase1(&mut reporter);
+    run_phase2(&mut reporter);
+    run_phase3(&mut reporter);
+    run_phase4(&mut reporter);
+    run_phase5(&mut reporter);
+
+    // Проверка с baseline, если загружен
+    let baseline_warnings = reporter.check_baseline();
+    if !baseline_warnings.is_empty() {
+        reporter.print_blank();
+        reporter.print_info("Предупреждения от baseline-проверки:");
+        for w in &baseline_warnings {
+            reporter.print_info(&format!("  ⚠ {}: {} ({})", w.group, w.param, w.status.label()));
+        }
+    }
+
+    // Финальная сводка
+    reporter.print_summary();
 }
