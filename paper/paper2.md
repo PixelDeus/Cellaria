@@ -8,10 +8,11 @@ detection (pattern matching), arbitration (conflict resolution), and
 application (modification). We present three contributions about the
 arbitration mechanism:
 
-1. **Determinism of arbitration** — the sort key `(priority, age, center)`
-   defines a total order; greedy selection on a totally ordered set is
-   deterministic, guaranteeing identical results across non-deterministic
-   iteration orders and different implementations.
+1. **Determinism of arbitration** — the sort key `(priority, age,
+   rule_id, center_x, center_y, rule_idx)` defines a total order; greedy
+   selection on a totally ordered set is deterministic, guaranteeing
+   identical results across non-deterministic iteration orders and
+   different implementations.
 
 2. **Static conflict analysis** — a conservative algorithm constructs a
    conflict graph for a given rule set, and we prove its **completeness**:
@@ -21,7 +22,39 @@ arbitration mechanism:
 
 3. **Composition of conflict-free rule sets** — a theorem and catalog of
    operations that preserve the conflict-free property, enabling modular
-   construction of parallel Cellaria programs.
+   construction of parallel Cellaria programs. Extended to a *guarded*
+   form of self-modification (Section 4.6): re-running the same
+   composition check at every self-installed rule, not just once at
+   startup, keeps the guarantee alive as one region's rule set evolves
+   at runtime alongside an independently-written neighbor's.
+
+4. **Spatial decomposition for programs with conflicts** — a locality
+   theorem showing that arbitration itself, not just conflict-free rule
+   sets, can be parallelized: partitioning the grid into regions with a
+   sufficiently wide margin lets each region's matches be arbitrated
+   independently, with only a thin boundary strip requiring shared
+   sequential arbitration, and the combined result is provably identical
+   to centralized arbitration over all matches.
+
+5. **A bound on fault propagation** — the same locality argument that
+   enables spatial decomposition also bounds how far a single corrupted
+   cell's effect can spread after `t` ticks, independent of whether the
+   rule set is conflict-free or conflict-aware. Generalized (Section 6.4)
+   to rule sets that change mid-run via self-modification: the bound
+   becomes a sum over each tick's active reach rather than one constant
+   `K`, and we show empirically that the original constant-`K` bound is
+   not merely imprecise but actually violated once a wider-reaching rule
+   is installed, while the generalized one never is.
+
+6. **Reversibility** — a sufficient condition, built entirely from the
+   conflict-free machinery of Sections 2–3, under which a Cellaria tick
+   is a bijection on configurations: every rule locally invertible, the
+   rule set distinguishable, and the conflict graph empty. Such a rule
+   set admits an exact inverse rule set, reconstructing any prior
+   configuration cell for cell — not approximately, but exactly. We
+   connect this, with an explicit scope caveat, to Landauer's principle:
+   reversible computation is the one class not subject to a physical
+   minimum-energy-dissipation argument from information erasure.
 
 ---
 
@@ -37,11 +70,12 @@ consisting of three phases:
 3. **Application** — the selected matches are applied to the grid.
 
 The first contribution of this paper (Section 2) is a formal proof of
-arbitration determinism: the sort key `(priority, age, center)` defines
-a total order, guaranteeing identical results across non-deterministic
-iteration orders. This is non-trivial because `ChunkStorage` (the
-infinite grid implementation) uses a `HashMap` for chunk storage, and
-`active_cells()` iterates in non-deterministic order between runs.
+arbitration determinism: the sort key `(priority, age, rule_id, center_x,
+center_y, rule_idx)` defines a total order, guaranteeing identical
+results across non-deterministic iteration orders. This is non-trivial
+because `ChunkStorage` (the infinite grid implementation) uses a
+`HashMap` for chunk storage, and `active_cells()` iterates in
+non-deterministic order between runs.
 
 The second contribution (Section 3) addresses the sequential bottleneck
 of greedy arbitration. For conflict-free rule sets, arbitration can be
@@ -56,7 +90,33 @@ for conflict-free rule sets: if two conflict-free sets have an empty
 combined conflict graph, they can be safely merged without arbitration.
 A catalog of preserving operations (unique head types, isolated `min_age`,
 spatial isolation, disjoint types) enables modular construction of
-parallel Cellaria programs.
+parallel Cellaria programs. Section 4.6 extends this to *guarded*
+self-modification: if either side can install new rules at runtime, the
+static, one-time composition check no longer suffices on its own —
+re-running it at every self-installed rule, and rejecting one that would
+break an already-established neighbor, keeps the guarantee alive for as
+long as guarding stays enabled.
+
+The fourth and fifth contributions (Section 6) extend the locality
+argument used throughout this paper — that a rule's affected region
+extends at most `K` cells from its match center — to two questions that
+do not require the conflict graph to be empty. First, whether the grid
+can be split into regions and arbitrated in parallel even when the rule
+set has real conflicts (Section 6.2), which the composition theorem of
+Section 4 does not address, since it requires the *combined* graph to be
+empty. Second, how far the effect of a single corrupted cell can spread
+after `t` ticks (Section 6.3), a bound that turns out to hold uniformly
+for both conflict-free and conflict-aware rule sets.
+
+The sixth contribution (Section 7) asks a different question of the
+same conflict-free machinery: when is a Cellaria tick *reversible* — a
+bijection on configurations, admitting an exact inverse rather than an
+approximate one? We give a sufficient condition built directly on
+Theorem 3, validate it on a rule set combining both sources of
+information loss (`changes` and `shifts`), and connect it, with an
+explicit scope caveat, to a real physical principle (Landauer's bound
+on the energy cost of erasing information) rather than an unsupported
+efficiency claim.
 
 ---
 
@@ -71,54 +131,72 @@ deterministic (left-to-right, top-to-bottom). For `ChunkStorage`
 and `active_cells()` iterates in non-deterministic order between runs.
 Despite this, the arbitration algorithm must produce the same set of
 accepted matches for any input order. We prove that the sort key
-`(priority, age, center_x, center_y)` defines a total order, guaranteeing
-deterministic greedy selection regardless of input order.
+`(priority, age, rule_id, center_x, center_y, rule_idx)` defines a total
+order, guaranteeing deterministic greedy selection regardless of input
+order.
 
 ### 2.2. The Arbitration Algorithm
 
 The arbitration algorithm (`arbitrate`) works as follows:
 
-1. **Sort** all matches by `(priority, age, center_x, center_y)` in
-   descending order (highest priority first; for equal priority, highest
-   age first; for equal age, lexicographic order of center coordinates).
+1. **Sort** all matches by `(priority, age, rule_id, center_x, center_y,
+   rule_idx)` in descending order (highest priority first; ties broken
+   by highest age, then by `rule_id`, then by center coordinates, then by
+   `rule_idx`). `rule_id` is derived from the matching rule's `id` field;
+   `rule_idx` is the rule's position within `rule_index[head]`, needed
+   because a single head type may have more than one rule registered
+   against it (Section 2.3).
 2. **Greedy selection:** iterate through the sorted list; accept a match
    if its center cell and all its pattern cells are not already used by
    a previously accepted match.
 
-### 2.3. Uniqueness of the Center Cell
+### 2.3. Multiple Matches per Center
 
-**Lemma 1 (Unique center).** In a single tick, a given grid cell can be
-the center of at most one `RuleMatch`.
+An earlier version of this analysis assumed a grid cell could be the
+center of at most one `RuleMatch` per tick, since `detect_matches`
+groups rules by head type and rules are stored in `rule_index: HashMap<
+CellType, Vec<Rule>>`. That assumption does not hold in general: a head
+type may have *more than one* rule registered against it (used
+throughout this project — e.g. a counter cell with both an "increment"
+rule and a "finalize" rule keyed to the same encoded type, distinguished
+by `min_age`). A single cell can therefore be the center of multiple
+matches in the same tick, one per rule whose pattern it satisfies.
 
-*Proof.* A `RuleMatch` is created when the center cell's type triggers a
-rule. The center cell has a single type value. Rules are indexed by the
-first cell type in their `id` field. A cell with type `t` can only
-trigger rules that have `t` as their first `id` element. For a given
-cell, `detect_matches` checks all rules with matching first type, but
-all resulting matches share the same center cell. During arbitration,
-if a match with this center is accepted, all subsequent matches with the
-same center are rejected (the center is in `used_cells`). Thus, at most
-one match per center survives arbitration. ∎
+This is exactly why `rule_id` and `rule_idx` are part of the tie-break:
+without them, two distinct matches sharing a center and an equal
+`(priority, age)` would be indistinguishable to the sort, and the greedy
+algorithm's choice between them would depend on input order — breaking
+determinism. `rule_id` (the matching rule's `id` bytes) distinguishes
+matches from rules with different identities; `rule_idx` (the rule's
+index within `rule_index[head]`) is the final fallback for the residual
+case of two distinct rule entries that happen to share identical `id`
+bytes.
 
 ### 2.4. Total Order
 
-**Lemma 2 (Total order).** The key `(priority, age, center_x, center_y)`
-defines a total order on the set of all `RuleMatch` objects in a single
-tick.
+**Lemma 1 (Total order).** The key `(priority, age, rule_id, center_x,
+center_y, rule_idx)` defines a total order on the set of all `RuleMatch`
+objects in a single tick.
 
 *Proof.* For any two distinct matches `m₁` and `m₂`:
 
 - If `priority(m₁) ≠ priority(m₂)`, the higher priority wins.
-- If `priority(m₁) = priority(m₂)`, compare `age`. The age is the age of
-  the center cell. If ages differ, the higher age wins.
-- If `priority` and `age` are equal, compare `center_x`, then `center_y`.
-  By Lemma 1, two distinct matches cannot have the same center. Therefore,
-  the coordinate comparison is well-defined and distinguishes the two
-  matches.
+- If `priority` is equal, compare `age` (the age of the center cell). If
+  ages differ, the higher age wins.
+- If `priority` and `age` are equal, compare `rule_id`. If the matched
+  rules have different `id` bytes, this distinguishes them.
+- If `rule_id` also ties, compare `center_x`, then `center_y`.
+- If `priority`, `age`, `rule_id`, `center_x`, and `center_y` are all
+  equal — two distinct rule entries, sharing identical `id` bytes,
+  matching the same center cell in the same tick — compare `rule_idx`.
+  Since `rule_idx` is each rule's distinct position within
+  `rule_index[head]`, and `m₁ ≠ m₂` under these conditions can only arise
+  from two different entries in that vector, `rule_idx` is guaranteed to
+  differ and the comparison is well-defined.
 
-All components are totally ordered, and the lexicographic combination
-(`priority` descending, `age` descending, `center_x` ascending, `center_y`
-ascending) is a total order. ∎
+Every component is totally ordered, and the lexicographic combination
+(`priority`, `age`, `rule_id` descending; `center_x`, `center_y`
+ascending; `rule_idx` descending) is therefore a total order. ∎
 
 ### 2.5. Theorem 1: Determinism of Arbitration
 
@@ -129,9 +207,9 @@ of the order in which matches are passed to it.
 *Proof.* Let `M` be the set of all matches detected in a tick. The
 arbitration algorithm:
 
-1. Sorts `M` by the total order key `(priority, age, center_x, center_y)`
-   (Lemma 2). Sorting is deterministic: for any input order, the sorted
-   order is the same.
+1. Sorts `M` by the total order key `(priority, age, rule_id, center_x,
+   center_y, rule_idx)` (Lemma 1). Sorting is deterministic: for any
+   input order, the sorted order is the same.
 2. Iterates through the sorted list greedily. The greedy selection is
    deterministic: a match is accepted if and only if its cells are not
    already used by a previously accepted match. Since the sorted order
@@ -146,8 +224,8 @@ Therefore, the output of `arbitrate` is independent of the input order.
 
 **Corollary 1 (Portability).** Any Cellaria configuration can be executed
 on different implementations (Rust, GPU, FPGA) and produce the same result,
-provided the sort order `(priority, age, center_x, center_y)` is
-consistently implemented.
+provided the sort order `(priority, age, rule_id, center_x, center_y,
+rule_idx)` is consistently implemented.
 
 This is a strong portability guarantee: the model's semantics are
 independent of the underlying execution platform.
@@ -192,7 +270,7 @@ Affected(R, cₓ, cᵧ) = PatternCells(R, cₓ, cᵧ)
 
 ### 3.3. Conflict Elimination Lemmas
 
-**Lemma 3 (Type incompatibility).** If two rules `Rᵢ` and `Rⱼ` check
+**Lemma 2 (Type incompatibility).** If two rules `Rᵢ` and `Rⱼ` check
 overlapping cells for a given offset, and the required types in the
 overlapping cells are incompatible (no cell can simultaneously satisfy
 both type requirements), then the rules do not conflict for that offset.
@@ -212,7 +290,7 @@ This is a deliberate over-approximation: at the cost of potential false
 positives in the conflict graph (reporting conflicts where none exist
 at runtime), we guarantee soundness for all reachable grid states.
 
-**Lemma 4 (Affected regions disjointness).** Even if two rules can match
+**Lemma 3 (Affected regions disjointness).** Even if two rules can match
 simultaneously, they do not conflict if their affected regions do not
 intersect.
 
@@ -307,7 +385,7 @@ over-approximation to preserve soundness.
 
 **Condition C: Non-intersecting affected regions.**
 Even if both rules can match simultaneously, they do not conflict if
-their affected regions are disjoint (Lemma 4).
+their affected regions are disjoint (Lemma 3).
 
 #### Inductive Proof of Completeness
 
@@ -352,7 +430,7 @@ state.
 
 ### 3.6. Structural Properties
 
-**Lemma 5 (Idempotence).** The conflict graph is idempotent under
+**Lemma 4 (Idempotence).** The conflict graph is idempotent under
 repeated construction: for a fixed rule set, Algorithm 1 always produces
 the same graph.
 
@@ -360,7 +438,7 @@ the same graph.
 offsets, and checks in the same order. No state is shared between
 iterations. ∎
 
-**Lemma 6 (Monotonicity).** Adding a rule to a rule set can only add
+**Lemma 5 (Monotonicity).** Adding a rule to a rule set can only add
 edges to the conflict graph, never remove them.
 
 *Proof.* A new rule `Rₙ₊₁` may conflict with existing rules, adding edges
@@ -390,8 +468,8 @@ order.
 3. Therefore, no two matches from distinct rules can overlap. For
    matches from the same rule: a self-loop `(i, i)` in the conflict
    graph indicates that the rule conflicts with itself at some non-zero
-   offset. Since `G` has no self-loops by assumption, Lemma 3 (type
-   incompatibility) or Lemma 4 (non-intersecting affected regions)
+   offset. Since `G` has no self-loops by assumption, Lemma 2 (type
+   incompatibility) or Lemma 3 (non-intersecting affected regions)
    guarantees that the affected regions of any two instances of the
    same rule at distinct centers are disjoint.
 
@@ -516,7 +594,7 @@ beyond chains of length `K`. ∎
 **Claim.** If the type sets used in `R₁` and `R₂` are disjoint, the
 conflict graph of the union is empty.
 
-*Proof.* This follows from Lemma 3: rules with no common types cannot
+*Proof.* This follows from Lemma 2: rules with no common types cannot
 match simultaneously (no cell can have two different types). Therefore,
 their affected regions do not intersect. ∎
 
@@ -606,6 +684,200 @@ composition is safe.
 3. After 5 ticks, the cleanup rule (type 99) removes garbage markers.
 4. TM head and cleanup do not compete for cells — arbitration is not needed.
 
+### 4.6. Guarded Composability Under Self-Modification
+
+Theorem 4 checks composition *once*, statically, before two rule sets are
+merged. If either side can self-modify (installing new rules at runtime
+via `RuleStore`, as in [3, self-modification]), that one-time guarantee
+does not automatically persist: a self-installed rule could, in
+principle, target a head type that an independently-written, already
+safe neighboring module depends on, silently invalidating the very
+property Theorem 4 established. This section shows the guarantee *can*
+be made to persist, by re-running the same composition check at every
+self-modification event rather than once at startup.
+
+**Construction.** Let `H₀` be the set of head types present in the rule
+set at the moment guarded self-modification is enabled — the "protected"
+heads, representing modules that existed before any self-modification
+began. For every subsequent self-installed `AddRule` targeting head `h`:
+
+- if `h ∉ H₀` and `h` already has rules in the current index (i.e. `h`
+  was itself introduced by an *earlier* self-installed rule — the
+  self-modifying process growing its own, previously claimed territory),
+  the new rule is installed unconditionally;
+- otherwise — `h` is brand new, or `h ∈ H₀` — the rule is installed only
+  if `ConflictGraph::check_composition({r_new}, rest)` (Section 4.3),
+  where `rest` is the full current rule set excluding `h`'s own entries,
+  returns `Safe`, or returns `Unsafe` with an *empty* pair list (meaning
+  the only detected conflict is `r_new` against another instance of
+  itself — a self-loop, unrelated to anything already installed; see the
+  remark below). Otherwise the rule is discarded: neither applied to the
+  rule store nor merged into the index.
+
+**Theorem 5 (Guarded composability).** Under this construction, no rule
+targeting a protected head `h ∈ H₀` is ever installed if doing so would
+create a structural conflict — in the sense of Definition 1 — with the
+rule set as it stood immediately before the install.
+
+*Proof.* The check is performed synchronously, exactly once per
+candidate rule, before either `rule_store.apply` or the merge into
+`rule_index` (`Engine::absorb_self_modifications`). When the check
+reports an actual cross-pair conflict, both steps are skipped via
+`continue` — the candidate rule never reaches the rule store's internal
+state and never reaches `rule_index`, leaving every existing entry,
+including `h`'s, bit-for-bit unchanged. Since this is the *only* code
+path by which a self-installed rule can reach `rule_index`, no
+conflicting rule can ever be merged. ∎
+
+**Remark (self-loops are not composition conflicts).** `check_composition`
+reports `Unsafe` whenever the *combined* conflict graph is non-empty,
+which includes a candidate rule conflicting with *another instance of
+itself* at a different grid position (Section 3.4's self-loop check) —
+a property of the candidate rule alone, unrelated to whether it collides
+with anything already installed. An ordinary shift rule commonly has
+such a self-loop (the same "moving object" pattern discussed throughout
+this paper). Treating every `Unsafe` verdict as a rejection would reject
+this class of otherwise perfectly safe rules for a reason that has
+nothing to do with composability; the construction above rejects only
+when the verdict's pair list is non-empty — an actual candidate-versus-
+existing conflict.
+
+**Remark (inherited conservatism).** The guard is exactly as conservative
+as `ConflictGraph` itself (Section 3.3–3.5): a shift rule's destination
+is not type-constrained, so it cannot be excluded from conflicting with
+anything spatially reachable, regardless of actual type compatibility —
+the same limitation already established for the shuttle in
+`big_world.rs`. In practice, a candidate rule with a shift will often be
+flagged unsafe if *any* other shift-carrying rule (including the
+self-modification channel's own transport carriers, if they happen to
+be represented as ordinary rules in the same index) is present. This is
+not a defect introduced by the guard; it is the same static-analysis
+limitation this paper has been honest about throughout, now visible at
+a new point of use.
+
+**Remark (scope: one protected snapshot, not a general race resolver).**
+`H₀` is fixed at the moment guarding is enabled. Two independently
+self-modifying regions racing to claim the *same*, previously unclaimed
+head are not arbitrated by this mechanism — whichever installs first is
+thereafter treated as "already existing, not protected" for that head,
+and the guard does not intervene between competing self-modifying peers.
+This is a real, acknowledged limit of scope, not a general solution to
+multi-party self-modification races.
+
+**Empirical validation.** `examples/proof_guarded_self_modification.rs`
+sets up a static module (a decay rule, head `1`) and, using
+`Engine::enable_guarded_self_modification`, injects two `AddRule`
+packets directly: one targeting a fresh head (`50`) with a same-cell
+change — accepted, since it cannot structurally overlap with the decay
+rule — and one targeting head `1` itself with a *different* same-cell
+change — rejected (`rejected_self_modifications` becomes `1`), leaving
+the decay module's rule, and its behavior on a fresh run, byte-for-byte
+unchanged. An earlier version of this experiment used physical carrier
+cells (as in Section 4.5) for the delivery and reported false rejections
+for genuinely safe rules; the cause was exactly the conservatism
+described above — the carriers themselves, being ordinary shift rules,
+were being compared against the candidate and found (correctly, if
+uninformatively) self-referentially conflicting. The published example
+injects packets directly into the boundary queue instead, isolating the
+guard's decision from a transport mechanism already proven separately
+in Section 4.5.
+
+**Corollary 4 (Removal never needs guarding).** A self-installed
+`RemoveRule` or `ClearAll` operation never requires a composition check.
+
+*Proof.* Immediate from Lemma 5 (Monotonicity), read in reverse: if
+adding a rule to a rule set can only add edges to its conflict graph,
+then removing a rule can only remove edges (or leave the graph
+unchanged) — never add one. A rule set that was composition-safe with
+respect to every protected head before a removal remains so afterward,
+since the combined conflict graph after the removal is a subgraph of
+the one before it. The implementation reflects this directly:
+`composition_allows` returns `true` immediately for any operation other
+than `AddRule` (Section 4.6's construction), which this corollary shows
+is not merely a convenient default but the provably correct behavior. ∎
+
+**Three bugs, found while building this section.** The first working
+version of guarded self-modification passed the tests above but had
+separate defects in the underlying (unguarded) merge logic, exposed only
+once a self-installed rule actually shared a head with a rule from
+outside `RuleStore`'s own bookkeeping — a case none of Section 4.5's
+demonstrations exercised, since they only ever targeted fresh heads.
+
+First, `RemoveRule`/`ClearAll` updated `RuleStore`'s own internal state
+correctly but the merge step, which only ever inserted keys present in
+`RuleStore::get_index()`, never removed a head from `rule_index` once
+its last rule was gone — a removed rule silently kept acting as if
+still installed.
+
+Second, and more seriously: `RuleStore::get_index()` is rebuilt entirely
+from rules `RuleStore` has itself processed via `AddRule`, with no
+knowledge of rules that were already part of `rule_index` — so merging
+by replacing `rule_index[head]` outright with `get_index()[head]`
+silently *destroyed* a pre-existing rule the moment self-modification
+legitimately added another rule to the same head. The first fix tracked
+a one-time snapshot of `rule_index` taken at `Engine::new`
+(`original_rule_index`) and reconstructed each affected head on every
+merge as *original rules for that head, plus whatever `RuleStore`
+currently reports* — rather than a blind overwrite.
+
+Third: a snapshot taken only at `Engine::new` is itself incomplete,
+since `rule_index` can be legitimately modified directly at any later
+point (the pattern demonstrated in `strength_live_rules.rs` — mutate
+`rule_index`, then call `rebuild_rule_cache`). A rule added this way
+*after* construction but *before* self-modification began was, by the
+second fix, treated as unprotected territory rather than a pre-existing
+rule — and was destroyed exactly as in the second bug the moment
+self-modification extended the same head. The complete fix moves the
+snapshot to the moment self-modification is actually enabled
+(`Engine::enable_self_modification`) rather than construction, and —
+since `rule_index` can still be edited directly *after* that point —
+recomputes `original_rule_index` on every `rebuild_rule_cache` call, as
+*whatever is currently in `rule_index`, minus whatever `RuleStore`
+currently reports owning*. This correctly tracks "foreign territory" as
+it actually stands at any point in the simulation's history, not a
+single snapshot that goes stale the moment anything changes around it.
+
+Covered by `test_self_modification_extending_existing_head_preserves_original`,
+`test_self_modification_remove_rule_actually_removes`, and
+`test_self_modification_preserves_rule_added_after_construction`
+(`src/engine/tests.rs`).
+
+**A fourth bug, one level below the `Engine`.** All of the above concerns
+the merge into `rule_index`. A separate defect sat underneath it, in
+`RuleStore::drain_rule_channel` itself: bytes from *every* output-direction
+boundary were collected into one shared accumulator, keyed only by channel
+number, before decoding. Two independently self-modifying regions, each
+with its own output port, transmitting at overlapping times, would have
+their byte streams interleaved into a single corrupted stream — neither
+packet decodes correctly, even though each considered alone is
+well-formed. This is exactly the scenario Theorem 5 is meant to keep
+safe (two modules coexisting, one or both self-modifying), so it is a
+direct gap in that guarantee, not a tangential one. Fixed by keying the
+accumulator by boundary coordinate instead of channel — each physical
+port now has its own independent byte stream and decode state, so
+concurrent transmissions on different ports can never corrupt one
+another regardless of timing. Covered by
+`test_drain_rule_channel_keeps_independent_boundaries_separate`
+(`src/rule_store_tests.rs`).
+
+**A fifth bug, once concurrent transmission was possible at all.** Fixing
+the fourth bug made it possible for two unrelated self-modification
+packets to genuinely complete decoding in the *same* tick, which exposed
+a defect in the guard itself: `composition_allows` checked each candidate
+rule against `self.rule_index` — the engine's rule set as it stood
+*before the current batch of operations began*, since `rule_index` is
+only updated once, at the very end of `absorb_self_modifications`. Two
+self-installed rules that conflict with *each other* (not with anything
+pre-existing) but complete decoding within the same batch would each be
+checked against a view that includes neither — both pass, both install,
+and the conflict Theorem 5 promises to catch slips through entirely.
+Fixed by checking against `RuleStore`'s own current state instead of
+`rule_index`: `RuleStore::get_index()` reflects every operation applied
+so far, including ones accepted earlier in the very same batch, so the
+second of two mutually-conflicting rules now correctly sees the first.
+Covered by `test_guarded_self_modification_catches_conflict_within_same_batch`
+(`src/engine/tests.rs`).
+
 ---
 
 ## 5. Relationship to the Five Axioms
@@ -648,7 +920,341 @@ when its `min_age` precondition is met.
 
 ---
 
-## 6. Related Work
+## 6. Spatial Decomposition and Fault Locality
+
+### 6.1. Motivation
+
+Corollary 3 (Section 3.7) parallelizes arbitration by eliminating it:
+when the conflict graph is empty, every match is accepted, so there is
+nothing left to resolve. The composition theorem (Section 4) extends
+this to merging two independently conflict-free rule sets. Neither
+result says anything about a rule set whose conflict graph is
+*non-empty* — the CA class of Section 3.2, where arbitration is
+genuinely required and costs `O(M²)` in the worst case (Theorem 4).
+
+This section shows that arbitration for CA programs can still be
+parallelized, by exploiting the same locality property used throughout
+this paper: a rule's affected region (Definition 2) extends at most `K`
+cells from its match center, where `K` is the same reach bound already
+used as the offset range in Algorithm 1. That bound gives two results:
+a way to split arbitration itself across independent regions of the
+grid (Section 6.2), and a bound on how far a single corrupted cell's
+effect can spread over time (Section 6.3).
+
+### 6.2. Spatial Decomposition of Arbitration
+
+**Definition 4 (Reach).** For a rule set `R`, `K = max` over all rules
+`Rᵢ ∈ R` of the largest Manhattan distance from a match's center cell to
+any cell in `PatternCells(Rᵢ) ∪ Affected(Rᵢ)` (Definition 2). This is the
+same `K` used as the offset range in Algorithm 1.
+
+**Definition 5 (Band partition).** Partition the grid into contiguous,
+non-overlapping bands `B₁, ..., Bₙ` along one axis. For a match `m` with
+center `c`, classify `m` relative to the band `Bᵢ` containing `c`:
+
+- `m` is **core** to `Bᵢ` if the distance from `c` to every edge of
+  `Bᵢ` is at least `2K`.
+- Otherwise, `m` is **boundary**.
+
+**Lemma 6 (Core isolation).** If `m₁` is core to some band and `m₂` is
+either core to a *different* band or boundary, then
+`affected(m₁) ∩ affected(m₂) = ∅`.
+
+*Proof.* By Definition 4, `affected(m₁)` lies entirely within Manhattan
+distance `K` of `m₁`'s center `c₁`. Since `c₁` is at distance `≥ 2K` from
+every edge of its band, `affected(m₁)` — which extends at most `K` from
+`c₁` — stays at distance `≥ K` from every edge of that band, and
+therefore cannot reach into a neighboring band or into any region within
+`K` of an edge. Any `m₂` that is core to a different band or boundary
+has its own affected region confined to a different band, or reaching
+toward an edge; in either case, by the same radius-`K` argument applied
+to `m₂`, the two affected regions are separated by more than `K + K`
+distance in the worst case that would bring them together, i.e. they
+cannot overlap. ∎
+
+**Theorem 6 (Spatial decomposition correctness).** Let `R` have reach
+`K`. Partition the grid into bands with margin `≥ 2K` (Definition 5),
+classifying every match as core or boundary. Let:
+
+- `A_core = ⋃ᵢ arbitrate(core matches of Bᵢ)`, with each band's core
+  matches arbitrated independently (in parallel, using the same
+  deterministic total order of Section 2),
+- `A_boundary = arbitrate(all boundary matches)`, arbitrated as one
+  shared sequential pass.
+
+Then `A_core ∪ A_boundary = arbitrate(all matches)` computed as a single
+centralized pass over the full match set.
+
+*Proof.* The greedy arbitration algorithm (Section 2.2) accepts a match
+`m`, in the fixed total order of Lemma 1, if and only if no
+already-accepted match with an earlier position in that order shares a
+cell with `m` — i.e. has an overlapping affected region.
+
+Take any core match `m`, core to band `Bᵢ`. By Lemma 6, no match outside
+`Bᵢ`'s core — whether core to another band or boundary — shares a cell
+with `m`. Therefore `m`'s accept/reject outcome under the centralized
+algorithm depends *only* on the other core matches of `Bᵢ`, in the same
+relative order (the total order of Lemma 1 is fixed and does not depend
+on which subset of matches is presented to the algorithm). Running
+`arbitrate` on just the core matches of `Bᵢ` therefore reproduces exactly
+the centralized decision for every match core to `Bᵢ`. Since this holds
+for every band independently, and different bands' core matches never
+share cells (Lemma 6), the bands can be arbitrated in parallel: `A_core`
+reproduces the centralized decision on every core match.
+
+Take any boundary match `m`. By Lemma 6, no core match shares a cell
+with `m` — only other boundary matches can. So `m`'s accept/reject
+outcome depends only on other boundary matches, in the same relative
+order, and is unaffected by however core matches were resolved. Running
+`arbitrate` on the full set of boundary matches therefore reproduces the
+centralized decision for every boundary match: `A_boundary` reproduces
+the centralized decision on every boundary match.
+
+Core and boundary partition all matches (Definition 5). Since `A_core`
+and `A_boundary` each individually reproduce the centralized decision on
+their respective subset, their union equals the centralized result on
+the full match set. ∎
+
+**Corollary 5 (Parallel arbitration for CA programs).** Unlike
+Corollary 3, Theorem 6 places no requirement on the conflict graph of
+`R` — it applies to CA programs (non-empty conflict graph) as much as
+CF ones. The only requirement is a band margin of at least `2K`, where
+`K` depends only on the rule set, not on the grid state.
+
+**Empirical validation.** `examples/decentralized_arbitration.rs`
+implements exactly this construction for a rule set with genuine,
+unavoidable conflicts (adjacent `R`-movers and `L`-movers, each wanting
+to write both of a colliding pair's cells, `K = 1`, margin `= 4 ≥ 2K`).
+Centralized arbitration and the banded parallel construction (up to 24
+worker threads) are compared directly on every run and found bit-for-bit
+identical, matching Theorem 6.
+
+**Remark (relation to domain decomposition).** This is the Cellaria
+analogue of halo/ghost-cell exchange in domain-decomposed scientific
+computing [8]: a margin of stencil width around each subdomain boundary
+lets interior points update independently, with only the halo requiring
+communication. Theorem 6 shows the same pattern holds for Cellaria's
+arbitration step specifically, including when rules genuinely conflict.
+
+### 6.3. A Bound on Fault Propagation
+
+**Setup.** Suppose at some tick `t₀` a single cell `c₀` is set to an
+arbitrary value, independent of what the fault-free execution would
+have produced there (a corruption event — e.g. a hardware bit-flip).
+All other cells at `t₀` are unaffected. We ask how far, after `t` further
+ticks, the set of cells that may now differ from the fault-free run can
+extend from `c₀`.
+
+**Theorem 7 (Bounded propagation).** Let `R` have reach `K` (Definition
+4). After `t` ticks following a single-cell corruption at `c₀`, every
+cell whose value may differ from the fault-free execution lies within
+Manhattan distance `2K·t` of `c₀`.
+
+*Proof.* By induction on `t`.
+
+*Base case (`t = 0`).* Only `c₀` differs, at distance `0 ≤ 2K·0`.
+
+*Inductive step.* Assume every divergent cell after `t` ticks lies
+within `2Kt` of `c₀`. Consider a cell `d` whose value at tick `t+1`
+differs between the corrupted and fault-free runs. Either:
+
+1. `d` was already divergent at tick `t` and no rule wrote to it this
+   tick in either run — then `d` is within `2Kt ≤ 2K(t+1)` of `c₀`.
+2. The set of matches accepted this tick that affect `d` differs between
+   the two runs. This can only happen if some match `m` with `d ∈
+   affected(m)` matched differently (fired in one run but not the
+   other, or vice versa) — which requires some cell read by `m`'s
+   pattern to differ between the runs. By Definition 4, that divergent
+   read-cell is within `K` of `m`'s center, which by the induction
+   hypothesis is therefore within `2Kt + K` of `c₀`; and `d ∈
+   affected(m)` is within a further `K` of `m`'s center. Hence `d` is
+   within `2Kt + K + K = 2K(t+1)` of `c₀`.
+
+Both cases keep `d` within `2K(t+1)` of `c₀`. ∎
+
+**Remark (light-cone analogy).** Theorem 7 is Cellaria's analogue of a
+Lieb-Robinson bound in quantum lattice systems [7]: a finite local
+interaction range implies a finite speed of information propagation,
+regardless of the system's global structure.
+
+**Remark (CF and CA alike).** Theorem 7 does not assume the conflict
+graph is empty. Arbitration changes *which* matches are accepted, never
+*which cells a match can read or write* — every accepted match, whether
+selected by Corollary 3's simultaneous-application (CF) or by greedy
+arbitration (CA), still only touches cells within `K` of its center. The
+propagation bound is therefore a property of the rule set's reach alone,
+not of its conflict class. This is a sharper statement than "conflict-free
+rule sets contain damage better than conflict-aware ones" — the two
+classes differ in arbitration cost (Theorem 4), not in fault locality.
+
+**Empirical validation.** `examples/proof_fault_propagation.rs` runs two
+identical Wireworld-style wire simulations (`K = 1`) side by side; at
+tick 1, one copy has a single cell externally overwritten (the
+corruption event). Comparing the two grids cell-by-cell for 30 ticks,
+the maximum distance from the corruption to any differing cell never
+exceeds `2Kt`, confirming Theorem 7. The observed spread (the activation
+front moves 1 cell/tick in a single direction, since the wire only
+propagates one way) is narrower than the bound, which is expected — the
+bound is a worst case over all possible rule sets with reach `K`, not a
+tight estimate for any particular one.
+
+**Non-result: recovery time.** Theorem 7 bounds how far an error *can*
+spread, not how quickly it is *corrected*. Whether — and how fast — a
+corrupted cell is overwritten with a correct value depends on the
+specific rule set (e.g. whether a cleanup or refresh rule, Axiom 5,
+eventually rewrites every reachable cell) and is not a property of the
+model in general. We do not claim a universal recovery bound; Theorem 7
+is a worst-case containment bound only.
+
+### 6.4. Fault Propagation Under Self-Modification
+
+Theorem 7 assumes a single, fixed reach `K` for the entire span of `t`
+ticks. Since [3, self-modification] establishes that a running program
+can install new rules at runtime, `K` is not actually fixed in general —
+a self-installed rule can have a different reach than anything present
+before it. The natural question: does Theorem 7's bound still hold once
+the rule set is allowed to change mid-run?
+
+**Theorem 8 (Propagation bound under a changing rule set).** Let
+`K_i` denote the reach (Definition 4) of the rule set *active during
+tick `i`* — which may differ from tick to tick if rules are installed or
+removed between them. After `n` ticks following a single-cell corruption
+at `c₀`, every cell whose value may differ from the fault-free execution
+lies within Manhattan distance `2·Σᵢ₌₁ⁿ Kᵢ` of `c₀`.
+
+*Proof.* Identical induction to Theorem 7, with the constant `K` in the
+inductive step replaced by `K_i`, the reach of whichever rule set is
+active at step `i`: the argument only ever needs that matches occurring
+*during tick `i`* cannot read or write further than `K_i` from their
+center — true regardless of what the rule set looked like on any other
+tick. The base case is unchanged (`i = 0`, empty sum, radius `0`). The
+inductive step gives `2·Σⱼ₌₁ⁱ⁻¹Kⱍ + 2K_i = 2·Σⱼ₌₁ⁱ Kⱼ`, matching the claim
+by induction. Theorem 7 is the special case `K_i = K` for all `i`, where
+`Σᵢ₌₁ⁿ Kᵢ = Kn`, recovering `2Kn`. ∎
+
+**Empirical validation.** `examples/proof_fault_propagation_under_selfmod.rs`
+runs the same reference-vs-corrupted comparison as Section 6.3's
+validation, with `K = 1` for the first 15 ticks and `K = 3` from tick 16
+onward (the rule set is changed in both copies, representing a
+self-modification event taking effect — the transmission mechanism
+itself is Section 4.5's, not re-demonstrated here). The results are
+exactly as the two theorems predict: the *naive* bound `2·K_initial·t`
+(computed as if `K` had stayed `1` the whole time) is violated starting
+at tick 33, once the larger reach has had time to compound; the
+*honest* bound `2·Σᵢ Kᵢ` (Theorem 8) is never violated, across all 60
+ticks tested.
+
+**Remark.** This does not weaken Theorem 7 for static rule sets — it
+generalizes it. The practical implication is for anyone monitoring fault
+containment in a self-modifying Cellaria program: the containment radius
+must be computed from the *history* of active rule sets, not a single
+`K` measured once at startup, or the guarantee silently stops holding
+the moment a wider-reaching rule is installed.
+
+---
+
+## 7. Reversibility
+
+### 7.1. Motivation
+
+Every rule set discussed so far *discards* information as a matter of
+course: a `changes` write overwrites a cell's old value with a new one,
+and nothing records what the old value was. For most programs this is
+exactly the intended behavior. But a rule set that never discards
+information — where the tick function is a bijection on configurations —
+admits an *exact* inverse: not "a plausible earlier state," but the one
+and only configuration that could have produced the current one. This
+section gives a sufficient condition for this, built entirely from
+machinery already established (the conflict graph, Theorem 3).
+
+### 7.2. Local Invertibility
+
+**Definition 6 (Locally invertible rule).** A rule `R` is *locally
+invertible* if the map from the values of `R`'s matched pattern cells,
+before a match, to the values of `R`'s written cells (shift destinations
+and `changes` targets), after applying `R`, is injective: no two distinct
+"before" local configurations produce the same "after" local
+configuration.
+
+**Definition 7 (Distinguishable rule set).** A rule set `R` is
+*distinguishable* if, given the post-tick values of any set of written
+cells, one can determine which single rule produced them (e.g. because
+each rule's output values lie in a range disjoint from every other
+rule's), and cells untouched by any match retain values outside every
+rule's output range (so "unchanged" is itself distinguishable from "just
+written").
+
+### 7.3. Theorem 9: Global Reversibility
+
+**Theorem 9 (Reversibility).** Let `R` have an empty conflict graph
+(Theorem 3's hypothesis), with every rule locally invertible (Definition
+6) and `R` distinguishable (Definition 7). Then the tick function
+`config_t → config_{t+1}` is a bijection on reachable configurations, and
+there exists an *inverse rule set* `R⁻¹` — each rule's local map inverted,
+each shift direction reversed — such that applying `R⁻¹` to
+`config_{t+1}` exactly reconstructs `config_t`.
+
+*Proof.* By Theorem 3, an empty conflict graph means every match in a
+tick is accepted, and the affected regions of distinct matches are
+pairwise disjoint. The whole-grid tick transformation therefore
+decomposes into independent local transformations, one per accepted
+match, applied to disjoint regions, plus the identity on every untouched
+cell.
+
+Each local transformation is injective by hypothesis (Definition 6). A
+function assembled from injective pieces on pairwise-disjoint domains,
+plus the identity elsewhere, is injective overall — *provided* one can
+tell, from the output alone, which piece (if any) produced each cell's
+new value; this is exactly Definition 7. Hence the tick function is
+injective on the space of configurations: no two distinct `config_t`
+can produce the same `config_{t+1}`.
+
+Reconstruction of `config_t` from `config_{t+1}` follows directly:
+for a cell whose value lies in some rule `Rᵢ`'s output range, apply
+`Rᵢ`'s local inverse (well-defined by Definition 6) to recover its
+pre-tick value; for a cell whose value lies outside every rule's output
+range, it was untouched, so its current value already equals its
+pre-tick value. `R⁻¹`, built from these per-rule local inverses with
+shift directions reversed, performs exactly this reconstruction as an
+ordinary Cellaria tick. ∎
+
+**Empirical validation.** `examples/proof_reversibility.rs` builds a rule
+set combining two independent sources of information loss in typical
+programs — `changes` (a 6-state cycle, a permutation of
+`{10,...,15}`, hence self-evidently a bijection with a well-defined
+inverse permutation) and `shifts` (a token moving right, inverted by
+moving left) — runs it forward 20 ticks from a hand-built configuration,
+builds `R⁻¹` by literally reversing each rule's arrow, and runs it
+backward 20 ticks from the final configuration. The recovered grid
+matches the original **cell for cell, across the entire grid**, not just
+at the positions that changed.
+
+### 7.4. Corollary: A Physical Lower Bound, Honestly Scoped
+
+**Corollary 6 (Landauer's principle).** Landauer's principle [9] states
+that erasing one bit of information is necessarily accompanied by a
+minimum energy dissipation of `kT ln 2` in *any* physical implementation,
+while a computation that never erases information — a bijection, exactly
+Theorem 9's hypothesis — carries no such lower bound. Bennett [10] showed
+that reversible computation is not merely a curiosity but can, in
+principle, be implemented directly in physical hardware (reversible
+logic gates, e.g. the Fredkin and Toffoli gates).
+
+**Scope.** This is a statement about a hypothetical *physical*
+implementation, not a measurable property of the current Rust simulation
+running on ordinary silicon — the same honest caveat that applied to the
+energy-efficiency question raised and set aside earlier in this project.
+The difference here is that the claim now rests on a well-established
+physical principle applied to a rule set we have *proven* satisfies its
+precondition (Theorem 9), rather than an unsupported analogy between
+"operations per tick" and energy. It identifies *which part* of Cellaria
+— the reversible subclass — would be a meaningful target for reversible
+hardware research, without claiming anything about energy consumption
+today.
+
+---
+
+## 8. Related Work
 
 **Static conflict detection.** In graph transformation systems, conflict
 detection determines whether two rule applications can interfere [2].
@@ -670,9 +1276,23 @@ systems is a classic topic [6]. Our composition theorem adapts this
 idea to Cellaria's spatial rule-based setting: conflict-free rule sets
 can be composed modularly, with guaranteed preservation of behavior.
 
+**Domain decomposition.** Splitting a computation across independent
+spatial regions with a shared halo of ghost cells is standard practice
+in distributed scientific computing [8]. Theorem 6 shows the same
+pattern applies to Cellaria's arbitration step, including when the rule
+set has genuine conflicts — the "halo" here is the set of boundary
+matches requiring shared sequential arbitration, sized by the rule set's
+reach `K` rather than by a fixed physical stencil.
+
+**Bounded propagation speed.** Lieb-Robinson bounds [7] establish that
+local interactions in quantum lattice systems propagate information at a
+finite speed. Theorem 7 is a discrete, combinatorial counterpart for
+Cellaria: a rule set's reach `K` bounds how fast a local perturbation can
+affect distant cells, independent of the arbitration mechanism.
+
 ---
 
-## 7. Open Questions
+## 9. Open Questions
 
 **Hypothesis 1 (CF ≡ CA — expressive equivalence).** For every CA
 program (with a non-empty conflict graph), there exists a CF program
@@ -723,3 +1343,18 @@ the right balance is an open problem.
 
 6. Dijkstra, E. W. (1974). Self-stabilizing systems in spite of
    distributed control. *Communications of the ACM*, 17(11), 643–644.
+
+7. Lieb, E. H., & Robinson, D. W. (1972). The finite group velocity of
+   quantum spin systems. *Communications in Mathematical Physics*,
+   28(3), 251–257.
+
+8. Gropp, W., Lusk, E., & Skjellum, A. (1999). *Using MPI: Portable
+   Parallel Programming with the Message-Passing Interface* (2nd ed.).
+   MIT Press.
+
+9. Landauer, R. (1961). Irreversibility and heat generation in the
+   computing process. *IBM Journal of Research and Development*, 5(3),
+   183–191.
+
+10. Bennett, C. H. (1973). Logical reversibility of computation. *IBM
+    Journal of Research and Development*, 17(6), 525–532.

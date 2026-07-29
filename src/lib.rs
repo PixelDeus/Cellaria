@@ -91,6 +91,7 @@ pub mod config;
 pub mod conflict_analyzer;
 pub mod engine;
 pub mod error;
+mod fast_hash;
 mod grid;
 pub mod render;
 pub mod tm_translator;

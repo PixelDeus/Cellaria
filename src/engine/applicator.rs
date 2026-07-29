@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::conflict_analyzer::{get_rule_data, RuleDataCache};
+use crate::fast_hash::FxHashMap;
 use crate::grid::Grid;
 use crate::storage::GridStorage;
 use crate::types::{
@@ -12,7 +13,12 @@ use crate::types::{
 /// Все изменения читают старые значения из решётки, но пишут в буфер.
 /// После обработки всех match'ей буфер атомарно применяется к решётке,
 /// что даёт клеточно-автоматную семантику (все изменения параллельны).
-type WriteBuffer = HashMap<(u32, u32), Cell>;
+///
+/// `FxHashMap`, а не стандартный `HashMap` (SipHash): чисто внутренний тип
+/// (не часть публичного API), число записей за тик обычно единицы —
+/// SipHash-инициализация и раунды сжатия на таком объёме заметно дороже
+/// самой записи (см. `fast_hash` модуль).
+type WriteBuffer = FxHashMap<(u32, u32), Cell>;
 
 /// Применить набор совпадений к решётке с буферизацией.
 ///
@@ -29,30 +35,30 @@ pub fn apply_matches<S: GridStorage>(
     let mut pending_boundary: Vec<(u32, Cell)> = Vec::new();
     let mut regions: Vec<AffectedRegion> = Vec::new();
     // Общий буфер для всех match'ей
-    let mut write_buffer: WriteBuffer = HashMap::new();
+    let mut write_buffer: WriteBuffer = WriteBuffer::default();
 
     for m in matches {
         // Резолвим по rule_idx, а не поиском по id: несколько правил могут
-        // иметь одинаковый id (недетерминированный выбор), и только rule_idx
-        // однозначно определяет, какое именно правило сработало для этого match'а.
-        let rule = m
-            .rule_id
-            .first()
-            .and_then(|first| rule_index.get(first))
-            .and_then(|rules| rules.get(m.rule_idx))
-            .cloned();
+        // иметь одинаковую голову (недетерминированный выбор), и только
+        // rule_idx однозначно определяет, какое именно правило сработало
+        // для этого match'а.
+        //
+        // Без `.cloned()`: `apply_rule_buffered` использует правило только по
+        // ссылке, а клонирование целого `Rule` (вложенные `Vec` в pattern/
+        // changes/shifts/id) на каждый match каждого тика было чистой тратой.
+        let rule = rule_index
+            .get(&m.head)
+            .and_then(|rules| rules.get(m.rule_idx));
         if let Some(rule) = rule {
-            let rule_data = m
-                .rule_id
-                .first()
-                .and_then(|&head_type| get_rule_data(rule_cache, head_type, m.rule_idx));
-            let (region, outputs, rule_buf) = apply_rule_buffered(grid, &m, &rule, rule_data);
+            let rule_data = get_rule_data(rule_cache, m.head, m.rule_idx);
+            // Пишем сразу в общий буфер, а не в свой локальный внутри
+            // `apply_rule_buffered` с последующим `extend` — arbitration уже
+            // гарантирует отсутствие пересечения записей между matches, так
+            // что объединять нечего, а лишний HashMap на каждый match — это
+            // лишняя аллокация и хэширование на пустом месте.
+            let (region, outputs) = apply_rule_buffered(grid, &m, rule, rule_data, &mut write_buffer);
             regions.push(region);
             pending_boundary.extend(outputs);
-            // Объединяем буфер правила в общий буфер.
-            // Так как arbitration уже гарантирует непротиворечивость,
-            // перезапись одной клетки разными правилами исключена.
-            write_buffer.extend(rule_buf);
         }
     }
 
@@ -93,46 +99,29 @@ fn apply_rule_buffered<S: GridStorage>(
     m: &RuleMatch,
     rule: &Rule,
     rule_data: Option<&crate::conflict_analyzer::RuleData>,
-) -> (AffectedRegion, Vec<(u32, Cell)>, WriteBuffer) {
+    write_buffer: &mut WriteBuffer,
+) -> (AffectedRegion, Vec<(u32, Cell)>) {
     let cx = m.x as i32;
     let cy = m.y as i32;
 
-    // Определяем bounding box affected region по паттерну
-    let (min_px, max_px, min_py, max_py) = if let Some(data) = rule_data {
-        let mut min_px = i32::MAX;
-        let mut max_px = i32::MIN;
-        let mut min_py = i32::MAX;
-        let mut max_py = i32::MIN;
-        for &(dx, dy) in &data.pattern_cells {
-            let px = cx + dx;
-            let py = cy + dy;
-            min_px = min_px.min(px);
-            max_px = max_px.max(px);
-            min_py = min_py.min(py);
-            max_py = max_py.max(py);
-        }
-        (min_px, max_px, min_py, max_py)
-    } else {
-        let mut min_px = i32::MAX;
-        let mut max_px = i32::MIN;
-        let mut min_py = i32::MAX;
-        let mut max_py = i32::MIN;
-        for (dx, dy, _ct) in &rule.pattern {
-            let px = cx + *dx as i32;
-            let py = cy + *dy as i32;
-            min_px = min_px.min(px);
-            max_px = max_px.max(px);
-            min_py = min_py.min(py);
-            max_py = max_py.max(py);
-        }
-        (min_px, max_px, min_py, max_py)
-    };
+    // Bounding box стартует ПУСТЫМ (никаких клеток паттерна!), а не от
+    // паттерна — паттерн только ЧИТАЕТСЯ, а `AffectedRegion` из этой функции
+    // используется ровно одним потребителем: `reset_age_for_regions`,
+    // которая сбрасывает возраст (born_at) КАЖДОЙ клетки внутри bbox. Если
+    // бы bbox включал клетки паттерна, возраст соседа, которого правило
+    // только ПРОЧИТАЛО (не записало), сбрасывался бы в 0 каждый раз, когда
+    // рядом срабатывает чужое правило — ломая `min_age` для этого соседа
+    // навсегда, даже если сам он не менялся (найдено экспериментально: сосед
+    // в паттерне держал age=0 бесконечно). Ниже `apply_shift_buffered`/
+    // `apply_changes_at` сами расширяют bbox по РЕАЛЬНЫМ целям записи —
+    // этого достаточно, читать паттерн заново не нужно.
     let mut affected = AffectedRegion {
-        x_start: min_px.max(0) as u32,
-        x_end: (max_px + 1).max(0) as u32,
-        y_start: min_py.max(0) as u32,
-        y_end: (max_py + 1).max(0) as u32,
+        x_start: u32::MAX,
+        x_end: 0,
+        y_start: u32::MAX,
+        y_end: 0,
         has_changes: false,
+        written_cells: Vec::new(),
     };
 
     // Буфер значений паттерна для динамических ссылок ($0, $1, ...)
@@ -151,7 +140,6 @@ fn apply_rule_buffered<S: GridStorage>(
         pattern_buffer.push(val);
     }
 
-    let mut write_buffer: WriteBuffer = HashMap::new();
     let mut pending_outputs: Vec<(u32, Cell)> = Vec::new();
     let gen = grid.generation();
 
@@ -161,7 +149,7 @@ fn apply_rule_buffered<S: GridStorage>(
         for shift in shift_group {
             apply_shift_buffered(
                 grid, cx, cy, shift, rule, &mut affected,
-                &mut write_buffer, &mut pending_outputs, gen,
+                write_buffer, &mut pending_outputs, gen,
             );
         }
     }
@@ -187,15 +175,15 @@ fn apply_rule_buffered<S: GridStorage>(
         };
 
         if shift_targets.is_empty() {
-            apply_changes_at(rule, &pattern_buffer, cx, cy, (0, 0), grid, gen, &mut write_buffer, &mut affected);
+            apply_changes_at(rule, &pattern_buffer, cx, cy, (0, 0), grid, gen, write_buffer, &mut affected);
         } else {
             for &target in shift_targets {
-                apply_changes_at(rule, &pattern_buffer, cx, cy, target, grid, gen, &mut write_buffer, &mut affected);
+                apply_changes_at(rule, &pattern_buffer, cx, cy, target, grid, gen, write_buffer, &mut affected);
             }
         }
     }
 
-    (affected, pending_outputs, write_buffer)
+    (affected, pending_outputs)
 }
 
 /// Применить `rule.changes` относительно одной цели сдвига (или (0,0), если
@@ -219,10 +207,15 @@ fn apply_changes_at<S: GridStorage>(
         if nx >= 0 && ny >= 0 {
             let ux = nx as u32;
             let uy = ny as u32;
-            let w = grid.width() as i32;
-            let h = grid.height() as i32;
 
-            if nx < w && ny < h {
+            // Сравнение через usize, а не `grid.width() as i32`: у
+            // ChunkStorage (безграничная решётка) width()/height() —
+            // usize::MAX, а `as i32` от usize::MAX даёт -1 (переполнение
+            // при усечении), из-за чего `nx < w` было ложным ВСЕГДА —
+            // changes на ChunkStorage не применялись НИ РАЗУ ни при каких
+            // координатах. Найдено экспериментально: простейшее "1 -> 2"
+            // без паттерна и сдвигов не срабатывало вообще.
+            if (nx as usize) < grid.width() && (ny as usize) < grid.height() {
                 let new_val = match *value {
                     ChangeValue::Literal(v) => CellValue(CellType::new(v)),
                     ChangeValue::Ref(i) => {
@@ -240,6 +233,7 @@ fn apply_changes_at<S: GridStorage>(
                 };
                 // insert перезаписывает — changes побеждают сдвиги
                 write_buffer.insert((ux, uy), cell);
+                affected.written_cells.push((ux, uy));
 
                 affected.x_start = affected.x_start.min(ux);
                 affected.x_end = affected.x_end.max(ux + 1);
@@ -265,8 +259,12 @@ fn apply_shift_buffered<S: GridStorage>(
     pending_outputs: &mut Vec<(u32, Cell)>,
     gen: u64,
 ) {
-    let w = grid.width() as i32;
-    let h = grid.height() as i32;
+    // usize, а не `grid.width() as i32` — см. подробный комментарий в
+    // `apply_changes_at` про то же самое усечение usize::MAX -> -1 на
+    // ChunkStorage, из-за которого сдвиги на безграничной решётке тоже
+    // никогда не применялись (функция всегда возвращалась на строке ниже).
+    let w = grid.width();
+    let h = grid.height();
 
     let (dx, dy) = match shift.direction {
         Direction::Up => (0, -1),
@@ -278,7 +276,7 @@ fn apply_shift_buffered<S: GridStorage>(
 
     let ox = cx;
     let oy = cy;
-    if ox < 0 || ox >= w || oy < 0 || oy >= h {
+    if ox < 0 || oy < 0 || (ox as usize) >= w || (oy as usize) >= h {
         return;
     }
     // Читаем головку из grid (старое значение)
@@ -298,49 +296,80 @@ fn apply_shift_buffered<S: GridStorage>(
 
     // Clear original position (write to buffer, not grid)
     write_buffer.insert((ox as u32, oy as u32), Cell::default());
+    affected.written_cells.push((ox as u32, oy as u32));
 
-    if nx >= 0 && nx < w && ny >= 0 && ny < h {
+    if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
         // Normal shift — move head
         write_buffer.insert((nx as u32, ny as u32), head_cell);
+        affected.written_cells.push((nx as u32, ny as u32));
         affected.x_start = affected.x_start.min(nx as u32);
         affected.x_end = affected.x_end.max(nx as u32 + 1);
         affected.y_start = affected.y_start.min(ny as u32);
         affected.y_end = affected.y_end.max(ny as u32 + 1);
     } else {
-        // Overflow
-        let bx = nx.clamp(0, w - 1) as usize;
-        let by = ny.clamp(0, h - 1) as usize;
+        // Overflow (уходит за границу ЛИБО меньше нуля, ЛИБО (только на
+        // конечных решётках) не меньше ширины/высоты — на ChunkStorage
+        // верхняя граница практически недостижима, реальный overflow там
+        // означает только уход в отрицательные координаты).
+        let bx = if nx < 0 { 0 } else { (nx as usize).min(w.saturating_sub(1)) };
+        let by = if ny < 0 { 0 } else { (ny as usize).min(h.saturating_sub(1)) };
         match rule.overflow {
             OverflowAction::Discard => {
                 // head cell is lost
             }
             OverflowAction::Write(value) => {
-                if let Some(buf) = grid.get_boundary_mut(bx, by) {
-                    let output_cell = if value != 0 {
-                        Cell {
-                            value: CellValue(CellType::new(value)),
-                            born_at: gen,
-                        }
-                    } else {
-                        head_cell
-                    };
-                    buf.enqueue(0, output_cell);
-                    pending_outputs.push((bx as u32, output_cell));
-                } else {
-                    // Fallback-запись в решётку при overflow
-                    let out_val = CellValue(CellType::new(value));
-                    let cell = Cell {
-                        value: out_val,
-                        born_at: gen,
-                    };
-                    write_buffer.insert((bx as u32, by as u32), cell);
-                    affected.x_start = affected.x_start.min(bx as u32);
-                    affected.x_end = affected.x_end.max(bx as u32 + 1);
-                    affected.y_start = affected.y_start.min(by as u32);
-                    affected.y_end = affected.y_end.max(by as u32 + 1);
-                }
+                let output_value = if value != 0 { Some(value) } else { None };
+                apply_overflow_write(grid, bx, by, output_value, head_cell, gen, write_buffer, affected, pending_outputs);
+            }
+            OverflowAction::WriteLiteral(value) => {
+                apply_overflow_write(grid, bx, by, Some(value), head_cell, gen, write_buffer, affected, pending_outputs);
             }
         }
+    }
+}
+
+/// Общая часть `Write`/`WriteLiteral`: `output_value = Some(v)` — записать
+/// буквально `v`; `None` — пронести собственное значение головки
+/// (`head_cell`) как есть. Раньше это различение (литерал против "своего
+/// значения") было закодировано неявно через `value != 0` внутри одного
+/// варианта `Write` — из-за чего буквальный литерал `0` был невыразим:
+/// `Write(0)` всегда означал "пронести своё", никогда "запиши 0". `WriteLiteral`
+/// снимает это ограничение явным вторым вариантом вместо перегрузки нуля.
+#[allow(clippy::too_many_arguments)]
+fn apply_overflow_write<S: GridStorage>(
+    grid: &mut Grid<S>,
+    bx: usize,
+    by: usize,
+    output_value: Option<u8>,
+    head_cell: Cell,
+    gen: u64,
+    write_buffer: &mut WriteBuffer,
+    affected: &mut AffectedRegion,
+    pending_outputs: &mut Vec<(u32, Cell)>,
+) {
+    if let Some(buf) = grid.get_boundary_mut(bx, by) {
+        let output_cell = match output_value {
+            Some(value) => Cell {
+                value: CellValue(CellType::new(value)),
+                born_at: gen,
+            },
+            None => head_cell,
+        };
+        buf.enqueue(0, output_cell);
+        pending_outputs.push((bx as u32, output_cell));
+    } else {
+        // Fallback-запись в решётку при overflow
+        let value = output_value.unwrap_or(head_cell.value.0 .0);
+        let cell = Cell {
+            value: CellValue(CellType::new(value)),
+            born_at: gen,
+        };
+        write_buffer.insert((bx as u32, by as u32), cell);
+        affected.written_cells.push((bx as u32, by as u32));
+        affected.x_start = affected.x_start.min(bx as u32);
+        affected.x_end = affected.x_end.max(bx as u32 + 1);
+        affected.y_start = affected.y_start.min(by as u32);
+        affected.y_end = affected.y_end.max(by as u32 + 1);
     }
 }
 

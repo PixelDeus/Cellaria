@@ -49,8 +49,16 @@ pub struct RuleStore {
     rules: Vec<Rule>,
     /// Флаг «грязный» — изменился ли набор после последнего построения индекса.
     dirty: bool,
-    /// Накопленные буферы по каналам: channel_id → накопленные байты.
-    accum_buffers: HashMap<u32, Vec<u8>>,
+    /// Накопленные буферы канала 0, ПО ОТДЕЛЬНОСТИ на каждый физический
+    /// выходной буфер (координата → накопленные байты) — а не один общий
+    /// буфер на всех сразу. Если бы буфер был один общий, а два независимых
+    /// самомодифицирующихся региона слали бы каждый свою передачу через
+    /// СВОЙ выходной порт одновременно, их байты перемешивались бы в одном
+    /// потоке в порядке итерации `HashMap` (недетерминированном) — оба
+    /// пакета ломались бы, даже если каждый по отдельности был бы устроен
+    /// безупречно. Раздельные буферы на координату делают порты по-настоящему
+    /// независимыми: то, что происходит на одном, никак не портит другой.
+    accum_buffers: HashMap<(usize, usize), Vec<u8>>,
     /// Закешированный индекс (перестраивается только при dirty).
     index: Option<HashMap<CellType, Vec<Rule>>>,
     /// Счётчик для авто-назначения ID новым правилам.
@@ -101,14 +109,13 @@ impl RuleStore {
     /// Вызывается после `run_tick` (когда `flush_output` уже перенёс данные).
     /// Дренирует только канал 0 (rule-канал), не затрагивая другие каналы.
     pub fn drain_rule_channel<S: GridStorage>(&mut self, grid: &mut Grid<S>) -> Vec<CompletedOp> {
-        // Собираем все значения из канала 0 граничных буферов c direction == "output"
-        let mut drained: Vec<u8> = Vec::new();
-        for (_coord, boundary) in grid.iter_boundaries() {
+        // Собираем значения из канала 0 КАЖДОГО output-буфера ОТДЕЛЬНО —
+        // не в один общий поток (см. doc-комментарий `accum_buffers`).
+        let mut per_boundary: Vec<((usize, usize), Vec<u8>)> = Vec::new();
+        for (&coord, boundary) in grid.iter_boundaries() {
             if boundary.direction == "output" {
                 if let Some(queue) = boundary.queues.get(&0) {
-                    for cell in queue {
-                        drained.push(cell.value.0 .0);
-                    }
+                    per_boundary.push((coord, queue.iter().map(|c| c.value.0 .0).collect()));
                 }
             }
         }
@@ -120,31 +127,33 @@ impl RuleStore {
             }
         }
 
-        // Накопляем байты в буфер
-        let buf = self.accum_buffers.entry(0).or_default();
-        if buf.len() >= MAX_BUFFER_SIZE {
-            buf.clear();
-            self.decode_errors += 1;
-        }
-        buf.extend(drained);
-
-        // Извлекаем завершённые пакеты
         let mut completed = Vec::new();
-        while let Some(end) = find_terminator(buf) {
-            let packet: Vec<u8> = buf.drain(..=end).collect();
-            let data = &packet[..packet.len() - 1];
-            match deserialize_packet(data, self.next_id) {
-                Ok(op) => {
-                    if let RuleOp::AddRule(_) = &op {
-                        self.next_id = self.next_id.wrapping_add(1);
+        for (coord, drained) in per_boundary {
+            let buf = self.accum_buffers.entry(coord).or_default();
+            if buf.len() >= MAX_BUFFER_SIZE {
+                buf.clear();
+                self.decode_errors += 1;
+            }
+            buf.extend(drained);
+
+            // Извлекаем завершённые пакеты ИЗ ЭТОГО буфера — не трогая
+            // накопления других портов.
+            while let Some(end) = find_terminator(buf) {
+                let packet: Vec<u8> = buf.drain(..=end).collect();
+                let data = &packet[..packet.len() - 1];
+                match deserialize_packet(data, self.next_id) {
+                    Ok(op) => {
+                        if let RuleOp::AddRule(_) = &op {
+                            self.next_id = self.next_id.wrapping_add(1);
+                        }
+                        completed.push(CompletedOp { op });
                     }
-                    completed.push(CompletedOp { op });
-                }
-                Err(e) => {
-                    eprintln!("RuleStore: invalid packet: {}", e);
-                    self.decode_errors += 1;
-                    buf.clear();
-                    break;
+                    Err(e) => {
+                        eprintln!("RuleStore: invalid packet: {}", e);
+                        self.decode_errors += 1;
+                        buf.clear();
+                        break;
+                    }
                 }
             }
         }
@@ -241,6 +250,19 @@ fn deserialize_packet(data: &[u8], _next_id: u8) -> Result<RuleOp, String> {
             let id_len = data[1] as usize;
             if id_len == 0 {
                 return Err("AddRule: id_len must be > 0".to_string());
+            }
+            // Позиции паттерна — i8 (см. `Rule::pattern` и весь матчер,
+            // работающий со смещениями i8): `i as i8` ниже для i >= 128
+            // молча заворачивается в отрицательное значение, давая
+            // паттерну из >127 клеток мусорные (отрицательные) координаты
+            // вместо ошибки. id_len — байт, теоретически до 255 — граница
+            // протокола шире, чем реально может представить паттерн.
+            if id_len > i8::MAX as usize {
+                return Err(format!(
+                    "AddRule: id_len {} exceeds i8 pattern offset range (max {})",
+                    id_len,
+                    i8::MAX
+                ));
             }
 
             let type_start = 2;

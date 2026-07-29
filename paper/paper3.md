@@ -7,7 +7,7 @@ on local reduction, defined by five axioms. This paper explores the
 **limits of the model**: when does a simulation terminate, how many ticks
 does it take, and what can be expressed within Cellaria's constraints?
 
-We present four contributions:
+We present seven contributions:
 
 1. **Termination via potential functions** — sufficient conditions for
    termination using three classes of potential functions (geometric,
@@ -24,6 +24,35 @@ We present four contributions:
 4. **Expressiveness: Turing machines** — a formal reduction from Turing
    machines to Cellaria, with a proof that one tick corresponds to
    exactly one TM step. A sorting reduction is also presented.
+
+5. **Expressiveness: the converse direction** — Section 4.1 shows every
+   classical cellular automaton embeds into Cellaria. We examine whether
+   the reverse holds. It does not, unconditionally: Cellaria's
+   arbitration tie-break can depend on a match's absolute grid position,
+   which a translation-invariant classical CA transition function cannot
+   see (Lemma 3). Restricted to rule sets where this never happens — a
+   checkable condition we call *tie-break-local* — the converse does
+   hold: any such Cellaria program can be simulated by a classical CA
+   with a bounded neighborhood and finite alphabet (Theorem 6). Combined
+   with Section 4.1, this establishes full equivalence between classical
+   CA and tie-break-local Cellaria, not between CA and Cellaria at large.
+
+6. **Universal self-reflection** — a single, fixed rule set, built with
+   no advance knowledge of which rule it will ever transmit, suffices to
+   compute and install *any* rule expressible in Cellaria's own
+   self-modification protocol (`RuleStore`); a new target rule costs only
+   data placement, never a new rule (Theorem 7). Closing this required
+   one small, additive fix to the engine (`OverflowAction::WriteLiteral`),
+   since the existing protocol had no way to transmit a literal zero byte
+   — needed by, among other things, every same-cell change.
+
+7. **Self-attestation** — the same self-modification channel can carry
+   not just a rule the automaton *decided* to install (Section 4.5), but
+   a value the automaton *computed about an extended region of its own
+   state* (Theorem 8) — a checksum over a data sequence, verifiable
+   against the actual grid by an outside observer, and provably sensitive
+   to a single tampered cell. Explicitly scoped as a demonstration of the
+   mechanism, not a cryptographically meaningful checksum.
 
 ---
 
@@ -641,6 +670,296 @@ Five tests in `src/tm_translator.rs` validate the implementation:
 
 All tests pass.
 
+### 4.4. Cellaria → Cellular Automata (Partial Converse)
+
+Section 4.1 embeds any classical CA into Cellaria. We now ask the
+converse question: can a given Cellaria program be simulated by a
+classical CA? A classical 1D CA (as in Section 4.1) applies a single
+transition function `f`, synchronously, to every position, where `f`
+depends only on the contents of a bounded local window and is invariant
+under translating that window across the grid — no cell has privileged
+status by absolute coordinate. This is the same homogeneity Cellaria
+itself assumes (Axiom 1 [1]; see also [2], Section 5).
+
+#### 4.4.1. Obstruction: Absolute Position in Arbitration
+
+Cellaria's arbitration tie-break [2, Section 2] orders matches by
+`(priority, age, rule_id, x, y, rule_idx)`, descending. The `x, y`
+components compare the **absolute grid coordinates** of the match's
+center. This is where the converse can fail: a classical CA's transition
+function cannot depend on absolute position, but Cellaria's tie-break
+sometimes must.
+
+**Lemma 3 (`x, y`-dependence is a genuine obstruction).** There exists a
+Cellaria rule set and grid configuration for which the arbitration
+outcome cannot be reproduced by any translation-invariant local update
+function.
+
+*Proof (construction).* Let `R` consist of a single rule:
+```
+Rule { id: [5], pattern: [], shifts: [East(4)], priority: 10, min_age: 0 }
+```
+Place two cells of type 5 at positions `x = 0` and `x = 4`, both born at
+generation 0 (equal age). Both cells match `R` (same `rule_id`, same
+`rule_idx` — it is literally the same rule). The match at `x = 0` shifts
+its cell to `x = 4` (writing there, clearing `x = 0`). The match at
+`x = 4` shifts its cell to `x = 8` (writing there, clearing `x = 4`).
+Their affected regions intersect at cell `x = 4`: one match writes there,
+the other clears it as its own origin — a genuine conflict.
+
+`priority`, `age`, and `rule_id` are identical for both matches (same
+rule, same age). The tie-break falls through to `x`: the match with the
+larger `x` value wins by the sort order in [2, Section 2.2]. Both
+matches see an **identical local window** (a lone type-5 cell, empty
+pattern) — a translation-invariant function applied to each would have
+to make the *same* decision for both by definition of translation
+invariance, either accepting both (incorrect — they conflict) or
+rejecting both (differs from Cellaria's actual output, which accepts
+exactly one). No translation-invariant local rule can pick out the
+`x = 4` instance over the `x = 0` instance using only window content,
+since the windows are indistinguishable. ∎
+
+This is not a defect of the construction above — it is a structural
+consequence of `x, y` appearing in the tie-break at all. Whenever two
+matches with identical `(priority, age, rule_id)` conflict, the outcome
+depends on which has the larger absolute coordinate, which is
+information a homogeneous local rule cannot access.
+
+#### 4.4.2. The Tie-Break-Local Subclass
+
+**Definition 6 (Tie-break-local).** A rule set `R` is *tie-break-local*
+if, for every pair of matches that can conflict under some reachable
+grid state (i.e., every edge or self-loop in the conflict graph [2,
+Section 3.4]), `(priority, age, rule_id)` are guaranteed to differ
+whenever both matches actually fire simultaneously. Equivalently,
+arbitration for `R` never needs to compare `x, y` to produce its result.
+
+This is a checkable, syntactic-adjacent condition: it can be verified by
+extending the conflict analyzer of [2] to additionally check, for every
+conflicting pair, whether their priorities differ, or whether their
+`min_age` values guarantee disjoint activation windows (as in [2,
+Section 4.2.2]), or whether they are different rules entirely (distinct
+`rule_id`). Every CF rule set (empty conflict graph, [2, Definition 4])
+is trivially tie-break-local — there is nothing to arbitrate. The
+counterexample of Lemma 3 is, by construction, *not* tie-break-local:
+its one conflicting pair ties on all three fields.
+
+**Theorem 6 (Simulation by classical CA).** Let `R` be a tie-break-local
+Cellaria rule set with reach `K` [2, Definition 4]. There exists a
+classical CA with neighborhood radius `K` (window
+`2K+1` in 1D, or a `(2K+1)×(2K+1)` Moore neighborhood in 2D) and a
+finite alphabet, whose synchronous update reproduces the sequence of
+grid configurations produced by `R`, tick for tick.
+
+*Proof sketch.* Fix a cell `d`. Every rule match that could possibly
+write to `d` has its center within distance `K` of `d` ([2, Section 6.2,
+Definition 4]) — the full window of radius `K` around `d` contains every
+cell any such match could read or write. Define the CA's transition
+function `f` on that window by: (a) enumerate every candidate match
+consistent with the window's contents; (b) among conflicting candidates,
+apply Cellaria's tie-break restricted to `(priority, age, rule_id)` —
+well-defined and window-local by the tie-break-local assumption, since
+`x, y` are never needed; (c) output the resulting value for `d` (or `d`'s
+unchanged value, if no match wins). Age is folded into each cell's state
+as a bounded counter, capped at the largest `min_age` appearing in `R`
+(ages beyond the cap behave identically for every rule in a finite `R`,
+so collapsing them into one bucket preserves the alphabet's finiteness).
+`f` is applied synchronously to every cell, reproducing exactly what
+Cellaria's detect → arbitrate → apply cycle would have produced at `d`,
+for every `d` simultaneously. By induction on ticks, the two systems'
+configuration sequences coincide. ∎
+
+**Corollary 2 (Equivalence, restricted).** Classical 1D (or 2D) cellular
+automata and tie-break-local Cellaria programs are equally expressive:
+Section 4.1 embeds the former into the latter; Theorem 6 embeds the
+latter into the former. Full, unconditional equivalence between
+classical CA and Cellaria at large does not hold, by Lemma 3.
+
+#### 4.4.3. Discussion
+
+The obstruction is specific to arbitration between matches that are
+otherwise indistinguishable by rule-level properties — it does not
+depend on Cellaria's other features (shifts, `min_age`, unbounded grids),
+all of which admit standard local-encoding techniques (Section 4.4.2's
+proof sketch) and do not by themselves break translation invariance.
+Most rule sets encountered in practice are tie-break-local, since
+distinct behaviors are usually given distinct priorities or distinct
+`id`s; Lemma 3's counterexample requires deliberately using the *same*
+rule twice at positions that happen to collide. Whether every non-CF
+rule set can be rewritten into a tie-break-local one without changing
+its input-output behavior — trading the `x, y` dependency for extra
+rules or priorities — is left open; if true, it would extend Corollary 2
+to strictly more of Cellaria's expressiveness, though never to the
+literal counterexample of Lemma 3 itself, which is inherent to any
+tie-break that inspects absolute position.
+
+### 4.5. Universal Self-Reflection
+
+Cellaria's `RuleStore` protocol (encoding an `AddRule` operation as a
+byte packet, decoded from an output boundary's channel) lets a running
+program transmit and install a new rule in itself — closing a loop that
+was part of the project's original design intent but had never been
+connected end-to-end. Early demonstrations of this (in the project's
+`examples/`, not formalized in a paper until now) each built a bespoke
+set of carrier rules tailored to transmit one specific target rule `R`.
+This section shows something stronger: a single, fixed machine, built
+with no knowledge of which `R` will ever be transmitted, suffices to
+transmit *any* rule expressible in the wire protocol — adding a new `R`
+costs only data placement, never a new rule.
+
+**Constraint inherited from the protocol.** The packet terminator is
+always byte `0xFF` (255), and the parser scans for this value
+unconditionally wherever it appears in the accumulated stream — so no
+packet position other than the deliberate final terminator may hold
+value 255. Every data byte (priority, id bytes, shift direction/steps,
+change offsets/values) is therefore restricted to `0..254`, a constraint
+of the existing protocol, not one introduced here.
+
+**Theorem 7 (Universal relay).** There exists a fixed rule set `U`
+(independent of `R`) such that: for any rule `R` whose `AddRule` packet
+uses only data bytes in `0..254`, placing one carrier cell per data byte
+— spaced with margin `≥ 2K` as in Definition 5, since adjacent carriers
+all shifting the same direction at the same speed would otherwise have
+overlapping affected regions and spuriously conflict with each other
+under arbitration, exactly the moving-object limitation already
+identified for the shuttle in `big_world.rs` — followed by the fixed
+terminator, causes `U` to transmit exactly `R`'s packet, and `RuleStore`
+to install exactly `R`, without any change to `U` itself.
+
+*Construction.* `U` consists of 255 rules, one per carrier type
+`1..=255`, all of the form "shift toward the output port; on overflow,
+emit a byte." For types `1..=254`, the emitted byte is the carrier's own
+value (`OverflowAction::Write(0)`, i.e. "carry self") — a direct
+bijection with data bytes `1..254`. The remaining data byte, `0`, cannot
+be produced this way: a cell holding value `0` is the grid's own
+default/empty marker (`Cell::is_default`), so no carrier can legitimately
+*be* `0` while remaining a tracked, moving cell — and `Write`'s existing
+convention (`0` means "carry self") makes a literal `0` output otherwise
+inexpressible through `OverflowAction` at all. Type `255`'s rule instead
+uses `OverflowAction::WriteLiteral(0)` — a variant added in this session
+specifically to close this gap, always emitting its literal argument
+regardless of value, unlike `Write`. Together, all 255 rules cover every
+possible data byte (`0..254`) with a construction that does not depend
+on `R`.
+
+**Remark (the terminator is not data).** Byte 255 is never chosen by
+`R`'s author — it is always the same fixed value at the same fixed
+(final) position, true for every conceivable `R`. It is protocol framing,
+not part of what `R` specifies, so it is appended once, by whoever
+operates `U`, exactly like a modem appending a fixed stop bit — `U`'s 255
+rules need not represent it.
+
+**Remark (self-consuming slots are expected, not a defect).** `R`'s own
+target id may coincide with one of `U`'s 255 carrier types (there is no
+256th type to spare it, since type `0` is structurally unavailable as a
+tracked cell). This is not a flaw: once `R` installs, `rule_index[R.id]`
+is *replaced* by `R`'s actual behavior, exactly as intended — the carrier
+for that type has already completed its relay and left the grid before
+installation occurs (installation only happens once the terminator, the
+*last* transmitted byte, arrives).
+
+**Empirical validation.** `examples/proof_universal_self_reflection.rs`
+builds `U` once, then picks `R` deliberately unlike anything transmitted
+in earlier, bespoke demonstrations: a shift `Up` (the one direction
+encoded as byte `0`) together with a same-cell change (`dx = dy = 0`) —
+striking both places the protocol's zero-byte previously made
+untransmittable. `U` correctly transmits and installs `R`; the installed
+rule matches the intended one exactly (priority, shift, and change all
+verified by direct comparison, not just "a rule appeared").
+
+**Scope.** Theorem 7 covers exactly the expressiveness of the current
+`RuleStore` wire protocol — four fixed shift directions, `Literal`-only
+changes (`ChangeValue::Ref` is explicitly not wire-encodable, per the
+protocol's own implementation), id length bounded by `i8::MAX` — the
+same limits every rule transmitted through this protocol already had.
+It is not a claim about encoding arbitrary future protocol extensions,
+only about the protocol as it exists.
+
+### 4.6. Self-Attestation
+
+Section 4.5's construction transmits a value the automaton *decided* —
+a rule to install. This section shows the same channel can carry a value
+the automaton *computed about an extended region of its own state*: not
+one cell (trivial) and not a value chosen by external code (Section
+4.5's carriers each carry a literal fixed at construction time), but a
+genuine function of a whole sequence of cells, useful for an outside
+observer to check the automaton's report against the actual grid.
+
+#### 4.6.1. Construction
+
+Two tracks, one row apart: row `y = 0` holds a data sequence
+`d_0, ..., d_{L-1}` with each `dᵢ ∈ {1, ..., 6}`, never written by any
+rule in this construction. Row `y = 1` holds a scanning marker, initially
+at `x = 0` with type `ACC_BASE` (accumulator `0`).
+
+For each accumulator value `a ∈ {0, ..., 6}` and each data value
+`d ∈ {1, ..., 6}`, a rule:
+```
+id: [ACC_BASE + a]
+pattern: [(0, 0, ACC_BASE + a), (0, -1, d)]
+shifts: [East(1)]
+changes: [(0, 0, Literal(ACC_BASE + (a + d) mod 7))]
+```
+reads the data cell directly "above" the marker (pattern reads use the
+grid state *before* any writes this tick, so this is a faithful read of
+`dᵢ`), moves the marker one cell right, and updates its accumulator —
+all without writing to row `0`. A second rule per `a`, with no pattern
+requirement on row `0` and `min_age` large enough to exceed any
+legitimate scan step, converts a marker that has run out of data (no
+rule above matched, so it simply stopped — the same "no match, halt"
+behavior used throughout Section 2) into a literal, transmittable value
+`FINAL_BASE + a`, which then behaves exactly like a Section 4.5 carrier:
+shift toward an output boundary, `OverflowAction::Write(0)` (carry own
+value).
+
+#### 4.6.2. Correctness
+
+**Lemma 4 (One data cell per tick).** If the marker is at position `x`
+with accumulator `a` at the start of a tick, and `dₓ` exists, then at the
+end of the tick the marker is at `x + 1` with accumulator `(a + dₓ) mod
+7`, and row `0` is unchanged.
+
+*Proof.* The pattern `(0, -1, d)` matches the unique `d = dₓ` present at
+`(x, -1)` relative to the marker (there is exactly one, since the data
+row holds one value per position); the shift moves the marker to
+`x + 1`; the change, at offset `(0, 0)` relative to the *post-shift*
+position (the convention already established and used by the Turing
+machine translation, Section 4.3.3), overwrites the marker's own new
+cell with the updated accumulator type. Nothing in `changes` targets row
+`0`. ∎
+
+**Theorem 8 (Correctness of the attestation scan).** After processing
+data `d_0, ..., d_{L-1}`, the automaton transmits
+`FINAL_BASE + (Σᵢ dᵢ) mod 7`.
+
+*Proof.* By induction on `i`, using Lemma 4 for the step: after
+processing `i` cells the marker holds accumulator `(Σ_{j<i} dⱼ) mod 7` at
+position `i`, with row `0` still exactly as given. At `i = L`, position
+`L` has no data cell (default value, outside `{1,...,6}`), so no scanning
+rule matches — the marker halts, holding `(Σᵢ dᵢ) mod 7`, exactly as in
+the termination-by-no-match behavior of Section 2. After `min_age` ticks
+of quiet, the finalize rule fires and the value is transmitted as in
+Section 4.5. ∎
+
+**Empirical validation.** `examples/proof_self_attestation.rs` runs this
+construction on `[3, 1, 4, 1, 5, 2]`, transmitting `2`
+(`3+1+4+1+5+2 = 16 ≡ 2 (mod 7)`), then on the same sequence with one
+cell tampered (`d_3`: `1 → 6`), transmitting `0` — a different value,
+demonstrating that the transmitted attestation genuinely depends on the
+full data sequence, not a constant or a single cell.
+
+**Scope — not a cryptographic primitive.** A sum mod 7 is trivially
+collision-prone (e.g. `[1, 6]` and `[2, 5]` both attest `0`) and
+trivially forgeable by anyone who can write to row `0` before the scan.
+This section demonstrates the *mechanism* — computing and transmitting a
+function of extended state through the existing self-modification
+channel — not a cryptographically meaningful checksum. A construction
+with cryptographic properties (collision resistance, forgery resistance)
+would need a much larger accumulator space and a nonlinear mixing step
+per cell, at proportionally more rules (linear in alphabet size times
+accumulator range, the same trade-off already seen in Section 4.5); nothing
+here rules that out, but it is not built.
+
 ---
 
 ## 5. Conclusion
@@ -664,10 +983,23 @@ model:
    - Any 1D cellular automaton (k=3) in `O(N)` ticks.
    - One-pass binary segregation in `O(N)` ticks.
    - Any Turing machine with one tick per TM step.
+   - The converse (Cellaria → classical CA) holds only for the
+     tie-break-local subclass, not unconditionally (Section 4.4) — the
+     one place this paper's expressiveness results have a genuine,
+     proven boundary rather than a further construction.
+   - Any rule expressible in the `RuleStore` self-modification protocol,
+     via a single fixed relay machine independent of which rule is
+     transmitted (Section 4.5).
+   - A checksum over an extended region of its own state, computed and
+     transmitted through the same channel, verifiably sensitive to a
+     single tampered cell (Section 4.6).
 
 All results are validated experimentally. The Cellaria model is at least
-as expressive as cellular automata and Turing machines, with predictable
-termination and complexity characteristics.
+as expressive as cellular automata and Turing machines, matches classical
+CA exactly on the tie-break-local subclass, can transmit and install any
+of its own expressible rules through a single universal mechanism, can
+attest to an extended region of its own state through that same
+mechanism, and has predictable termination and complexity characteristics.
 
 ---
 

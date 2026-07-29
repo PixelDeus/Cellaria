@@ -164,14 +164,18 @@ fn full_affected_cells(
     rule_cache: &RuleDataCache,
     bounds: (usize, usize),
 ) -> Vec<(i32, i32)> {
-    let head = m.rule_id[0];
+    let head = m.head;
     let rd = get_rule_data(rule_cache, head, m.rule_idx).expect("rule_data должна быть в кэше");
     let overflow = rule_index
         .get(&head)
         .and_then(|rules| rules.get(m.rule_idx))
         .expect("rule_idx должен быть валиден")
         .overflow;
-    rd.affected_cells
+    // write_cells, не affected_cells: арбитраж (см. arbitrator.rs) конфликтует
+    // только на реальных записях, не на чтении паттерна — этот резолвер
+    // должен зеркалить ровно то же множество, иначе он проверяет уже не тот
+    // алгоритм, что реально работает в проде.
+    rd.write_cells
         .iter()
         .map(|&(dx, dy)| affected_cell_abs(m.x as i32, m.y as i32, dx, dy, &rd.shift_targets, overflow, bounds))
         .collect()
@@ -221,13 +225,18 @@ fn local_arbitrate(
     let mut candidates: Vec<Candidate> = matches
         .into_iter()
         .map(|m| {
-            let head = m.rule_id[0];
-            let priority = rule_index
-                .get(&head)
-                .and_then(|rules| rules.get(m.rule_idx))
-                .map_or(0, |r| r.priority);
+            let head = m.head;
+            let resolved_rule = rule_index.get(&head).and_then(|rules| rules.get(m.rule_idx));
+            let priority = resolved_rule.map_or(0, |r| r.priority);
             let age = get_cell_age(m.x as usize, m.y as usize);
-            let rule_id_key: Vec<u8> = m.rule_id.iter().map(|ct| ct.0).collect();
+            // `RuleMatch` больше не несёт клон полного id (см. её doc-
+            // комментарий) — тай-брейк арбитража сравнивает полный id, а не
+            // только голову (см. комментарий у `local_arbitrate`), поэтому
+            // восстанавливаем его тем же способом, что и `arbitrator.rs`'s
+            // `resolve_rule_id`, чтобы честно воспроизводить тот же контракт.
+            let rule_id_key: Vec<u8> = resolved_rule
+                .map(|r| r.id.iter().map(|ct| ct.0).collect())
+                .unwrap_or_default();
             let cells: Vec<(i32, i32)> = full_affected_cells(&m, rule_index, rule_cache, bounds)
                 .into_iter()
                 .collect::<HashSet<_>>()
@@ -327,13 +336,18 @@ fn sequential_greedy_reference(
     let mut scored: Vec<Scored> = matches
         .into_iter()
         .map(|m| {
-            let head = m.rule_id[0];
-            let priority = rule_index
-                .get(&head)
-                .and_then(|rules| rules.get(m.rule_idx))
-                .map_or(0, |r| r.priority);
+            let head = m.head;
+            let resolved_rule = rule_index.get(&head).and_then(|rules| rules.get(m.rule_idx));
+            let priority = resolved_rule.map_or(0, |r| r.priority);
             let age = get_cell_age(m.x as usize, m.y as usize);
-            let rule_id_key: Vec<u8> = m.rule_id.iter().map(|ct| ct.0).collect();
+            // `RuleMatch` больше не несёт клон полного id (см. её doc-
+            // комментарий) — тай-брейк арбитража сравнивает полный id, а не
+            // только голову (см. комментарий у `local_arbitrate`), поэтому
+            // восстанавливаем его тем же способом, что и `arbitrator.rs`'s
+            // `resolve_rule_id`, чтобы честно воспроизводить тот же контракт.
+            let rule_id_key: Vec<u8> = resolved_rule
+                .map(|r| r.id.iter().map(|ct| ct.0).collect())
+                .unwrap_or_default();
             let cells = full_affected_cells(&m, rule_index, rule_cache, bounds);
             let key = (priority, age, rule_id_key, m.x, m.y, m.rule_idx);
             Scored { m, key, cells }

@@ -31,6 +31,15 @@ use crate::types::{BoundaryBuffer, Cell};
 /// пересобирало весь Vec из HashSet — O(A) на одно удаление. Поскольку сдвиг
 /// головки всегда очищает исходную позицию, это давало O(A) на каждый сдвиг
 /// вместо O(1).)
+///
+/// `dirty_coords` — координаты, изменённые (через `set_cell`) с момента
+/// последнего `take_dirty()`. Используется `engine::run_tick` для
+/// инкрементального detect_matches: вместо пересканирования ВСЕХ активных
+/// ячеек каждый тик, следующий скан ограничивается окрестностью только
+/// РЕАЛЬНО изменившихся с прошлого тика клеток. `set_cell` — единственная
+/// точка мутации значения ячейки в кодовой базе (см. его doc-комментарий),
+/// поэтому хук здесь ловит абсолютно любое изменение независимо от вызывающего
+/// кода (apply_matches, apply_input, ручная загрузка конфига, тесты).
 #[derive(Clone)]
 pub struct Grid<S: GridStorage> {
     /// Внутреннее хранилище.
@@ -45,6 +54,8 @@ pub struct Grid<S: GridStorage> {
     /// Глобальный счётчик поколений. Инкрементится каждый tick.
     /// Используется для вычисления возраста ячейки: age = generation - cell.born_at.
     generation: u64,
+    /// Координаты, изменённые с момента последнего `take_dirty()`.
+    dirty_coords: HashSet<(usize, usize)>,
 }
 
 impl<S: GridStorage + Default> Default for Grid<S> {
@@ -55,6 +66,7 @@ impl<S: GridStorage + Default> Default for Grid<S> {
             active_coords_vec: Vec::new(),
             active_index: HashMap::new(),
             generation: 0,
+            dirty_coords: HashSet::new(),
         }
     }
 }
@@ -75,6 +87,11 @@ impl<S: GridStorage> Grid<S> {
             active_coords_vec,
             active_index,
             generation: 0,
+            // Начальные активные ячейки ещё ни разу не сканировались —
+            // считаем их "грязными", чтобы первый detect_matches увидел их
+            // (эквивалентно полному скану на первом тике). Move, а не clone:
+            // active_coords больше не нужен после построения Vec/индекса выше.
+            dirty_coords: active_coords,
         }
     }
 
@@ -109,6 +126,32 @@ impl<S: GridStorage> Grid<S> {
     /// Используется в detect_matches для быстрого линейного прохода.
     pub fn active_coords(&self) -> &Vec<(usize, usize)> {
         &self.active_coords_vec
+    }
+
+    /// Извлечь и очистить множество "грязных" (изменённых с прошлого вызова)
+    /// координат. Используется `engine::run_tick` для построения
+    /// инкрементального кандидатного множества для detect_matches.
+    pub(crate) fn take_dirty(&mut self) -> HashSet<(usize, usize)> {
+        std::mem::take(&mut self.dirty_coords)
+    }
+
+    /// Посмотреть на текущее "грязное" множество, не извлекая (не очищая)
+    /// его — в отличие от `take_dirty`, безопасно вызывать многократно.
+    pub(crate) fn peek_dirty(&self) -> HashSet<(usize, usize)> {
+        self.dirty_coords.clone()
+    }
+
+    /// Явно пометить координату "грязной" без изменения значения ячейки.
+    ///
+    /// Нужен для случая, который `set_cell`-хук не ловит: правило может
+    /// совпасть и быть принятым арбитражем, но ничего не записать (пустые
+    /// `shifts`/`changes` — вырожденный, но валидный случай). Такое правило
+    /// продолжает совпадать на той же клетке бесконечно (её значение не
+    /// менялось и не изменится), и это должно быть видно detect_matches на
+    /// каждом следующем тике — иначе после первого тика клетка выпадает из
+    /// dirty-множества навсегда, и инкрементальный скан её больше не найдёт.
+    pub(crate) fn mark_dirty(&mut self, x: usize, y: usize) {
+        self.dirty_coords.insert((x, y));
     }
 
     /// Перестроить `active_index` из `active_coords_vec`.
@@ -169,27 +212,33 @@ impl<S: GridStorage> Grid<S> {
     /// Граничная ячейка (с привязанным BoundaryBuffer) никогда не считается дефолтной,
     /// даже если её значение 0 и возраст 0.
     pub fn set_cell(&mut self, x: usize, y: usize, cell: Cell) {
+        // Решение "вставить/убрать из active_coords" принимается по
+        // ФАКТИЧЕСКОМУ членству в кэше (`was_in_active`), а не по
+        // пересчитанному `is_default()` предыдущей ячейки — раньше здесь
+        // читался `is_default()` СОХРАНЁННОЙ ячейки, что ломалось в связке с
+        // `reset_age_for_regions`: та обновляет `born_at` в обход `set_cell`
+        // (см. её doc-комментарий), и клетка, честно очищенная ДО этого
+        // (born_at сброшен в 0, active_remove сработал корректно), после
+        // такого обновления возраста хранит born_at≠0 при value=0 — то есть
+        // `is_default()` для НЕЁ САМОЙ теперь лжёт "не дефолтная", хотя
+        // active_coords её уже не содержит. Следующий set_cell на эту же
+        // координату читал это лживое "was_default=false" и решал, что
+        // clone insert не нужен — координата навсегда выпадала из
+        // active_coords, даже когда в неё реально писали новое значение.
+        // `active_contains` не подвержен этой порче: он не пересчитывается
+        // из содержимого ячейки, а хранит фактическое состояние кэша.
         let was_in_active = self.active_contains(&(x, y));
-        let was_default = self.storage.get(x, y).map_or(true, |c| c.is_default());
         let is_default = cell.is_default() && !self.boundaries.contains_key(&(x, y));
         self.storage.set(x, y, cell);
-        match (was_default, is_default) {
-            (true, false) => {
-                // Вставка (active_insert сама проверяет, нет ли координаты уже
-                // в кэше — например, она могла попасть туда через set_boundary,
-                // пока хранимое значение оставалось дефолтным).
+        self.dirty_coords.insert((x, y));
+        match (was_in_active, is_default) {
+            (false, false) => {
                 self.active_insert((x, y));
             }
-            (false, true) => {
+            (true, true) => {
                 self.active_remove((x, y));
             }
-            _ => {
-                // Если ячейка была в active_coords из-за границы (не из-за storage),
-                // а теперь граница удалена и значение дефолтное — убираем из кэша.
-                if is_default && was_in_active {
-                    self.active_remove((x, y));
-                }
-            }
+            _ => {}
         }
     }
 

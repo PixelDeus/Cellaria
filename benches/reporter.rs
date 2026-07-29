@@ -1,12 +1,13 @@
 //! # Benchmark Reporter
 //!
 //! Структурированный вывод результатов бенчмарков:
-//! - Единый формат таблиц (с ANSI-цветами)
+//! - Единый формат таблиц (с ANSI-цветами, только если stdout — реальный терминал)
 //! - JSON-сериализация для машинной обработки
 //! - Сравнение с эталоном (baseline check)
 //! - Компактный режим для быстрой верификации
 
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::time::Instant;
 
 // ============================================================================
@@ -49,7 +50,14 @@ impl BenchStatus {
         }
     }
 
-    pub fn colored_label(&self) -> String {
+    /// Раскрашенный лейбл, если `use_color`; иначе то же, что `label()`.
+    /// Раньше ANSI-коды печатались всегда, независимо от того, поддерживает
+    /// ли получатель их вообще (не-TTY, редирект в файл, старый Windows-хост)
+    /// — на выходе виднелись буквальные `[1m`/`[0m` вместо цвета.
+    pub fn colored_label(&self, use_color: bool) -> String {
+        if !use_color {
+            return self.label().to_string();
+        }
         match self {
             BenchStatus::Pass => format!("{}{}PASS{}", ansi::GREEN, ansi::BOLD, ansi::RESET),
             BenchStatus::Peak => format!("{}{}PEAK{}", ansi::CYAN, ansi::BOLD, ansi::RESET),
@@ -245,6 +253,7 @@ pub struct Reporter {
     quiet: bool,
     baseline: Option<HashMap<String, f64>>,
     output_path: Option<String>,
+    use_color: bool,
 }
 
 impl Reporter {
@@ -257,7 +266,25 @@ impl Reporter {
             quiet: false,
             baseline: None,
             output_path: None,
+            // Раньше ANSI-коды печатались безусловно. Если stdout не
+            // терминал (перенаправлен в файл, через `| tail`, захвачен
+            // не-интерактивным раннером) — получатель не интерпретирует
+            // escape-последовательности, и вместо цвета видны буквальные
+            // `[1m`, `[32m[1m` и т.п. Проверяем `is_terminal()` и уважаем
+            // общепринятую переменную `NO_COLOR` (https://no-color.org).
+            use_color: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
         }
+    }
+
+    /// Явно включить/выключить цветной вывод (флаги `--color`/`--no-color`
+    /// переопределяют автоопределение по TTY).
+    pub fn set_color(&mut self, val: bool) {
+        self.use_color = val;
+    }
+
+    /// ANSI-код, если цвет включён, иначе пустая строка.
+    fn c<'a>(&self, code: &'a str) -> &'a str {
+        if self.use_color { code } else { "" }
     }
 
     /// Включить JSON-вывод
@@ -338,9 +365,9 @@ impl Reporter {
         if self.json_output || self.quiet || self.compact {
             return;
         }
-        println!("\n{}{}═══════════════════════════════════════{}", ansi::BOLD, ansi::CYAN, ansi::RESET);
+        println!("\n{}{}═══════════════════════════════════════{}", self.c(ansi::BOLD), self.c(ansi::CYAN), self.c(ansi::RESET));
         println!("  {}", title);
-        println!("═══════════════════════════════════════{}", ansi::RESET);
+        println!("═══════════════════════════════════════{}", self.c(ansi::RESET));
     }
 
     /// Напечатать подзаголовок
@@ -348,7 +375,7 @@ impl Reporter {
         if self.json_output || self.quiet || self.compact {
             return;
         }
-        println!("\n{}{}─── {} ───{}", ansi::BOLD, ansi::CYAN, title, ansi::RESET);
+        println!("\n{}{}─── {} ───{}", self.c(ansi::BOLD), self.c(ansi::CYAN), title, self.c(ansi::RESET));
     }
 
     /// Напечатать таблицу из результатов
@@ -364,15 +391,15 @@ impl Reporter {
         if self.compact {
             // Компактный вывод: одна строка на результат
             for r in results {
-                let status_str = r.status.colored_label();
+                let status_str = r.status.colored_label(self.use_color);
                 let extra_str = if let Some((name, val)) = &r.extra {
-                    format!(" {}{}{}: {}", ansi::DIM, name, ansi::RESET, val)
+                    format!(" {}{}{}: {}", self.c(ansi::DIM), name, self.c(ansi::RESET), val)
                 } else {
                     String::new()
                 };
                 println!(
                     "  {}{:<20} {}{:<10} {}{} {} {}",
-                    ansi::BOLD, r.group, ansi::DIM, r.param, ansi::RESET,
+                    self.c(ansi::BOLD), r.group, self.c(ansi::DIM), r.param, self.c(ansi::RESET),
                     format!("{}{}", r.value, r.unit),
                     extra_str,
                     status_str,
@@ -461,51 +488,51 @@ impl Reporter {
 
         // Компактная сводка
         if self.quiet || self.compact {
-            print!("{}{}═══ СВОДКА ═══{}", ansi::BOLD, ansi::CYAN, ansi::RESET);
+            print!("{}{}═══ СВОДКА ═══{}", self.c(ansi::BOLD), self.c(ansi::CYAN), self.c(ansi::RESET));
             print!("  Всего: {}", total);
-            print!("  {}{}{}{}", ansi::GREEN, "✓", passed, ansi::RESET);
+            print!("  {}{}{}{}", self.c(ansi::GREEN), "✓", passed, self.c(ansi::RESET));
             if peaks > 0 {
-                print!("  {}{}★{} {}", ansi::CYAN, ansi::BOLD, ansi::RESET, peaks);
+                print!("  {}{}★{} {}", self.c(ansi::CYAN), self.c(ansi::BOLD), self.c(ansi::RESET), peaks);
             }
             if !warnings.is_empty() {
-                print!("  {}{}⚠{} {}", ansi::YELLOW, ansi::BOLD, ansi::RESET, warnings.len());
+                print!("  {}{}⚠{} {}", self.c(ansi::YELLOW), self.c(ansi::BOLD), self.c(ansi::RESET), warnings.len());
             }
             let elapsed = self.start_time.elapsed();
-            println!("  {}{}.{:03}s{}", ansi::DIM, elapsed.as_secs(), elapsed.subsec_millis(), ansi::RESET);
+            println!("  {}{}.{:03}s{}", self.c(ansi::DIM), elapsed.as_secs(), elapsed.subsec_millis(), self.c(ansi::RESET));
             if let Some((path, result)) = &save_result {
                 match result {
-                    Ok(()) => println!("  {}Сохранено в {}{}", ansi::DIM, path, ansi::RESET),
+                    Ok(()) => println!("  {}Сохранено в {}{}", self.c(ansi::DIM), path, self.c(ansi::RESET)),
                     Err(e) => eprintln!("  Ошибка сохранения JSON в {}: {}", path, e),
                 }
             }
             return;
         }
 
-        println!("\n{}═══════════════════════════════════════{}", ansi::BOLD, ansi::RESET);
-        println!("  {}{}СВОДКА{}", ansi::BOLD, ansi::CYAN, ansi::RESET);
+        println!("\n{}═══════════════════════════════════════{}", self.c(ansi::BOLD), self.c(ansi::RESET));
+        println!("  {}{}СВОДКА{}", self.c(ansi::BOLD), self.c(ansi::CYAN), self.c(ansi::RESET));
         println!("═══════════════════════════════════════");
         println!("  Всего тестов:    {}", total);
-        println!("  {}{}Пройдено:        {}{}", ansi::GREEN, ansi::BOLD, passed, ansi::RESET);
-        println!("  {}{}Пиковых:         {}{}", ansi::CYAN, ansi::BOLD, peaks, ansi::RESET);
+        println!("  {}{}Пройдено:        {}{}", self.c(ansi::GREEN), self.c(ansi::BOLD), passed, self.c(ansi::RESET));
+        println!("  {}{}Пиковых:         {}{}", self.c(ansi::CYAN), self.c(ansi::BOLD), peaks, self.c(ansi::RESET));
         if !warnings.is_empty() {
-            println!("  {}{}Предупреждений:  {}{}", ansi::YELLOW, ansi::BOLD, warnings.len(), ansi::RESET);
+            println!("  {}{}Предупреждений:  {}{}", self.c(ansi::YELLOW), self.c(ansi::BOLD), warnings.len(), self.c(ansi::RESET));
             for w in &warnings {
                 if let BenchStatus::Warning(msg) = &w.status {
-                    println!("    {}{}⚠{} {}: {}", ansi::YELLOW, ansi::BOLD, ansi::RESET, w.group, msg);
+                    println!("    {}{}⚠{} {}: {}", self.c(ansi::YELLOW), self.c(ansi::BOLD), self.c(ansi::RESET), w.group, msg);
                 }
             }
         }
         let elapsed = self.start_time.elapsed();
-        println!("  {}{}Время выполнения: {}.{:03}s{}", ansi::DIM, ansi::BOLD, elapsed.as_secs(), elapsed.subsec_millis(), ansi::RESET);
+        println!("  {}{}Время выполнения: {}.{:03}s{}", self.c(ansi::DIM), self.c(ansi::BOLD), elapsed.as_secs(), elapsed.subsec_millis(), self.c(ansi::RESET));
 
         if let Some((path, result)) = &save_result {
             match result {
-                Ok(()) => println!("  {}{}Результаты сохранены в {}{}", ansi::GREEN, ansi::BOLD, path, ansi::RESET),
+                Ok(()) => println!("  {}{}Результаты сохранены в {}{}", self.c(ansi::GREEN), self.c(ansi::BOLD), path, self.c(ansi::RESET)),
                 Err(e) => eprintln!("  Ошибка сохранения JSON в {}: {}", path, e),
             }
         }
 
-        println!("═══════════════════════════════════════{}", ansi::RESET);
+        println!("═══════════════════════════════════════{}", self.c(ansi::RESET));
     }
 
     /// Сериализация в JSON

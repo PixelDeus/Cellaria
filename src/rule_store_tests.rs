@@ -169,6 +169,56 @@ fn test_drain_rule_channel_basic() {
 }
 
 #[test]
+fn test_drain_rule_channel_keeps_independent_boundaries_separate() {
+    // Two independent output ports transmitting bytes gradually, with their
+    // transmissions overlapping in time (port A's 2nd byte and port B's 1st
+    // byte arrive in the same `drain_rule_channel` call). A single shared
+    // accumulator (keyed only by channel) would interleave the two byte
+    // streams and corrupt both packets — accumulators must be kept separate
+    // per physical boundary.
+    let mut grid = make_grid_from_vec(10, 1);
+    let mut out_a = BoundaryBuffer::new();
+    out_a.direction = "output".to_string();
+    grid.set_boundary(0, 0, out_a);
+    let mut out_b = BoundaryBuffer::new();
+    out_b.direction = "output".to_string();
+    grid.set_boundary(5, 0, out_b);
+
+    let mut store = RuleStore::new();
+    // Packet A: [priority=10, id_len=1, id=50, terminator]
+    let packet_a = [10u8, 1, 50, 255];
+    // Packet B: [priority=20, id_len=1, id=60, terminator]
+    let packet_b = [20u8, 1, 60, 255];
+
+    let mut all_ops = Vec::new();
+    for i in 0..packet_a.len() + 1 {
+        if i < packet_a.len() {
+            grid.get_boundary_mut(0, 0).unwrap().enqueue(
+                0,
+                Cell { value: CellValue(CellType(packet_a[i])), born_at: 0 },
+            );
+        }
+        if i >= 1 && i - 1 < packet_b.len() {
+            grid.get_boundary_mut(5, 0).unwrap().enqueue(
+                0,
+                Cell { value: CellValue(CellType(packet_b[i - 1])), born_at: 0 },
+            );
+        }
+        all_ops.extend(store.drain_rule_channel(&mut grid));
+    }
+
+    assert_eq!(store.error_stats(), 0, "Neither stream should have been corrupted");
+    assert!(
+        all_ops.iter().any(|o| matches!(&o.op, RuleOp::AddRule(r) if r.id == vec![CellType(50)] && r.priority == 10)),
+        "Packet A must decode correctly despite overlapping with B"
+    );
+    assert!(
+        all_ops.iter().any(|o| matches!(&o.op, RuleOp::AddRule(r) if r.id == vec![CellType(60)] && r.priority == 20)),
+        "Packet B must decode correctly despite overlapping with A"
+    );
+}
+
+#[test]
 fn test_decode_errors_increments_on_bad_packet() {
     let mut grid = make_grid_from_vec(1, 1);
     let mut bb = BoundaryBuffer::new();

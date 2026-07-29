@@ -13,8 +13,29 @@
 // области влияния (affected region) правила.
 // ============================================================================
 
-use crate::types::{Direction, Rule};
+use crate::types::{CellType, Direction, Rule};
 use std::collections::HashMap;
+
+/// Эффективный паттерн правила: явный `rule.pattern`, либо (если он пуст —
+/// правило описано только через `id`, обычное сокращение для сдвиговых
+/// правил без явного паттерна) паттерн, построенный из `id` как
+/// `(0,0,id[0]), (1,0,id[1]), ...` — РОВНО та же свёртка, что уже применяет
+/// матчер (`matcher::build_group_data`'s `effective_patterns`) при реальном
+/// сопоставлении. До этой функции здесь такого fallback не было: правило с
+/// пустым `pattern` считалось анализатором не читающим вообще ничего (и,
+/// значит, несовместимым по типу — не проверяемым в `can_match_simultaneously`
+/// никогда), хотя матчер на самом деле требует конкретный тип в (0,0) (и
+/// далее по `id`). Из-за этого рассинхрона анализатор терял единственную
+/// причину признать два правила НЕ конфликтующими (несовпадение типов на
+/// пересекающейся клетке) именно для самых обычных id-only правил (сдвиг без
+/// паттерна) — и завышал число ложных конфликтов ровно для них.
+fn effective_pattern(rule: &Rule) -> Vec<(i32, i32, CellType)> {
+    if !rule.pattern.is_empty() {
+        rule.pattern.iter().map(|&(dx, dy, ct)| (dx as i32, dy as i32, ct)).collect()
+    } else {
+        rule.id.iter().enumerate().map(|(i, &ct)| (i as i32, 0i32, ct)).collect()
+    }
+}
 
 /// Граф потенциальных конфликтов между правилами.
 #[derive(Debug, Clone)]
@@ -65,12 +86,35 @@ impl ConflictGraph {
         // Предварительно вычисляем affected cells и bounding box'ы для каждого правила
         let rule_data: Vec<RuleData> = rules.iter().map(compute_rule_data).collect();
 
+        // Правила со сдвигом и OverflowAction::Write: реальная точка записи при
+        // выходе за границу клэмпится на край РЕШЁТКИ (см. `apply_shift_buffered`),
+        // а этот анализатор работает в чисто относительных координатах и понятия
+        // не имеет о размере решётки. Значит, для такого правила он не может ни
+        // доказать, ни опровергнуть, что клэмпнутая позиция двух его срабатываний
+        // (или срабатывания этого правила и другого, тоже пишущего) совпадёт на
+        // каком-то реальном размере решётки — а раз не может доказать безопасность,
+        // обязан консервативно считать конфликт возможным (иначе получится
+        // ложноотрицательный CF-вердикт, что нарушает теорему "CF ⇒ арбитраж не
+        // нужен": `prop_conflict_free_rules_accept_everything` ловит именно это
+        // при совпадении shift-цели с overflow ровно на границе решётки).
+        let has_overflow_write_shift = |r: &Rule| {
+            !r.shifts.is_empty()
+                && matches!(
+                    r.overflow,
+                    crate::types::OverflowAction::Write(_) | crate::types::OverflowAction::WriteLiteral(_)
+                )
+        };
+
         for i in 0..rule_count {
-            if rule_self_conflicts(&rules[i], &rule_data[i]) {
+            let force_i = has_overflow_write_shift(&rules[i]);
+            if force_i || rule_self_conflicts(&rules[i], &rule_data[i]) {
                 edges.push((i, i));
             }
             for j in (i + 1)..rule_count {
-                if rules_conflict(&rules[i], &rules[j], &rule_data[i], &rule_data[j]) {
+                let forced = (force_i || has_overflow_write_shift(&rules[j]))
+                    && !rule_data[i].write_cells.is_empty()
+                    && !rule_data[j].write_cells.is_empty();
+                if forced || rules_conflict(&rules[i], &rules[j], &rule_data[i], &rule_data[j]) {
                     edges.push((i, j));
                 }
             }
@@ -204,15 +248,24 @@ pub struct RuleData {
     /// `total_shift`, из-за чего при 2+ сдвигах `changes` попадали в
     /// точку, не совпадающую ни с одной реальной целью записи.
     pub shift_targets: Vec<(i32, i32)>,
+    /// Ячейки, в которые правило реально ПИШЕТ (только запись, без чтения
+    /// паттерна) — см. `compute_write_cells`. Используются для проверки
+    /// конфликтов вместо `affected_cells`: две clетки могут одновременно
+    /// ЧИТАТЬ одну и ту же клетку без конфликта (детекция всегда работает
+    /// по состоянию решётки ДО тика, запись идёт в отдельный буфер и
+    /// применяется атомарно после арбитража — см. `apply_matches`), конфликт
+    /// возможен только когда ДВЕ записи целятся в одну клетку.
+    pub write_cells: Vec<(i32, i32)>,
 }
 
 /// Вычислить все данные для правила.
 pub fn compute_rule_data(rule: &Rule) -> RuleData {
     let affected_cells = compute_affected_cells(rule);
     let bbox = compute_bbox(&affected_cells);
-    let pattern_cells: Vec<(i32, i32)> = rule.pattern.iter().map(|(dx, dy, _)| (*dx as i32, *dy as i32)).collect();
+    let pattern_cells: Vec<(i32, i32)> = effective_pattern(rule).iter().map(|&(dx, dy, _)| (dx, dy)).collect();
     let shift_targets = compute_shift_targets(rule);
     let total_shift = shift_targets.iter().fold((0, 0), |(ax, ay), &(dx, dy)| (ax + dx, ay + dy));
+    let write_cells = compute_write_cells(rule, &shift_targets);
 
     RuleData {
         affected_cells,
@@ -220,7 +273,37 @@ pub fn compute_rule_data(rule: &Rule) -> RuleData {
         pattern_cells,
         total_shift,
         shift_targets,
+        write_cells,
     }
+}
+
+/// Вычислить ячейки, в которые правило реально пишет — зеркалит ровно то,
+/// что `apply_rule_buffered`/`apply_shift_buffered` кладут в write_buffer:
+/// без сдвигов — только цели `changes` относительно (0,0); со сдвигами —
+/// очищаемая исходная позиция (0,0) один раз плюс, для КАЖДОЙ цели сдвига,
+/// сама цель и цели `changes` относительно неё (репликация, не цепочка —
+/// см. `RuleData::shift_targets`). Паттерн (чтение) сюда намеренно не
+/// входит — см. doc-комментарий `RuleData::write_cells`.
+fn compute_write_cells(rule: &Rule, shift_targets: &[(i32, i32)]) -> Vec<(i32, i32)> {
+    let mut cells = Vec::new();
+
+    if shift_targets.is_empty() {
+        for &(dx, dy, _value) in &rule.changes {
+            cells.push((dx, dy));
+        }
+    } else {
+        cells.push((0, 0)); // очищается apply_shift_buffered при каждом сдвиге
+        for &(sdx, sdy) in shift_targets {
+            cells.push((sdx, sdy));
+            for &(dx, dy, _value) in &rule.changes {
+                cells.push((sdx + dx, sdy + dy));
+            }
+        }
+    }
+
+    cells.sort();
+    cells.dedup();
+    cells
 }
 
 /// Вычислить affected cells для правила относительно позиции совпадения (0,0).
@@ -235,9 +318,10 @@ pub fn compute_rule_data(rule: &Rule) -> RuleData {
 pub fn compute_affected_cells(rule: &Rule) -> Vec<(i32, i32)> {
     let mut cells = Vec::new();
 
-    // 1. Ячейки паттерна — читаются
-    for (dx, dy, _) in &rule.pattern {
-        cells.push((*dx as i32, *dy as i32));
+    // 1. Ячейки паттерна — читаются (эффективный паттерн, с id-fallback —
+    // см. `effective_pattern`).
+    for (dx, dy, _) in effective_pattern(rule) {
+        cells.push((dx, dy));
     }
 
     // 2. Начальная позиция головки (0,0) — очищается
@@ -445,14 +529,17 @@ fn can_match_simultaneously(
     true
 }
 
-/// Получить тип ячейки из паттерна правила по координатам.
+/// Получить тип ячейки из паттерна правила по координатам. Fallback ниже
+/// формулой идентичен `effective_pattern` — согласован с тем, что реально
+/// лежит в `RuleData::pattern_cells` (которые эта функция и опрашивает из
+/// `can_match_simultaneously`), так что здесь всегда находится валидный тип.
 fn get_pattern_type(rule: &Rule, x: i32, y: i32) -> u8 {
     for (dx, dy, ct) in &rule.pattern {
         if *dx as i32 == x && *dy as i32 == y {
             return ct.0;
         }
     }
-    // Если не найдено — fallback на старый id (для обратной совместимости)
+    // Если не найдено — fallback на id (правило описано без явного паттерна)
     if y == 0 {
         let idx = x as usize;
         if idx < rule.id.len() {
@@ -462,14 +549,27 @@ fn get_pattern_type(rule: &Rule, x: i32, y: i32) -> u8 {
     0
 }
 
-/// Проверить, пересекаются ли affected regions двух правил при данном смещении.
+/// Проверить, пересекаются ли РЕАЛЬНЫЕ ЗАПИСИ (write_cells) двух правил при
+/// данном смещении. `bbox` (посчитанный по affected_cells, т.е. включая
+/// чтение) используется только как дешёвый консервативный предфильтр — он
+/// шире реального множества записей, так что не может пропустить настоящее
+/// пересечение записей, но может пропускать дальше пары без него (не беда,
+/// точная проверка ниже по write_cells отбросит их).
+///
+/// Только запись-в-запись — настоящий конфликт: detect_matches всегда
+/// читает состояние решётки ДО тика (см. `apply_matches`: запись идёт в
+/// отдельный буфер и применяется атомарно после арбитража), поэтому
+/// пересечение ЧТЕНИЙ (или чтения одного правила с записью другого) не
+/// может вызвать гонку — оба видят одно и то же старое состояние
+/// независимо от того, что решит арбитраж.
 fn affected_regions_overlap(
     data_i: &RuleData,
     data_j: &RuleData,
     dx: i32,
     dy: i32,
 ) -> bool {
-    // Если bounding box'ы не пересекаются — affected regions не пересекаются
+    // Если bounding box'ы (по affected_cells, надмножество write_cells) не
+    // пересекаются — точно не пересекаются и write_cells.
     let (bb_min_x_i, bb_max_x_i, bb_min_y_i, bb_max_y_i) = data_i.bbox;
     let (bb_min_x_j, bb_max_x_j, bb_min_y_j, bb_max_y_j) = data_j.bbox;
 
@@ -485,9 +585,9 @@ fn affected_regions_overlap(
         return false;
     }
 
-    // Проверяем точное пересечение ячеек (для избежания ложных срабатываний)
-    for &(x_i, y_i) in &data_i.affected_cells {
-        for &(x_j, y_j) in &data_j.affected_cells {
+    // Точное пересечение ЗАПИСЕЙ (не всех affected cells).
+    for &(x_i, y_i) in &data_i.write_cells {
+        for &(x_j, y_j) in &data_j.write_cells {
             if x_i == x_j + dx && y_i == y_j + dy {
                 return true;
             }

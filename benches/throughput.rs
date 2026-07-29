@@ -104,6 +104,13 @@ fn setup_conflict(m: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) 
     (grid, helpers::make_rule_index(rules))
 }
 
+/// Раньше здесь было одно правило `[1] → 2` без обратного `[2] → 1` —
+/// после первого тика ячейка становилась типом 2, для которого правил нет,
+/// и все последующие тики в окне были пустыми. `single_cell_max_tps` мерил
+/// не устойчивый throughput, а то, сколько тиков впустую крутится ПОСЛЕ
+/// единственного реального срабатывания — отсюда абсурдные ~1 секунда на
+/// "тик" (весь бюджет окна на 1 принятое совпадение). Двухтактный
+/// осциллятор 1⇄2 держит правило активным всё окно измерения.
 fn setup_single_cell() -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
     let mut grid = helpers::make_grid(1, 1);
     grid.set_cell(0, 0, Cell {
@@ -111,7 +118,7 @@ fn setup_single_cell() -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
         born_at: 0,
     });
 
-    let rule = Rule {
+    let rule_1_to_2 = Rule {
         id: vec![CellType(1)],
         pattern: vec![(0i8, 0i8, CellType(1))],
         shifts: vec![],
@@ -121,7 +128,17 @@ fn setup_single_cell() -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
         min_age: 0,
         overflow: Default::default(),
     };
-    (grid, helpers::make_rule_index(vec![rule]))
+    let rule_2_to_1 = Rule {
+        id: vec![CellType(2)],
+        pattern: vec![(0i8, 0i8, CellType(2))],
+        shifts: vec![],
+        changes: vec![(0, 0, ChangeValue::Literal(1))],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+    };
+    (grid, helpers::make_rule_index(vec![rule_1_to_2, rule_2_to_1]))
 }
 
 // setup_with_shift() уже описывает точно ту же решётку/правила, что нужны

@@ -27,8 +27,17 @@
 //! # Только Criterion-бенчмарки
 //! cargo bench --bench cellaria_bench -- --criterion
 //!
-//! # Criterion + фильтрация по имени группы
-//! cargo bench --bench cellaria_bench -- --criterion throughput
+//! # Criterion + быстрый режим (меньше семплов/времени на прогрев)
+//! cargo bench --bench cellaria_bench -- --criterion --quick
+//!
+//! # Фильтрация по имени группы Criterion сейчас не поддерживается через
+//! # --criterion (см. main(): Criterion больше не читает argv сама, чтобы
+//! # не конфликтовать с --criterion/--quick/--bench от Cargo) — для этого
+//! # нужен отдельный вызов скомпилированного бинарника bench'а напрямую.
+//!
+//! # Цвет включается автоматически, если stdout — терминал (и уважает
+//! # NO_COLOR); --no-color/--color переопределяют это явно
+//! cargo bench --bench cellaria_bench -- --no-color
 //! ```
 
 mod helpers;
@@ -325,16 +334,37 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
         overflow: Default::default(),
     };
     let rule_index = helpers::make_rule_index(vec![rule]);
-    let rule_cache = cellaria::conflict_analyzer::build_rule_data_cache(&rule_index);
 
     // Первый тик (может быть outlier из-за аллокаций)
     cellaria::engine::run_tick(&mut grid, &rule_index);
 
-    // Второй тик — измеряем
+    // Второй тик — измеряем.
+    //
+    // ВАЖНО: с появлением инкрементального detect (dirty-tracking —
+    // `Grid` помнит, какие клетки реально изменились с прошлого тика, и
+    // следующий скан обычно проверяет только их окрестность, а не все
+    // активные клетки) реальный внутренний конвейер `run_tick` стал
+    // stateful и завязан на приватные (`pub(crate)`) поля `Grid`,
+    // недоступные отсюда — этот бенч-файл компилируется как внешний бинарник
+    // и не может честно воспроизвести dirty-множество. Поэтому "Сумма фаз"
+    // ниже — это НЕ копия внутреннего пайплайна (как было раньше), а
+    // намеренно консервативный ориентир: время ПОЛНОГО (неинкрементального)
+    // скана всех активных клеток, для явного сравнения с "Полный run_tick"
+    // (который зовёт настоящую, инкрементальную реализацию). Если
+    // incremental-скан реально помогает — "Полный run_tick" будет БЫСТРЕЕ
+    // "Суммы фаз", а не медленнее; "Overhead" в таком случае интерпретируется
+    // как экономия, а не как потери.
+    let t_pre = Instant::now();
+    let rule_cache = cellaria::conflict_analyzer::build_rule_data_cache(&rule_index);
+    let t_cache = t_pre.elapsed().as_nanos() as u128;
+
+    let t_resolve_start = Instant::now();
+    let search_coords: Vec<(usize, usize)> = grid.active_coords().clone();
+    let t_resolve = t_resolve_start.elapsed().as_nanos() as u128;
 
     // detect_matches
     let t0 = Instant::now();
-    let matches = cellaria::engine::detect_matches(&grid, &rule_index, grid.active_coords());
+    let matches = cellaria::engine::detect_matches(&grid, &rule_index, &search_coords);
     let t_detect = t0.elapsed().as_nanos() as u128;
 
     // arbitrate
@@ -376,6 +406,8 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
     let t_reset = t4.elapsed().as_nanos() as u128;
 
     vec![
+        ("rule_cache rebuild", t_cache),
+        ("clone active_coords (baseline)", t_resolve),
         ("detect_matches", t_detect),
         ("arbitrate", t_arbitrate),
         ("apply_matches", t_apply),
@@ -469,6 +501,15 @@ fn main() {
     let is_criterion = args.iter().any(|a| a == "--criterion");
 
     // Если --criterion: запускаем Criterion-бенчмарки с быстрой конфигурацией
+    //
+    // Раньше здесь стоял `.configure_from_args()` — он читает argv
+    // (`std::env::args()`) заново и парсит его СВОИМ CLI-парсером. Наши
+    // же флаги (`--criterion`, `--quick`, плюс `--bench`, который всегда
+    // дописывает сама Cargo) в этом argv тоже присутствуют, а Criterion их
+    // не знает — парсер падал с "unexpected argument '--criterion' found"
+    // при ЛЮБОМ запуске через `--criterion`, независимо от остальных
+    // аргументов. Убрали чтение argv Criterion'ом целиком: нужные нам флаги
+    // (`--quick`) уже разобраны вручную выше и применяются через билдер.
     if is_criterion {
         let mut criterion = {
             let mut cb = criterion::Criterion::default();
@@ -480,7 +521,7 @@ fn main() {
                     .sample_size(10)
                     .noise_threshold(0.10);
             }
-            cb.configure_from_args()
+            cb
         };
         existing::register_all(&mut criterion);
         throughput::register_all(&mut criterion);
@@ -500,6 +541,14 @@ fn main() {
     reporter.set_json(is_json);
     reporter.set_compact(is_compact);
     reporter.set_quiet(is_quiet);
+    // Reporter::new() уже определяет use_color по TTY + NO_COLOR; эти флаги
+    // дают явный override в обе стороны (например, форсировать цвет при
+    // выводе в `less -R`, или выключить его вручную).
+    if args.iter().any(|a| a == "--no-color") {
+        reporter.set_color(false);
+    } else if args.iter().any(|a| a == "--color") {
+        reporter.set_color(true);
+    }
 
     // Проверка на --check
     if let Some(pos) = args.iter().position(|a| a == "--check") {

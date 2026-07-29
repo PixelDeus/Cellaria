@@ -226,7 +226,7 @@ proptest! {
 
         let mut used: HashSet<(i32, i32)> = HashSet::new();
         for m in &accepted {
-            let head = m.rule_id[0];
+            let head = m.head;
             let rd = get_rule_data(&rule_cache, head, m.rule_idx)
                 .expect("rule_data должна быть в кэше для принятого match'а");
             let overflow = rule_index
@@ -240,8 +240,14 @@ proptest! {
             // на ту же колонку) — это не конфликт МЕЖДУ матчами, а особенность
             // применения одного match'а самого по себе, и не должно
             // засчитываться как нарушение safety-инварианта арбитра.
+            //
+            // write_cells, не affected_cells: арбитр (arbitrator.rs) гарантирует
+            // отсутствие пересечения только на реальных ЗАПИСЯХ — два match'а
+            // могут легитимно читать общую клетку паттерна одновременно
+            // (detect_matches всегда смотрит на состояние решётки до тика),
+            // это не safety-нарушение и не должно тут проверяться.
             let own_cells: HashSet<(i32, i32)> = rd
-                .affected_cells
+                .write_cells
                 .iter()
                 .map(|&(dx, dy)| affected_cell_abs(m.x as i32, m.y as i32, dx, dy, &rd.shift_targets, overflow, bounds))
                 .collect();
@@ -306,13 +312,19 @@ proptest! {
         let matches = detect_matches(&grid, &rule_index, &active);
 
         for m in &matches {
-            let head = m.rule_id[0];
+            let head = m.head;
             let group = rule_index.get(&head).expect("head-тип матча должен быть в rule_index");
             let resolved = group.get(m.rule_idx).expect("rule_idx должен быть валидным индексом в группе");
+            // `RuleMatch` больше не несёт клон полного `id` (см. её doc-
+            // комментарий) — но инвариант "голова совпадения совпадает с
+            // головой правила, на которое указывает rule_idx" всё ещё стоит
+            // проверять: он гарантирован построением `rule_index` (группировка
+            // по `id.first()`), и регрессия здесь означала бы, что
+            // `detect_matches` кладёт совпадение не в ту головную группу.
             prop_assert_eq!(
-                &resolved.id, &m.rule_id,
-                "rule_idx={} в матче на ({}, {}) указывает на правило с id={:?}, а сам матч несёт rule_id={:?}",
-                m.rule_idx, m.x, m.y, resolved.id, m.rule_id
+                resolved.id.first().copied(), Some(m.head),
+                "rule_idx={} в матче на ({}, {}) указывает на правило с id={:?}, но голова матча head={:?}",
+                m.rule_idx, m.x, m.y, resolved.id, m.head
             );
         }
     }
@@ -388,7 +400,7 @@ proptest! {
         // внутри apply_rule_buffered (insert перезаписывает).
         let mut expected: HashMap<(u32, u32), CellValue> = HashMap::new();
         for m in &accepted {
-            let head = m.rule_id[0];
+            let head = m.head;
             let rule = rule_index
                 .get(&head)
                 .and_then(|rs| rs.get(m.rule_idx))
@@ -451,6 +463,109 @@ proptest! {
                 "Ref-change на клетке ({}, {}) должен был записать значение из паттерна на момент начала тика",
                 x, y
             );
+        }
+    }
+
+    /// `engine::run_tick` использует инкрементальный скан: вместо полного
+    /// пересмотра всех активных клеток каждый тик он берёт только клетки,
+    /// изменившиеся с прошлого тика (`Grid::dirty_coords`), расширенные на
+    /// радиус паттернов, плюс клетки типов с `min_age > 0` (см. doc-комментарии
+    /// `resolve_search_coords_advance`/`min_age_gated_types` в `engine::mod`).
+    /// Это отдельный, независимый от `prop_arbitrate_never_overlaps` риск:
+    /// та проверка берёт `active_coords` напрямую и не касается
+    /// dirty-tracking вообще.
+    ///
+    /// Сравниваем N тиков реального (инкрементального) run_tick с N тиками
+    /// заведомо консервативного эталона: полный скан всех активных клеток,
+    /// расширенный ФИКСИРОВАННЫМ радиусом 2 (генератор паттернов/changes
+    /// этого файла ограничен offset'ами -2..=2, так что радиус 2 гарантированно
+    /// достаточен для эталона — независимо от того, как настоящий движок
+    /// вычисляет свой радиус). Если инкрементальный скан хоть раз пропустит
+    /// реальное совпадение (или наоборот, лишний раз что-то заденет), решётки
+    /// разойдутся на том же тике, где это произошло.
+    #[test]
+    fn prop_incremental_run_tick_matches_full_scan(
+        rules in rule_set_strategy(),
+        (width, height, cells) in grid_strategy(),
+        num_ticks in 1u32..=6,
+    ) {
+        let rule_index = make_rule_index(&rules);
+
+        let mut incremental = build_grid(width, height, &cells);
+        let mut reference = build_grid(width, height, &cells);
+
+        for tick in 0..num_ticks {
+            let _ = cellaria::engine::run_tick(&mut incremental, &rule_index);
+            reference_full_scan_tick(&mut reference, &rule_index);
+
+            for y in 0..height {
+                for x in 0..width {
+                    let a = incremental.get_cell(x, y).copied().unwrap_or_default();
+                    let b = reference.get_cell(x, y).copied().unwrap_or_default();
+                    prop_assert_eq!(
+                        a, b,
+                        "клетка ({}, {}) разошлась на тике {} между инкрементальным run_tick и полным сканом",
+                        x, y, tick
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Эталонный тик: ВСЕГДА полный скан всех активных клеток, расширенный
+/// фиксированным радиусом 2, без какого-либо dirty-tracking. Независимая от
+/// оптимизированной реализации (`engine::mod::resolve_search_coords_advance`)
+/// проверка того же контракта — намеренно НЕ переиспользует её код.
+fn reference_full_scan_tick(grid: &mut Grid<VecStorage>, rule_index: &HashMap<CellType, Vec<Rule>>) {
+    const RADIUS: i32 = 2;
+
+    let active: Vec<(usize, usize)> = grid.iter_active().collect();
+    let mut expanded: HashSet<(usize, usize)> = HashSet::new();
+    for &(x, y) in &active {
+        for dx in -RADIUS..=RADIUS {
+            for dy in -RADIUS..=RADIUS {
+                let nx = x as i32 + dx;
+                let ny = y as i32 + dy;
+                if nx >= 0 && ny >= 0 {
+                    expanded.insert((nx as usize, ny as usize));
+                }
+            }
+        }
+    }
+    let search_coords: Vec<(usize, usize)> = expanded.into_iter().collect();
+
+    // run_tick ВСЕГДА вызывает advance_age() ровно один раз за тик, даже если
+    // совпадений не нашлось или все отклонены арбитражем — иначе время
+    // (generation, а с ним и возраст любой клетки) замирает навсегда, как
+    // только на решётке не осталось ничего, кроме `min_age`-клетки,
+    // ожидающей своего часа: она никогда бы его не дождалась.
+    let matches = detect_matches(grid, rule_index, &search_coords);
+    if matches.is_empty() {
+        grid.advance_age();
+        return;
+    }
+    let rule_cache = build_rule_data_cache(rule_index);
+    let accepted = arbitrate(matches, rule_index, &rule_cache, (grid.width(), grid.height()), |x, y| {
+        grid.get_age(x, y) as u32
+    });
+    if accepted.is_empty() {
+        grid.advance_age();
+        return;
+    }
+    let (regions, _outputs) = apply_matches(grid, accepted, rule_index, &rule_cache);
+    grid.advance_age();
+
+    // written_cells, не bbox: прямоугольник между исходной и целевой позицией
+    // сдвига на N>1 клеток включает клетки, которые сдвиг не трогает вовсе —
+    // см. doc-комментарий `AffectedRegion::written_cells` и
+    // `reset_age_for_regions` в engine/mod.rs.
+    let gen = grid.generation();
+    for region in &regions {
+        for &(x, y) in &region.written_cells {
+            if let Some(cell) = grid.get_cell(x as usize, y as usize) {
+                grid.set_cell(x as usize, y as usize, Cell { value: cell.value, born_at: gen });
+            }
         }
     }
 }
