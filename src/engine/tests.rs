@@ -1058,7 +1058,8 @@ fn test_same_id_resolves_actually_matched_rule() {
 /// CA-тик: обнаружить совпадения для всех активных клеток, выполнить арбитраж,
 /// применить изменения, обновить возраст.
 fn run_tick_ca(grid: &mut Grid<VecStorage>, rule_index: &HashMap<CellType, Vec<Rule>>) {
-    let search_coords = resolve_search_coords_advance(grid, rule_index);
+    let search_radius_cache = compute_search_radius_cache(rule_index);
+    let search_coords = resolve_search_coords_advance(grid, &search_radius_cache);
     let matches = detect_matches(grid, rule_index, &search_coords);
     if matches.is_empty() {
         // См. комментарий в engine::run_tick: время идёт, даже если ничего

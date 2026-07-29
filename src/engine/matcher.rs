@@ -29,17 +29,30 @@ pub(crate) struct GroupData {
     /// клеток, не влезающих в u64 — такие паттерны раньше всегда шли по
     /// медленному общему циклу вместо однокомандного сравнения.
     packed_patterns: Vec<(u128, u128)>,
-    /// Точный lookup "упакованное значение окрестности → индексы правил",
-    /// когда КАЖДОЕ правило группы полностью специфицирует все `all_offsets`
-    /// (маска покрывает их все, ни одного wildcard-байта). В этом случае
-    /// разные правила группы взаимоисключающи по построению — под конкретную
+    /// Точный lookup "упакованное значение окрестности → индексы правил" —
+    /// для ПОДМНОЖЕСТВА правил группы, которые полностью специфицируют все
+    /// `all_offsets` (маска покрывает их все, ни одного wildcard-байта).
+    /// Такие правила взаимоисключающи по построению — под конкретную
     /// окрестность подходит максимум одна точная упакованная комбинация — и
     /// вместо линейного перебора ВСЕХ правил группы (Game of Life: до 172 на
     /// голову — все 256 масок соседей минус не меняющие состояние) можно
-    /// найти совпадение(я) одним хеш-lookup. `None`, если хоть одно правило
-    /// группы использует wildcard (не все `all_offsets` покрыты маской) —
-    /// тогда, как и раньше, полный перебор `packed_patterns`/`effective_patterns`.
+    /// найти совпадение(я) одним хеш-lookup. Индексы внутри — ОРИГИНАЛЬНЫЕ
+    /// `rule_idx` (те же, что в `rule_meta`/`packed_patterns`), не позиция
+    /// внутри подмножества. `None`, если ни одно правило группы не подходит
+    /// (все — wildcard, либо паттерн > 16 клеток).
+    ///
+    /// Раньше одного-единственного wildcard-правила в группе хватало, чтобы
+    /// отключить lookup для ВСЕЙ группы целиком — например, у "челнока", где
+    /// одно правило головы полностью читает "я + сосед-стена", а другое
+    /// (просто сдвиг) читает только себя, быстрый путь терялся ЦЕЛИКОМ, хотя
+    /// первое правило само по себе полностью специфицировано. Теперь то, что
+    /// можно проверить одним lookup, проверяется им; для оставшихся
+    /// (`fallback_rules`) — как и раньше, `packed_patterns`/`effective_patterns`.
     exact_lookup: Option<HashMap<u128, Vec<usize>>>,
+    /// Индексы правил группы, НЕ покрытых `exact_lookup` (wildcard-паттерн
+    /// либо паттерн > 16 клеток) — единственные, кому всё ещё нужен перебор.
+    /// Пусто, если группа целиком покрыта `exact_lookup`.
+    fallback_rules: Vec<usize>,
 }
 
 /// Кэш `GroupData` по head-типу — аналог `RuleDataCache`, но для матчера.
@@ -114,30 +127,28 @@ pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> Gro
                 Vec::new()
             };
 
-            // Точный lookup — только если ВСЕ правила группы полностью
+            // Точный lookup — по подмножеству правил, которые полностью
             // специфицируют все `all_offsets` (маска = "полная" для их
-            // числа). Одного неполного правила достаточно, чтобы отказаться
-            // от оптимизации для всей группы — тогда, как и раньше, полный
-            // перебор для КАЖДОГО правила группы (в т.ч. и wildcard-, и
-            // полных — не хотим держать частично оптимизированный, вдвойне
-            // сложный путь).
-            let exact_lookup = if !packed_patterns.is_empty() {
+            // числа); остальные (wildcard, либо паттерн > 16 клеток —
+            // `packed_patterns` тогда вообще пуст) идут в `fallback_rules`.
+            let (exact_lookup, fallback_rules) = if !packed_patterns.is_empty() {
                 let full_mask: u128 = if all_offsets.len() >= 16 {
                     !0u128
                 } else {
                     (1u128 << (8 * all_offsets.len() as u32)) - 1
                 };
-                if packed_patterns.iter().all(|&(_, mask)| mask == full_mask) {
-                    let mut lookup: HashMap<u128, Vec<usize>> = HashMap::new();
-                    for (idx, &(packed, _)) in packed_patterns.iter().enumerate() {
+                let mut lookup: HashMap<u128, Vec<usize>> = HashMap::new();
+                let mut fallback = Vec::new();
+                for (idx, &(packed, mask)) in packed_patterns.iter().enumerate() {
+                    if mask == full_mask {
                         lookup.entry(packed).or_default().push(idx);
+                    } else {
+                        fallback.push(idx);
                     }
-                    Some(lookup)
-                } else {
-                    None
                 }
+                (if lookup.is_empty() { None } else { Some(lookup) }, fallback)
             } else {
-                None
+                (None, (0..rules.len()).collect())
             };
 
             (
@@ -149,6 +160,7 @@ pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> Gro
                     offset_map,
                     packed_patterns,
                     exact_lookup,
+                    fallback_rules,
                 },
             )
         })
@@ -375,10 +387,14 @@ fn match_cell<S: GridStorage>(
 
     // ─── Проверяем правила группы по кэшу ───
     //
-    // Быстрый путь: если у группы есть `exact_lookup` (все правила группы
-    // полностью специфицируют все `all_offsets` — см. её doc-комментарий),
-    // достаточно ОДНОГО хеш-lookup по упакованному значению окрестности,
-    // вместо перебора ВСЕХ правил группы (Game of Life: до 172 на голову).
+    // Быстрый путь: для правил из `exact_lookup` (полностью специфицируют
+    // все `all_offsets` — см. её doc-комментарий) достаточно ОДНОГО
+    // хеш-lookup по упакованному значению окрестности вместо перебора.
+    // Остальные правила группы (`fallback_rules` — wildcard-паттерн, либо
+    // паттерн > 16 клеток) по-прежнему проверяются ниже, но ТОЛЬКО они, а
+    // не вся группа целиком — раньше один-единственный wildcard в группе
+    // включал полный перебор для всех, даже для соседей, которые сами по
+    // себе были полностью специфицированы (см. doc-комментарий `exact_lookup`).
     if let (Some(lookup), Some(cache_packed)) = (&gd.exact_lookup, cache_u128) {
         if let Some(candidates) = lookup.get(&cache_packed) {
             for &rule_idx in candidates {
@@ -397,10 +413,10 @@ fn match_cell<S: GridStorage>(
                 });
             }
         }
-        return;
     }
 
-    for (rule_idx, &(min_age, active_only)) in gd.rule_meta.iter().enumerate() {
+    for &rule_idx in &gd.fallback_rules {
+        let (min_age, active_only) = gd.rule_meta[rule_idx];
         if center_age < min_age {
             continue;
         }

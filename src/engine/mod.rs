@@ -5,7 +5,7 @@ pub mod matcher;
 use std::collections::{HashMap, HashSet};
 
 use crate::conflict_analyzer::build_rule_data_cache;
-use crate::fast_hash::FxHashSet;
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::grid::Grid;
 use crate::storage::GridStorage;
 use crate::types::{AffectedRegion, Cell, CellType, CellValue, Rule, RuleMatch, DEFAULT_CELL_VALUE};
@@ -27,22 +27,43 @@ pub struct Engine<S: GridStorage> {
     /// разреженных сценариях с частыми тиками (см. doc-комментарий
     /// `matcher::GroupCache`). `Engine` строит его один раз и переиспользует.
     group_cache: GroupCache,
-    /// Голова-типы, чьи правила `ConflictGraph` признал ПОЛНОСТЬЮ свободными
-    /// от потенциальных конфликтов (ни с самими собой, ни с любым другим
-    /// правилом набора) — посчитано один раз (не на каждый тик).
+    /// `min_age_gated_types`/`max_pattern_radius`/`zero_head_radius`,
+    /// посчитанные один раз — см. doc-комментарий `SearchRadiusCache`.
+    search_radius_cache: SearchRadiusCache,
+    /// Структурная информация из `ConflictGraph`, посчитанная один раз (не на
+    /// каждый тик) — используется `run_tick_with_cache`, чтобы не гонять
+    /// полный арбитраж для матчей, у которых физически нет никого рядом, кто
+    /// мог бы с ними столкнуться.
     ///
-    /// Уточнение предыдущей, более грубой версии (которая проверяла набор
-    /// правил ЦЕЛИКОМ: одно "да" или "нет" на всех): если, скажем, из трёх
-    /// независимых доменов на решётке два (провод, распад — см.
-    /// `strength_composition.rs`/`big_world.rs`) доказуемо бесконфликтны,
-    /// а третий (челнок, двигается сдвигами) — нет, грубая версия выключала
-    /// оптимизацию ДЛЯ ВСЕХ трёх, хотя два из них ничем не рискуют. Здесь —
-    /// точечно: матчи "безопасных" голов принимаются напрямую каждый тик,
-    /// матчи остальных голов по-прежнему идут через полный арбитраж, и
-    /// оба потока корректны одновременно (доказано: правило безопасной
-    /// головы не имеет НИ ОДНОГО ребра в графе конфликтов — значит не может
-    /// столкнуться ни с чем, включая матчи небезопасных голов).
-    safe_heads: FxHashSet<CellType>,
+    /// Уточнение предыдущей версии ("голова либо безопасна ГЛОБАЛЬНО и
+    /// НАВСЕГДА, либо нет"): та версия проверяла ГОЛОВУ целиком — если у
+    /// головы есть хоть одно ребро в графе конфликтов (с ЛЮБОЙ другой
+    /// головой, на любом расстоянии), она выключала оптимизацию для себя
+    /// НАВСЕГДА. Реальный пример (`big_world.rs`): провод и распад (5 голов,
+    /// статичные) сами по себе бесконфликтны, но стоит на той же решётке
+    /// (за миллион клеток) появиться челноку (сдвигается — см. давно
+    /// известный "moving object"-лимит статического анализа), и структурно
+    /// он конфликтует уже со ВСЕМИ 7 головами — включая провод и распад,
+    /// хотя физически они никогда не соприкасаются. Старая версия гасила
+    /// быстрый путь для всей решётки целиком из-за одной детали за миллион
+    /// клеток. Здесь вместо одного глобального решения — ДВЕ ступени:
+    /// `conflict_partners` только называет, какие ГОЛОВЫ структурно МОГЛИ
+    /// БЫ столкнуться (как и раньше), а решение "нужен ли арбитраж
+    /// конкретному совпадению" принимается КАЖДЫЙ тик заново — только если
+    /// хоть один партнёр этой головы реально совпал где-то в пределах
+    /// досягаемости (`max_affected_radius`) от НЕЁ САМОЙ (см.
+    /// `spatial_bypass_split`). Провод и распад проходят напрямую каждый
+    /// тик, как и должны — челнок им попросту не сосед.
+    conflict_partners: FxHashMap<CellType, FxHashSet<CellType>>,
+    /// Максимальный "радиус" (наибольшее расстояние по x/y от позиции
+    /// совпадения до затронутой клетки — `RuleData::bbox`) среди ВСЕХ
+    /// правил набора. Два совпадения дальше `2 × max_affected_radius` друг
+    /// от друга по любой оси НИКОГДА не могут иметь пересекающихся
+    /// affected-регионов, какие бы конкретно правила ни сработали — граница
+    /// консервативна (общий максимум по всем правилам, не по паре), но
+    /// звучит, и этого достаточно для корректного пространственного отсева
+    /// в `spatial_bypass_split`.
+    max_affected_radius: i32,
     /// Если включена самомодификация (см. [`Engine::enable_self_modification`]),
     /// здесь живёт декодер протокола `RuleStore` — `run_tick` сам, без
     /// внешнего кода, дренирует канал 0 выходных граничных буферов после
@@ -110,13 +131,16 @@ impl<S: GridStorage> Engine<S> {
     ) -> Self {
         let rule_cache = build_rule_data_cache(&rule_index);
         let group_cache = build_group_data(&rule_index);
-        let safe_heads = compute_safe_heads(&rule_index);
+        let search_radius_cache = compute_search_radius_cache(&rule_index);
+        let (conflict_partners, max_affected_radius) = compute_conflict_partners(&rule_index, &rule_cache);
         Self {
             grid,
             rule_index,
             rule_cache,
             group_cache,
-            safe_heads,
+            search_radius_cache,
+            conflict_partners,
+            max_affected_radius,
             self_mod: None,
             guard_self_modification: false,
             // Заполняется в `enable_self_modification` — снимок берётся ТАМ,
@@ -171,7 +195,7 @@ impl<S: GridStorage> Engine<S> {
 
     /// Обнаружить все совпадения на текущей решётке.
     pub fn detect_matches(&self) -> Vec<RuleMatch> {
-        let search_coords = resolve_search_coords_peek(&self.grid, &self.rule_index);
+        let search_coords = resolve_search_coords_peek(&self.grid, &self.search_radius_cache);
         detect_matches_with_group_data(&self.grid, &self.group_cache, &search_coords)
     }
 
@@ -323,7 +347,7 @@ impl<S: GridStorage> Engine<S> {
 
     /// Проверить, достигла ли система устойчивого состояния.
     pub fn detect_termination(&self, tick: u32) -> TerminationVerdict {
-        let search_coords = resolve_search_coords_peek(&self.grid, &self.rule_index);
+        let search_coords = resolve_search_coords_peek(&self.grid, &self.search_radius_cache);
         let matches = detect_matches_with_group_data(&self.grid, &self.group_cache, &search_coords);
         if matches.is_empty() {
             TerminationVerdict::Stable
@@ -357,7 +381,7 @@ impl<S: GridStorage> Engine<S> {
             if tick > 1000 {
                 return CompositionVerdict::NonTerminating;
             }
-            let search_coords = resolve_search_coords_advance(&mut self.grid, &self.rule_index);
+            let search_coords = resolve_search_coords_advance(&mut self.grid, &self.search_radius_cache);
             let matches = detect_matches_with_group_data(&self.grid, &self.group_cache, &search_coords);
             if matches.is_empty() {
                 break;
@@ -442,7 +466,8 @@ impl<S: GridStorage> Engine<S> {
     /// (в обход RuleStore), нужно вызвать [`Engine::rebuild_rule_cache`]
     /// перед следующим тиком.
     pub fn run_tick(&mut self) -> (Vec<RuleMatch>, Vec<(u32, Cell)>) {
-        let result = run_tick_with_cache(&mut self.grid, &self.rule_index, &self.rule_cache, &self.group_cache, &self.safe_heads);
+        let conflict_ctx = ConflictContext { partners: &self.conflict_partners, max_radius: self.max_affected_radius };
+        let result = run_tick_with_cache(&mut self.grid, &self.rule_index, &self.rule_cache, &self.group_cache, &self.search_radius_cache, Some(&conflict_ctx));
         self.absorb_self_modifications();
         result
     }
@@ -535,7 +560,12 @@ impl<S: GridStorage> Engine<S> {
         // empty in exactly that case (self-loops never satisfy the
         // cross-set `i < n_a && j >= n_a` filter) — reject only when there
         // is an ACTUAL rule_a×existing pair, not merely a non-empty verdict.
-        match crate::ConflictGraph::check_composition(std::slice::from_ref(rule), &existing) {
+        let grid_ctx = crate::conflict_analyzer::GridContext {
+            width: self.grid.width(),
+            height: self.grid.height(),
+            boundaries: &self.grid.boundaries,
+        };
+        match crate::ConflictGraph::check_composition_with_grid(std::slice::from_ref(rule), &existing, &grid_ctx) {
             crate::conflict_analyzer::CompositionVerdict::Safe => true,
             crate::conflict_analyzer::CompositionVerdict::Unsafe(pairs) => pairs.is_empty(),
         }
@@ -565,7 +595,10 @@ impl<S: GridStorage> Engine<S> {
     pub fn rebuild_rule_cache(&mut self) {
         self.rule_cache = build_rule_data_cache(&self.rule_index);
         self.group_cache = build_group_data(&self.rule_index);
-        self.safe_heads = compute_safe_heads(&self.rule_index);
+        self.search_radius_cache = compute_search_radius_cache(&self.rule_index);
+        let (partners, radius) = compute_conflict_partners(&self.rule_index, &self.rule_cache);
+        self.conflict_partners = partners;
+        self.max_affected_radius = radius;
         self.resync_original_rule_index();
         let active: Vec<(usize, usize)> = self.grid.active_coords().clone();
         for (x, y) in active {
@@ -603,13 +636,20 @@ impl<S: GridStorage> Engine<S> {
     }
 }
 
-/// Теоремой `ConflictGraph` ("CF ⇒ арбитраж не нужен") определить, ЧЬИ
-/// голова-типы гарантированно ни с чем не конфликтуют — точнее, чем просто
-/// "весь набор целиком" (см. doc-комментарий `Engine::safe_heads`).
+/// Теоремой `ConflictGraph` определить, какие ГОЛОВЫ структурно МОГЛИ БЫ
+/// столкнуться друг с другом (включая с самими собой — self-loop), и
+/// наибольший "радиус" (bbox affected-региона) среди всех правил набора —
+/// см. doc-комментарии `Engine::conflict_partners`/`Engine::max_affected_radius`.
 /// Считается один раз при создании/перестройке `Engine`, не на каждый тик —
 /// `ConflictGraph::build` сам по себе не бесплатен (O(N²·K²) от числа
-/// правил), но правила меняются на порядки реже, чем тикает движок.
-fn compute_safe_heads(rule_index: &HashMap<CellType, Vec<Rule>>) -> FxHashSet<CellType> {
+/// правил), но правила меняются на порядки реже, чем тикает движок. Само
+/// решение "нужен ли арбитраж" для конкретного совпадения принимается
+/// заново каждый тик в `spatial_bypass_split`, используя эти структурные
+/// данные как вход, а не как готовый ответ.
+fn compute_conflict_partners(
+    rule_index: &HashMap<CellType, Vec<Rule>>,
+    rule_cache: &crate::conflict_analyzer::RuleDataCache,
+) -> (FxHashMap<CellType, FxHashSet<CellType>>, i32) {
     let mut rules: Vec<Rule> = Vec::new();
     let mut head_of_rule: Vec<CellType> = Vec::new();
     for (&head, rs) in rule_index {
@@ -619,16 +659,30 @@ fn compute_safe_heads(rule_index: &HashMap<CellType, Vec<Rule>>) -> FxHashSet<Ce
         }
     }
     let graph = crate::conflict_analyzer::ConflictGraph::build(&rules);
-    let mut unsafe_heads: FxHashSet<CellType> = FxHashSet::default();
+    let mut partners: FxHashMap<CellType, FxHashSet<CellType>> = FxHashMap::default();
     for &(i, j) in graph.potential_conflicts() {
-        unsafe_heads.insert(head_of_rule[i]);
-        unsafe_heads.insert(head_of_rule[j]);
+        let (hi, hj) = (head_of_rule[i], head_of_rule[j]);
+        partners.entry(hi).or_default().insert(hj);
+        partners.entry(hj).or_default().insert(hi);
     }
-    rule_index
-        .keys()
-        .filter(|head| !unsafe_heads.contains(head))
-        .copied()
-        .collect()
+
+    let max_radius = rule_cache
+        .values()
+        .map(|data| {
+            let (min_x, max_x, min_y, max_y) = data.bbox;
+            min_x.unsigned_abs().max(max_x.unsigned_abs()).max(min_y.unsigned_abs()).max(max_y.unsigned_abs()) as i32
+        })
+        .max()
+        .unwrap_or(0);
+
+    (partners, max_radius)
+}
+
+/// Структурный вход для `spatial_bypass_split` — см. doc-комментарии
+/// `Engine::conflict_partners`/`Engine::max_affected_radius`.
+struct ConflictContext<'a> {
+    partners: &'a FxHashMap<CellType, FxHashSet<CellType>>,
+    max_radius: i32,
 }
 
 /// Выполнить один тик симуляции (свободная функция).
@@ -640,22 +694,22 @@ fn compute_safe_heads(rule_index: &HashMap<CellType, Vec<Rule>>) -> FxHashSet<Ce
 /// конфигов с десятками-сотнями правил и частыми тиками в цикле
 /// предпочтительнее держать `Engine` и звать `Engine::run_tick`.
 ///
-/// НЕ вычисляет `safe_heads` (в отличие от `Engine`, где это считается один
-/// раз и кэшируется) — `ConflictGraph::build` сам по себе O(N²·K²) от числа
-/// правил и размера паттернов, и на наборе в сотни правил (например, полный
-/// Game of Life — 228 правил) эта проверка сама по себе дороже целого тика.
-/// Пересчитывать её на КАЖДЫЙ вызов свободной функции — не "пренебрежимо
-/// мало", как rule_cache/group_cache, а реальная регрессия (найдено
-/// экспериментально: наивная версия этой оптимизации замедлила GoL на
-/// порядки).
+/// НЕ вычисляет `conflict_partners`/`max_affected_radius` (в отличие от
+/// `Engine`, где это считается один раз и кэшируется) — `ConflictGraph::build`
+/// сам по себе O(N²·K²) от числа правил и размера паттернов, и на наборе в
+/// сотни правил (например, полный Game of Life — 228 правил) эта проверка
+/// сама по себе дороже целого тика. Пересчитывать её на КАЖДЫЙ вызов
+/// свободной функции — не "пренебрежимо мало", как rule_cache/group_cache, а
+/// реальная регрессия (найдено экспериментально: наивная версия этой
+/// оптимизации замедлила GoL на порядки).
 pub fn run_tick<S: GridStorage>(
     grid: &mut Grid<S>,
     rule_index: &HashMap<CellType, Vec<Rule>>,
 ) -> (Vec<RuleMatch>, Vec<(u32, Cell)>) {
     let rule_cache = crate::conflict_analyzer::build_rule_data_cache(rule_index);
     let group_cache = build_group_data(rule_index);
-    let no_safe_heads = FxHashSet::default();
-    run_tick_with_cache(grid, rule_index, &rule_cache, &group_cache, &no_safe_heads)
+    let search_radius_cache = compute_search_radius_cache(rule_index);
+    run_tick_with_cache(grid, rule_index, &rule_cache, &group_cache, &search_radius_cache, None)
 }
 
 /// Общая логика одного тика, параметризованная источниками `rule_cache`/
@@ -663,21 +717,91 @@ pub fn run_tick<S: GridStorage>(
 /// каждый раз) и `Engine::run_tick` (переиспользует `self.rule_cache`/
 /// `self.group_cache`).
 ///
-/// `safe_heads` — голова-типы, доказано `ConflictGraph`'ом никогда ни с чем
-/// не конфликтующие (см. doc-комментарий `Engine::safe_heads`): матчи этих
-/// голов принимаются напрямую, без единого сравнения, остальные — через
-/// обычный арбитраж. Это не эвристика — та же теорема уже проверена
-/// тяжёлыми property-тестами (`prop_conflict_free_rules_accept_everything`):
-/// для доказанно безопасной головы арбитраж и так принял бы 100% её матчей,
-/// просто дороже.
+/// `conflict_ctx: None` — оптимизация выключена, всегда полный арбитраж (путь
+/// свободной функции `run_tick`, где считать граф конфликтов заново на
+/// каждый вызов не оправдано). `Some(ctx)` — матчи голов, у которых в этом
+/// тике физически нет рядом ни одного структурного конфликт-партнёра,
+/// принимаются напрямую, без единого сравнения; остальные — через обычный
+/// арбитраж (см. `spatial_bypass_split`). Это не эвристика — та же теорема
+/// уже проверена тяжёлыми property-тестами
+/// (`prop_conflict_free_rules_accept_everything`): для матча, рядом с которым
+/// нет ни одного потенциального конфликт-партнёра, арбитраж и так принял бы
+/// его в 100% случаев, просто дороже.
+/// Разделить матчи на "точно безопасные в этом тике" (принять напрямую) и
+/// "нужен арбитраж" — используя `ctx.partners` (структурно: какие головы
+/// МОГЛИ БЫ столкнуться) вместе с РЕАЛЬНЫМИ позициями совпадений этого тика.
+///
+/// Голова, отсутствующая в `ctx.partners` как ключ, безусловно безопасна —
+/// без единого сравнения позиций (эквивалент старого "глобально безопасной
+/// головы"). Голова-ключ безопасна ТОЛЬКО если ни один из её партнёров не
+/// совпал в пределах `2 × ctx.max_radius` по x И по y — это ВЕРХНЯЯ граница
+/// на дальность, на которую affected-регион ЛЮБОЙ пары правил может
+/// пересечься (см. doc-комментарий `Engine::max_affected_radius`), поэтому
+/// проверка консервативна (может послать в арбитраж чуть больше, чем
+/// строго нужно), но никогда не бывает наоборот.
+///
+/// Пространственный отсев — стандартный spatial hashing: решётка совпадений
+/// делится на квадратные корзины стороной `bucket = 2 × max_radius`, и для
+/// каждого совпадения проверяются только 3×3 соседние корзины — этого
+/// достаточно, потому что две точки дальше `bucket` друг от друга по любой
+/// оси не могут оказаться в соседних (или той же) корзине.
+fn spatial_bypass_split(matches: Vec<RuleMatch>, ctx: &ConflictContext) -> (Vec<RuleMatch>, Vec<RuleMatch>) {
+    let (mut safe, candidates): (Vec<RuleMatch>, Vec<RuleMatch>) =
+        matches.into_iter().partition(|m| !ctx.partners.contains_key(&m.head));
+
+    if candidates.is_empty() {
+        return (safe, candidates);
+    }
+
+    let bucket = (2 * ctx.max_radius).max(1);
+    let mut buckets: FxHashMap<(i32, i32), Vec<usize>> = FxHashMap::default();
+    for (idx, m) in candidates.iter().enumerate() {
+        let key = ((m.x as i32).div_euclid(bucket), (m.y as i32).div_euclid(bucket));
+        buckets.entry(key).or_default().push(idx);
+    }
+
+    let mut needs_arbitration = vec![false; candidates.len()];
+    for idx in 0..candidates.len() {
+        if needs_arbitration[idx] {
+            continue;
+        }
+        let m = &candidates[idx];
+        let Some(my_partners) = ctx.partners.get(&m.head) else { continue };
+        let (bx, by) = ((m.x as i32).div_euclid(bucket), (m.y as i32).div_euclid(bucket));
+        'neighbors: for dbx in -1..=1 {
+            for dby in -1..=1 {
+                let Some(members) = buckets.get(&(bx + dbx, by + dby)) else { continue };
+                for &other in members {
+                    if other != idx && my_partners.contains(&candidates[other].head) {
+                        needs_arbitration[idx] = true;
+                        needs_arbitration[other] = true;
+                        break 'neighbors;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut unsafe_matches = Vec::new();
+    for (idx, m) in candidates.into_iter().enumerate() {
+        if needs_arbitration[idx] {
+            unsafe_matches.push(m);
+        } else {
+            safe.push(m);
+        }
+    }
+    (safe, unsafe_matches)
+}
+
 fn run_tick_with_cache<S: GridStorage>(
     grid: &mut Grid<S>,
     rule_index: &HashMap<CellType, Vec<Rule>>,
     rule_cache: &crate::conflict_analyzer::RuleDataCache,
     group_cache: &GroupCache,
-    safe_heads: &FxHashSet<CellType>,
+    search_radius_cache: &SearchRadiusCache,
+    conflict_ctx: Option<&ConflictContext>,
 ) -> (Vec<RuleMatch>, Vec<(u32, Cell)>) {
-    let search_coords = resolve_search_coords_advance(grid, rule_index);
+    let search_coords = resolve_search_coords_advance(grid, search_radius_cache);
 
     let matches = detect_matches_with_group_data(grid, group_cache, &search_coords);
     if matches.is_empty() {
@@ -703,31 +827,29 @@ fn run_tick_with_cache<S: GridStorage>(
         grid.mark_dirty(m.x as usize, m.y as usize);
     }
 
-    // Арбитраж: матчи доказанно безопасных голов принимаются напрямую, без
-    // единого сравнения (см. doc-комментарий функции); остальные — через
-    // обычный арбитраж. Если ВСЕ головы безопасны (старый частный случай —
-    // весь набор бесконфликтен целиком), `unsafe_matches` окажется пустым,
-    // и arbitrate() вообще не вызывается — то же поведение, что и раньше,
-    // просто как естественный частный случай общего механизма.
-    let accepted = if safe_heads.is_empty() {
-        arbitrate(matches, rule_index, rule_cache, (grid.width(), grid.height()), |x, y| {
+    // Арбитраж: матчи, у которых в ЭТОМ тике физически нет рядом ни одного
+    // структурного конфликт-партнёра, принимаются напрямую, без единого
+    // сравнения (см. doc-комментарий функции); остальные — через обычный
+    // арбитраж.
+    let accepted = match conflict_ctx {
+        None => arbitrate(matches, rule_index, rule_cache, (grid.width(), grid.height()), |x, y| {
             grid.get_age(x, y) as u32
-        })
-    } else {
-        let (safe, unsafe_matches): (Vec<RuleMatch>, Vec<RuleMatch>) =
-            matches.into_iter().partition(|m| safe_heads.contains(&m.head));
-        if unsafe_matches.is_empty() {
-            safe
-        } else {
-            let mut accepted = safe;
-            accepted.extend(arbitrate(
-                unsafe_matches,
-                rule_index,
-                rule_cache,
-                (grid.width(), grid.height()),
-                |x, y| grid.get_age(x, y) as u32,
-            ));
-            accepted
+        }),
+        Some(ctx) => {
+            let (safe, unsafe_matches) = spatial_bypass_split(matches, ctx);
+            if unsafe_matches.is_empty() {
+                safe
+            } else {
+                let mut accepted = safe;
+                accepted.extend(arbitrate(
+                    unsafe_matches,
+                    rule_index,
+                    rule_cache,
+                    (grid.width(), grid.height()),
+                    |x, y| grid.get_age(x, y) as u32,
+                ));
+                accepted
+            }
         }
     };
 
@@ -802,12 +924,36 @@ fn pattern_radius<'a>(rules: impl Iterator<Item = &'a Rule>) -> i32 {
 /// КАЖДЫЙ тик безусловно, независимо от dirty-состояния — единственная
 /// просадка от инкрементального скана, и она касается только типов, у
 /// которых реально есть такие правила (в текущих `configs/` — 2 файла из 37).
-fn min_age_gated_types(rule_index: &HashMap<CellType, Vec<Rule>>) -> Vec<CellType> {
+fn min_age_gated_types(rule_index: &HashMap<CellType, Vec<Rule>>) -> FxHashSet<CellType> {
     rule_index
         .iter()
         .filter(|(_, rules)| rules.iter().any(|r| r.min_age > 0))
         .map(|(&ct, _)| ct)
         .collect()
+}
+
+/// `min_age_gated_types`/`max_pattern_radius`/`zero_head_radius` — все
+/// чистые функции ТОЛЬКО от `rule_index`, но раньше пересчитывались заново
+/// на каждый вызов `resolve_search_coords_*` — то есть на каждый тик,
+/// безусловно, даже когда набор правил месяцами не менялся (найдено при
+/// проверке производительности: `min_age_gated_types` — O(всех правил)
+/// линейный скан HashMap на пустом месте каждый тик). `Engine` считает это
+/// один раз при создании/перестройке (см. `Engine::search_radius_cache`) и
+/// переиспользует, как уже делает с `rule_cache`/`group_cache`/
+/// `conflict_partners`; свободная функция `run_tick` по-прежнему считает
+/// заново на каждый вызов — тот же компромисс, что и везде в этом файле.
+struct SearchRadiusCache {
+    min_age_gated_types: FxHashSet<CellType>,
+    max_pattern_radius: i32,
+    zero_head_radius: i32,
+}
+
+fn compute_search_radius_cache(rule_index: &HashMap<CellType, Vec<Rule>>) -> SearchRadiusCache {
+    SearchRadiusCache {
+        min_age_gated_types: min_age_gated_types(rule_index),
+        max_pattern_radius: max_pattern_radius(rule_index),
+        zero_head_radius: zero_head_radius(rule_index),
+    }
 }
 
 /// Построить кандидатов для detect_matches из уже полученного базового
@@ -817,7 +963,7 @@ fn build_candidates<S: GridStorage>(
     base: Vec<(usize, usize)>,
     radius: i32,
     grid: &Grid<S>,
-    rule_index: &HashMap<CellType, Vec<Rule>>,
+    cache: &SearchRadiusCache,
 ) -> Vec<(usize, usize)> {
     // При radius=0 расширять нечего — берём `base` как есть (move), а не
     // через `expand_neighborhood(&base, 0)`: та принимает срез и поэтому
@@ -831,8 +977,7 @@ fn build_candidates<S: GridStorage>(
         expand_neighborhood(grid, &base, radius)
     };
 
-    let gated_types = min_age_gated_types(rule_index);
-    if !gated_types.is_empty() {
+    if !cache.min_age_gated_types.is_empty() {
         let mut seen: std::collections::HashSet<(usize, usize)> =
             candidates.iter().copied().collect();
         for &(x, y) in grid.active_coords() {
@@ -840,7 +985,7 @@ fn build_candidates<S: GridStorage>(
                 continue;
             }
             if let Some(cell) = grid.get_cell(x, y) {
-                if gated_types.contains(&cell.value.0) {
+                if cache.min_age_gated_types.contains(&cell.value.0) {
                     seen.insert((x, y));
                     candidates.push((x, y));
                 }
@@ -874,12 +1019,12 @@ fn build_candidates<S: GridStorage>(
 fn dirty_base_and_radius<S: GridStorage>(
     dirty: HashSet<(usize, usize)>,
     grid: &Grid<S>,
-    rule_index: &HashMap<CellType, Vec<Rule>>,
+    cache: &SearchRadiusCache,
 ) -> (Vec<(usize, usize)>, i32) {
     if dirty.len() * 2 >= grid.active_coords().len() {
-        (grid.active_coords().clone(), zero_head_radius(rule_index))
+        (grid.active_coords().clone(), cache.zero_head_radius)
     } else {
-        (dirty.into_iter().collect(), max_pattern_radius(rule_index))
+        (dirty.into_iter().collect(), cache.max_pattern_radius)
     }
 }
 
@@ -893,11 +1038,11 @@ fn dirty_base_and_radius<S: GridStorage>(
 /// клетки уже проверены, и пропустит реальные совпадения.
 fn resolve_search_coords_peek<S: GridStorage>(
     grid: &Grid<S>,
-    rule_index: &HashMap<CellType, Vec<Rule>>,
+    cache: &SearchRadiusCache,
 ) -> Vec<(usize, usize)> {
     let dirty = grid.peek_dirty();
-    let (base, radius) = dirty_base_and_radius(dirty, grid, rule_index);
-    build_candidates(base, radius, grid, rule_index)
+    let (base, radius) = dirty_base_and_radius(dirty, grid, cache);
+    build_candidates(base, radius, grid, cache)
 }
 
 /// Получить кандидатов для detect_matches и ОЧИСТИТЬ dirty-множество.
@@ -908,11 +1053,11 @@ fn resolve_search_coords_peek<S: GridStorage>(
 /// заполнит dirty-множество заново через `set_cell`).
 fn resolve_search_coords_advance<S: GridStorage>(
     grid: &mut Grid<S>,
-    rule_index: &HashMap<CellType, Vec<Rule>>,
+    cache: &SearchRadiusCache,
 ) -> Vec<(usize, usize)> {
     let dirty = grid.take_dirty();
-    let (base, radius) = dirty_base_and_radius(dirty, grid, rule_index);
-    build_candidates(base, radius, grid, rule_index)
+    let (base, radius) = dirty_base_and_radius(dirty, grid, cache);
+    build_candidates(base, radius, grid, cache)
 }
 
 /// Расширить список координат на окрестность заданного радиуса.

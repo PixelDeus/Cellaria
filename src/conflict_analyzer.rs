@@ -37,6 +37,44 @@ fn effective_pattern(rule: &Rule) -> Vec<(i32, i32, CellType)> {
     }
 }
 
+/// Контекст решётки, позволяющий анализатору точнее судить о правилах со
+/// сдвигом и `OverflowAction::Write`/`WriteLiteral` — см. doc-комментарий
+/// у `boundary_exempt`. Без него (`ConflictGraph::build`/`check_composition`)
+/// анализ остаётся полностью относительным и максимально консервативным,
+/// как и был.
+pub struct GridContext<'a> {
+    pub width: usize,
+    pub height: usize,
+    pub boundaries: &'a HashMap<(usize, usize), crate::types::BoundaryBuffer>,
+}
+
+/// Правило, чей ЛЮБОЙ сдвиг с overflow-записью доказуемо никогда не может
+/// попасть в саму решётку — только в изолированную очередь `BoundaryBuffer`
+/// (см. `apply_overflow_write` в `applicator.rs`: если на клэмпнутой позиции
+/// настроен boundary, запись идёт в `buf.enqueue`, а не в `write_buffer`
+/// решётки). Клэмпнутая позиция вдоль оси сдвига ФИКСИРОВАНА (например,
+/// `x = width-1` для сдвига вправо), но позиция вдоль перпендикулярной оси
+/// НЕИЗВЕСТНА в чисто относительном анализе (зависит от того, где реально
+/// стоит совпавшая клетка на решётке, а не от структуры правила) — поэтому
+/// единственное, что можно доказать статически: весь этот край решётки
+/// целиком покрыт boundary-буферами, а не только какая-то одна точка на
+/// нём. Именно поэтому `edge_fully_boundary_covered` проверяет ВСЕ клетки
+/// края, а не одну.
+fn boundary_exempt(rule: &Rule, grid: Option<&GridContext>) -> bool {
+    let Some(grid) = grid else { return false };
+    rule.shifts.iter().flatten().all(|spec| edge_fully_boundary_covered(spec.direction, grid))
+}
+
+fn edge_fully_boundary_covered(direction: Direction, grid: &GridContext) -> bool {
+    let (w, h) = (grid.width, grid.height);
+    match direction {
+        Direction::Right => (0..h).all(|y| grid.boundaries.contains_key(&(w.saturating_sub(1), y))),
+        Direction::Left => (0..h).all(|y| grid.boundaries.contains_key(&(0, y))),
+        Direction::Down => (0..w).all(|x| grid.boundaries.contains_key(&(x, h.saturating_sub(1)))),
+        Direction::Up => (0..w).all(|x| grid.boundaries.contains_key(&(x, 0))),
+    }
+}
+
 /// Граф потенциальных конфликтов между правилами.
 #[derive(Debug, Clone)]
 pub struct ConflictGraph {
@@ -80,6 +118,20 @@ impl ConflictGraph {
     /// даже если оно конфликтует само с собой — что напрямую противоречит
     /// теореме "CF ⇒ арбитраж не нужен".
     pub fn build(rules: &[Rule]) -> Self {
+        Self::build_impl(rules, None)
+    }
+
+    /// Как [`ConflictGraph::build`], но с контекстом решётки — правила-
+    /// переносчики, чей overflow доказуемо всегда попадает в изолированную
+    /// очередь `BoundaryBuffer` (см. `boundary_exempt`), больше не
+    /// форсируются в конфликт с ЛЮБЫМ другим пишущим правилом; для них
+    /// действует обычная (точная, по пересечению `write_cells`) проверка,
+    /// как для любого не-overflow правила.
+    pub fn build_with_grid(rules: &[Rule], grid: &GridContext) -> Self {
+        Self::build_impl(rules, Some(grid))
+    }
+
+    fn build_impl(rules: &[Rule], grid: Option<&GridContext>) -> Self {
         let rule_count = rules.len();
         let mut edges: Vec<(usize, usize)> = Vec::new();
 
@@ -103,6 +155,7 @@ impl ConflictGraph {
                     r.overflow,
                     crate::types::OverflowAction::Write(_) | crate::types::OverflowAction::WriteLiteral(_)
                 )
+                && !boundary_exempt(r, grid)
         };
 
         for i in 0..rule_count {
@@ -140,9 +193,19 @@ impl ConflictGraph {
     /// Если граф пуст — возвращает `CompositionVerdict::Safe`.
     /// Иначе — `CompositionVerdict::Unsafe` со списком конфликтующих пар.
     pub fn check_composition(rules_a: &[Rule], rules_b: &[Rule]) -> CompositionVerdict {
+        Self::check_composition_impl(rules_a, rules_b, None)
+    }
+
+    /// Как [`ConflictGraph::check_composition`], но с контекстом решётки —
+    /// см. [`ConflictGraph::build_with_grid`].
+    pub fn check_composition_with_grid(rules_a: &[Rule], rules_b: &[Rule], grid: &GridContext) -> CompositionVerdict {
+        Self::check_composition_impl(rules_a, rules_b, Some(grid))
+    }
+
+    fn check_composition_impl(rules_a: &[Rule], rules_b: &[Rule], grid: Option<&GridContext>) -> CompositionVerdict {
         let mut combined = rules_a.to_vec();
         combined.extend_from_slice(rules_b);
-        let graph = Self::build(&combined);
+        let graph = Self::build_impl(&combined, grid);
         if graph.is_conflict_free() {
             CompositionVerdict::Safe
         } else {
