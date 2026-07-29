@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::storage::GridStorage;
 use crate::types::{BoundaryBuffer, Cell};
 
@@ -50,12 +51,17 @@ pub struct Grid<S: GridStorage> {
     /// Порядок элементов не гарантирован (swap_remove при удалении).
     active_coords_vec: Vec<(usize, usize)>,
     /// Индекс координаты в `active_coords_vec` — для O(1) contains/remove.
-    active_index: HashMap<(usize, usize), usize>,
+    /// `FxHashMap`, а не стандартный `HashMap` (SipHash): чисто внутренняя
+    /// структура на горячем пути (задевается КАЖДЫМ `set_cell` — единственной
+    /// точкой мутации клетки в кодовой базе), координаты не из недоверенного
+    /// источника (см. `fast_hash`).
+    active_index: FxHashMap<(usize, usize), usize>,
     /// Глобальный счётчик поколений. Инкрементится каждый tick.
     /// Используется для вычисления возраста ячейки: age = generation - cell.born_at.
     generation: u64,
-    /// Координаты, изменённые с момента последнего `take_dirty()`.
-    dirty_coords: HashSet<(usize, usize)>,
+    /// Координаты, изменённые с момента последнего `take_dirty()`. FxHashSet
+    /// по той же причине, что и `active_index` — задевается каждым `set_cell`.
+    dirty_coords: FxHashSet<(usize, usize)>,
 }
 
 impl<S: GridStorage + Default> Default for Grid<S> {
@@ -64,9 +70,9 @@ impl<S: GridStorage + Default> Default for Grid<S> {
             storage: S::default(),
             boundaries: HashMap::new(),
             active_coords_vec: Vec::new(),
-            active_index: HashMap::new(),
+            active_index: FxHashMap::default(),
             generation: 0,
-            dirty_coords: HashSet::new(),
+            dirty_coords: FxHashSet::default(),
         }
     }
 }
@@ -76,7 +82,7 @@ impl<S: GridStorage> Grid<S> {
     /// кэшем активных ячеек.
     pub fn new(storage: S, active_coords: HashSet<(usize, usize)>) -> Self {
         let active_coords_vec: Vec<(usize, usize)> = active_coords.iter().copied().collect();
-        let active_index: HashMap<(usize, usize), usize> = active_coords_vec
+        let active_index: FxHashMap<(usize, usize), usize> = active_coords_vec
             .iter()
             .enumerate()
             .map(|(i, &coord)| (coord, i))
@@ -89,9 +95,11 @@ impl<S: GridStorage> Grid<S> {
             generation: 0,
             // Начальные активные ячейки ещё ни разу не сканировались —
             // считаем их "грязными", чтобы первый detect_matches увидел их
-            // (эквивалентно полному скану на первом тике). Move, а не clone:
-            // active_coords больше не нужен после построения Vec/индекса выше.
-            dirty_coords: active_coords,
+            // (эквивалентно полному скану на первом тике). Публичная
+            // сигнатура принимает стандартный `HashSet` (стабильность API),
+            // внутреннее поле — `FxHashSet` (см. её doc-комментарий) — здесь
+            // одноразовая конвертация при конструировании, не на горячем пути.
+            dirty_coords: active_coords.into_iter().collect(),
         }
     }
 
@@ -131,13 +139,13 @@ impl<S: GridStorage> Grid<S> {
     /// Извлечь и очистить множество "грязных" (изменённых с прошлого вызова)
     /// координат. Используется `engine::run_tick` для построения
     /// инкрементального кандидатного множества для detect_matches.
-    pub(crate) fn take_dirty(&mut self) -> HashSet<(usize, usize)> {
+    pub(crate) fn take_dirty(&mut self) -> FxHashSet<(usize, usize)> {
         std::mem::take(&mut self.dirty_coords)
     }
 
     /// Посмотреть на текущее "грязное" множество, не извлекая (не очищая)
     /// его — в отличие от `take_dirty`, безопасно вызывать многократно.
-    pub(crate) fn peek_dirty(&self) -> HashSet<(usize, usize)> {
+    pub(crate) fn peek_dirty(&self) -> FxHashSet<(usize, usize)> {
         self.dirty_coords.clone()
     }
 

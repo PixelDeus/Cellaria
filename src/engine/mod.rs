@@ -2,7 +2,7 @@ pub mod applicator;
 pub mod arbitrator;
 pub mod matcher;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::conflict_analyzer::build_rule_data_cache;
 use crate::fast_hash::{FxHashMap, FxHashSet};
@@ -978,7 +978,7 @@ fn build_candidates<S: GridStorage>(
     };
 
     if !cache.min_age_gated_types.is_empty() {
-        let mut seen: std::collections::HashSet<(usize, usize)> =
+        let mut seen: FxHashSet<(usize, usize)> =
             candidates.iter().copied().collect();
         for &(x, y) in grid.active_coords() {
             if seen.contains(&(x, y)) {
@@ -1017,7 +1017,7 @@ fn build_candidates<S: GridStorage>(
 /// клетки это означало бы прогон `expand_neighborhood` над всеми 250 000
 /// координатами без какой-либо дополнительной пользы.
 fn dirty_base_and_radius<S: GridStorage>(
-    dirty: HashSet<(usize, usize)>,
+    dirty: FxHashSet<(usize, usize)>,
     grid: &Grid<S>,
     cache: &SearchRadiusCache,
 ) -> (Vec<(usize, usize)>, i32) {
@@ -1126,7 +1126,7 @@ fn expand_neighborhood<S: GridStorage>(
         return result;
     }
 
-    let mut set = std::collections::HashSet::new();
+    let mut set: FxHashSet<(usize, usize)> = FxHashSet::default();
     for &(x, y) in coords {
         for dx in -radius..=radius {
             for dy in -radius..=radius {

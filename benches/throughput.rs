@@ -5,7 +5,7 @@ use criterion::Criterion;
 
 use cellaria::engine::run_tick;
 use cellaria::Grid;
-use cellaria::VecStorage;
+use cellaria::{ChunkStorage, VecStorage};
 use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Direction, Rule, ShiftSpec};
 
 use crate::helpers;
@@ -35,6 +35,16 @@ fn window_micros(normal: u128) -> u128 {
 // это его штатный режим работы.
 // ============================================================================
 
+/// Двухтактный осциллятор 1,2⇄3,4 — та же причина, что и у
+/// `setup_single_cell` (см. её doc-комментарий): без обратного правила
+/// решётка целиком конвертируется 1,2→3,4 на первом же тике, для типов 3/4
+/// правил нет, и все последующие тики в измерительном окне пустые.
+/// `max_throughput_no_shift` тогда мерил не устойчивый throughput, а
+/// "количество совпадений одного-единственного реального тика, делённое на
+/// window_micros" — число, которое зависит почти исключительно от N² и
+/// почти не зависит от реальной скорости повторного тикания. Найдено при
+/// сверке с Engine-путём: тот же паттерн, что уже был явно диагностирован
+/// и исправлен для 1E, просто не перенесён сюда при добавлении 1A.
 fn setup_no_shift(n: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
     let storage = VecStorage::new(n, n);
     let mut grid = Grid::new(storage, HashSet::new());
@@ -49,7 +59,7 @@ fn setup_no_shift(n: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) 
         }
     }
 
-    let rule = Rule {
+    let forward = Rule {
         id: vec![CellType(1), CellType(2)],
         pattern: vec![(0i8, 0i8, CellType(1)), (1i8, 0i8, CellType(2))],
         shifts: vec![],
@@ -62,12 +72,34 @@ fn setup_no_shift(n: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) 
         min_age: 0,
         overflow: Default::default(),
     };
+    let backward = Rule {
+        id: vec![CellType(3), CellType(4)],
+        pattern: vec![(0i8, 0i8, CellType(3)), (1i8, 0i8, CellType(4))],
+        shifts: vec![],
+        changes: vec![
+            (0, 0, ChangeValue::Literal(1)),
+            (1, 0, ChangeValue::Literal(2)),
+        ],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+    };
 
-    (grid, helpers::make_rule_index(vec![rule]))
+    (grid, helpers::make_rule_index(vec![forward, backward]))
 }
 
-fn setup_with_shift(n: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
-    let mut grid = helpers::make_grid(n + 2, 1);
+/// `ChunkStorage` (безграничная), а не `VecStorage` — сценарий "лента,
+/// N ячеек сдвигаются вправо" на ОГРАНИЧЕННОЙ решётке шириной `n+2`
+/// неизбежно упирается в правый край: клетки, доходящие до границы,
+/// теряются (`OverflowAction::Discard` по умолчанию), фронт истончается и
+/// гаснет — измерено: при N=100 последнее реальное совпадение на тике
+/// ~136, дальше окно бенчмарка (100ms, тысячи тиков) меряет уже ничего не
+/// делающие пустые тики, то есть в основном стену, а не устойчивый
+/// throughput. На безграничной решётке той же лишний край просто
+/// отсутствует — активность подтверждена сохраняющейся 2000+ тиков подряд.
+fn setup_with_shift(n: usize) -> (Grid<ChunkStorage>, HashMap<CellType, Vec<Rule>>) {
+    let mut grid = Grid::new(ChunkStorage::new(), Default::default());
     for i in 0..n {
         grid.set_cell(i, 0, Cell {
             value: CellValue(CellType(1)),

@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use rayon::prelude::*;
 
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::grid::Grid;
 use crate::storage::GridStorage;
 use crate::types::{Cell, CellType, Rule, RuleMatch};
@@ -22,7 +23,12 @@ pub(crate) struct GroupData {
     rule_meta: Vec<(u64, bool)>,
     effective_patterns: Vec<Vec<(i8, i8, CellType)>>,
     all_offsets: Vec<(i8, i8)>,
-    offset_map: HashMap<(i8, i8), usize>,
+    /// `FxHashMap`/`FxHashSet` здесь и ниже (`exact_lookup`, `GroupCache`) —
+    /// не стандартный `HashMap` (SipHash): всё это горячий путь `match_cell`
+    /// (задевается на КАЖДУЮ проверяемую клетку каждый тик), ключи — offset'ы
+    /// или упакованные окрестности, не из недоверенного источника (см.
+    /// `fast_hash`).
+    offset_map: FxHashMap<(i8, i8), usize>,
     /// Упакованные паттерны (u128) для паттернов ≤ 16 ячеек. Пусто, если
     /// в группе есть паттерн длиннее — тогда используется fallback-цикл.
     /// 16, а не 8: паттерн Game of Life (центр + 8 соседей) — это уже 9
@@ -48,7 +54,7 @@ pub(crate) struct GroupData {
     /// первое правило само по себе полностью специфицировано. Теперь то, что
     /// можно проверить одним lookup, проверяется им; для оставшихся
     /// (`fallback_rules`) — как и раньше, `packed_patterns`/`effective_patterns`.
-    exact_lookup: Option<HashMap<u128, Vec<usize>>>,
+    exact_lookup: Option<FxHashMap<u128, Vec<usize>>>,
     /// Индексы правил группы, НЕ покрытых `exact_lookup` (wildcard-паттерн
     /// либо паттерн > 16 клеток) — единственные, кому всё ещё нужен перебор.
     /// Пусто, если группа целиком покрыта `exact_lookup`.
@@ -59,7 +65,7 @@ pub(crate) struct GroupData {
 /// Построение (`build_group_data`) не бесплатно (клонирует паттерны,
 /// строит offset-карты) — `Engine` строит это один раз и переиспользует
 /// между тиками (см. `Engine::group_cache`), как уже делает с `rule_cache`.
-pub(crate) type GroupCache = HashMap<CellType, GroupData>;
+pub(crate) type GroupCache = FxHashMap<CellType, GroupData>;
 
 pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> GroupCache {
     rule_index
@@ -86,7 +92,7 @@ pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> Gro
 
             // Собираем все уникальные смещения (dx, dy) для группы правил
             let mut all_offsets: Vec<(i8, i8)> = Vec::new();
-            let mut offset_set: HashSet<(i8, i8)> = HashSet::new();
+            let mut offset_set: FxHashSet<(i8, i8)> = FxHashSet::default();
             for pat in &effective_patterns {
                 for &(dx, dy, _) in pat {
                     if offset_set.insert((dx, dy)) {
@@ -96,7 +102,7 @@ pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> Gro
             }
 
             // Карта: смещение → индекс в all_offsets / cache
-            let offset_map: HashMap<(i8, i8), usize> = all_offsets
+            let offset_map: FxHashMap<(i8, i8), usize> = all_offsets
                 .iter()
                 .enumerate()
                 .map(|(i, &o)| (o, i))
@@ -137,7 +143,7 @@ pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> Gro
                 } else {
                     (1u128 << (8 * all_offsets.len() as u32)) - 1
                 };
-                let mut lookup: HashMap<u128, Vec<usize>> = HashMap::new();
+                let mut lookup: FxHashMap<u128, Vec<usize>> = FxHashMap::default();
                 let mut fallback = Vec::new();
                 for (idx, &(packed, mask)) in packed_patterns.iter().enumerate() {
                     if mask == full_mask {

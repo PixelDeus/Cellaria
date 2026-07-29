@@ -1,5 +1,5 @@
+use crate::fast_hash::FxHashMap;
 use crate::types::Cell;
-use std::collections::HashMap;
 
 /// Абстракция хранилища ячеек решётки.
 ///
@@ -158,7 +158,11 @@ impl Chunk {
 /// Не-дефолтные ячейки хранятся как `Some(Cell)`, дефолтные — как `None`.
 #[derive(Clone)]
 pub struct ChunkStorage {
-    chunks: HashMap<(usize, usize), Chunk>,
+    /// `FxHashMap`, а не стандартный `HashMap` (SipHash) — приватное поле на
+    /// горячем пути: КАЖДЫЙ `get`/`set` на этом storage делает lookup по
+    /// координате чанка, а координаты не из недоверенного источника (см.
+    /// `fast_hash`).
+    chunks: FxHashMap<(usize, usize), Chunk>,
     default_cell: Cell,
 }
 
@@ -172,7 +176,7 @@ impl ChunkStorage {
     /// Создать пустое хранилище.
     pub fn new() -> Self {
         Self {
-            chunks: HashMap::new(),
+            chunks: FxHashMap::default(),
             default_cell: Cell::default(),
         }
     }
