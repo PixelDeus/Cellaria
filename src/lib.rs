@@ -93,6 +93,8 @@ pub mod engine;
 pub mod error;
 mod fast_hash;
 mod grid;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 pub mod render;
 pub mod tm_translator;
 pub mod rule_store;
