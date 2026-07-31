@@ -4,8 +4,15 @@ use std::collections::HashMap;
 use rayon::prelude::*;
 
 use crate::conflict_analyzer::{get_rule_data, RuleDataCache};
-use crate::fast_hash::FxHashSet;
+use crate::engine::matcher::CamPositions;
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::types::{CellType, OverflowAction, Rule, RuleMatch};
+
+/// Счётчики "сколько тиков подряд этот матч проигрывал арбитраж" — см.
+/// doc-комментарий `Engine::starvation_counters` и `Rule::starvation_after`.
+/// Ключ — тот же `(x, y, rule_idx)`, что и у `CamPositions` (позиция матча +
+/// индекс сработавшего правила).
+pub(crate) type StarvationCounters = FxHashMap<(u32, u32, usize), u32>;
 
 /// Ниже этого числа матчей накладные расходы rayon (work-stealing,
 /// синхронизация пула потоков) не окупаются — та же логика, что и
@@ -14,6 +21,25 @@ use crate::types::{CellType, OverflowAction, Rule, RuleMatch};
 /// для симметрии — оба места про запуск потоков на маленьком объёме
 /// работы).
 const PARALLEL_SORT_THRESHOLD: usize = 1024;
+
+/// Модуль для вращения `Rule::tie_break` по поколениям (см. её doc-комментарий
+/// в `types.rs`). КРИТИЧНО, что CPU и GPU (`shader.wgsl::TIE_BREAK_MODULUS`)
+/// используют ОДНО И ТО ЖЕ число — иначе побитовое совпадение результатов
+/// сломается на любом правиле, где `tie_break != 0`.
+///
+/// Небольшая степень двойки, а не большое простое: для ДВУХ соперничающих
+/// правил с residues `a` и `a+d (mod M)` победитель меняется РОВНО в те `d`
+/// поколений из каждого периода `M`, где сложение с generation переносит
+/// меньший residue через границу модуля раньше большего — то есть частота
+/// чередования определяется РАЗНОСТЬЮ `d`, не абсолютным размером `M`.
+/// Отсюда рецепт для СТРОГО поровну (50/50) чередования двух правил:
+/// расставить их `tie_break` РОВНО на `M/2` друг от друга (например, `0` и
+/// `8` при `M=16` — proверено `test_tie_break_rotates_fairly_when_spaced_half_modulus_apart`).
+/// Для K-стороннего round-robin — на `M/K` друг от друга. Небольшой модуль
+/// делает это наблюдаемым за единицы-десятки тиков (а не сотни/тысячи, как
+/// было бы при большом простом), и `& (M-1)` дешевле `%` на GPU, раз `M` —
+/// степень двойки.
+pub(crate) const TIE_BREAK_MODULUS: u32 = 16;
 
 /// Выбрать непротиворечивый набор совпадений.
 ///
@@ -41,6 +67,46 @@ pub fn arbitrate(
     rule_index: &HashMap<CellType, Vec<Rule>>,
     rule_cache: &RuleDataCache,
     bounds: (usize, usize),
+    get_cell_age: impl Fn(usize, usize) -> u32,
+) -> Vec<RuleMatch> {
+    // generation=0: без реального счётчика поколений `tie_break` вырождается
+    // в постоянное значение (см. doc-комментарий `Rule::tie_break`) —
+    // корректно (не паникует, не расходится с CPU-эталоном), просто не
+    // вращается между вызовами; только `run_tick`/`Engine::run_tick` знают
+    // настоящее поколение (см. doc-комментарий `arbitrate_with_cam` про ту
+    // же причину для `cam_positions`). Пустая `StarvationCounters` — та же
+    // история: свободная функция не хранит состояние МЕЖДУ вызовами, так что
+    // `Rule::starvation_after` для нeё всегда no-op (см. её doc-комментарий).
+    arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, &CamPositions::default(), 0, &StarvationCounters::default(), get_cell_age)
+}
+
+/// Как [`arbitrate`], но с картой найденных CAM-позиций (см.
+/// `matcher::detect_cam_matches`) — `CamPositions` опирается на
+/// `pub(crate) FxHashMap`, так что не может появиться в сигнатуре ПУБЛИЧНОЙ
+/// `arbitrate` без утечки приватности типа наружу; только `run_tick`/
+/// `Engine::run_tick` имеют что сюда передать (см. doc-комментарий
+/// `Engine::detect_matches`), поэтому `arbitrate` остаётся с прежней
+/// сигнатурой и просто подставляет пустую карту.
+///
+/// `generation` — текущее поколение (см. `grid.generation()`), используется
+/// ТОЛЬКО для вращения `Rule::tie_break` (см. её doc-комментарий и
+/// `TIE_BREAK_MODULUS`); не влияет ни на что другое в арбитраже.
+///
+/// `starvation_counters` — см. `Rule::starvation_after` и
+/// `Engine::starvation_counters`: для матча с `counters[(x,y,rule_idx)] >=
+/// rule.starvation_after`, эффективный priority на ЭТОТ тик становится
+/// `u32::MAX` (побеждает гарантированно). Обновление счётчиков (инкремент
+/// проигравших, сброс выигравших) — забота ВЫЗЫВАЮЩЕЙ стороны
+/// (`run_tick_with_cache`), не этой функции: она только ЧИТАЕТ счётчики.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn arbitrate_with_cam(
+    all_matches: Vec<RuleMatch>,
+    rule_index: &HashMap<CellType, Vec<Rule>>,
+    rule_cache: &RuleDataCache,
+    bounds: (usize, usize),
+    cam_positions: &CamPositions,
+    generation: u32,
+    starvation_counters: &StarvationCounters,
     get_cell_age: impl Fn(usize, usize) -> u32,
 ) -> Vec<RuleMatch> {
     if all_matches.is_empty() {
@@ -106,12 +172,18 @@ pub fn arbitrate(
     let mut keyed: Vec<_> = all_matches
         .iter()
         .map(|m| {
-            let (priority, rule_id) = resolve_priority_and_rule_id(m, rule_index);
+            let (priority, tie_break, rule_id) = resolve_sort_fields(m, rule_index, starvation_counters);
             let age = get_cell_age(m.x as usize, m.y as usize);
+            // Вращаем ОДИН раз здесь (decorate-sort-undecorate), не внутри
+            // компаратора сортировки — тот вызывается O(n log n) раз, а
+            // повёрнутое значение матча не меняется в течение ОДНОГО вызова
+            // arbitrate (одно и то же generation для всех матчей тика).
+            let tie_break_rotated = tie_break.wrapping_add(generation) % TIE_BREAK_MODULUS;
             (
                 (
                     Reverse(priority),
                     Reverse(age),
+                    Reverse(tie_break_rotated),
                     Reverse(rule_id),
                     Reverse(m.x),
                     Reverse(m.y),
@@ -133,7 +205,7 @@ pub fn arbitrate(
     let mut affected: Vec<(i32, i32)> = Vec::new();
     for m in sorted {
         // Получаем предвычисленные affected cells из кэша
-        get_match_affected_cells(&m, rule_index, rule_cache, bounds, &mut affected);
+        get_match_affected_cells(&m, rule_index, rule_cache, bounds, cam_positions, &mut affected);
         let conflict = affected.iter().any(|coord| used_cells.contains(coord));
 
         if !conflict {
@@ -145,6 +217,131 @@ pub fn arbitrate(
     accepted
 }
 
+/// Ниже какого числа матчей разбиение на полосы не окупается — сама
+/// сортировка (уже O(M log M), параллельная выше `PARALLEL_SORT_THRESHOLD`)
+/// и линейный проход дешевле накладных расходов на классификацию
+/// core/boundary плюс rayon-диспетчеризацию нескольких независимых
+/// арбитражей вместо одного.
+const SPATIAL_THRESHOLD: usize = 4096;
+
+/// Реализация Theorem 6 (`paper2.md` §6.2, "Spatial Decomposition of
+/// Arbitration") — параллелит САМ арбитраж (не просто пропускает его, как
+/// `Engine::conflict_partners`/`spatial_bypass_split` в `mod.rs`, а именно
+/// распределяет по потокам, когда конфликты реально есть и арбитраж не
+/// может быть пропущен целиком).
+///
+/// `reach` — `K` из Definition 4: наибольшее манхэттенское расстояние от
+/// позиции совпадения до любой клетки в PatternCells ∪ Affected среди ВСЕХ
+/// правил набора (то же самое, что уже вычисляет
+/// `engine::compute_conflict_partners`'s `max_radius` — оба места опираются
+/// на один и тот же `RuleData::bbox`, который включает и паттерн, и запись).
+///
+/// Полосы делятся по оси X с запасом `2K` (Definition 5): совпадение
+/// core к полосе, если до ОБЕИХ границ полосы ≥ 2K по x — тогда его
+/// affected-регион (не более K от центра) физически не может дотянуться ни
+/// до соседней полосы, ни до совпадения, пограничного для своей (Lemma 6).
+/// Такие core-совпадения из РАЗНЫХ полос гарантированно не пересекаются —
+/// их можно арбитрировать независимо и параллельно. Пограничные совпадения
+/// (внутри 2K от какой-либо границы полосы) идут одним общим
+/// последовательным проходом — как и раньше.
+///
+/// Полосы выбираются по РЕАЛЬНОМУ разбросу x-координат матчей этого тика
+/// (не по номинальной ширине решётки) — на `ChunkStorage` номинальная
+/// ширина `usize::MAX`, а сами матчи почти всегда сгруппированы в узкой
+/// области; статичное деление "всей" ширины решётки было бы бессмысленным.
+#[allow(clippy::too_many_arguments)]
+pub fn arbitrate_spatial(
+    all_matches: Vec<RuleMatch>,
+    rule_index: &HashMap<CellType, Vec<Rule>>,
+    rule_cache: &RuleDataCache,
+    bounds: (usize, usize),
+    reach: i32,
+    get_cell_age: impl Fn(usize, usize) -> u32 + Sync,
+) -> Vec<RuleMatch> {
+    arbitrate_spatial_with_cam(all_matches, rule_index, rule_cache, bounds, reach, &CamPositions::default(), 0, &StarvationCounters::default(), get_cell_age)
+}
+
+/// Как [`arbitrate_spatial`], но с картой найденных CAM-позиций — см.
+/// doc-комментарий [`arbitrate_with_cam`] про ту же причину раздельных
+/// публичной/`pub(crate)` версий. `generation`/`starvation_counters` — см.
+/// её doc-комментарий там же.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn arbitrate_spatial_with_cam(
+    all_matches: Vec<RuleMatch>,
+    rule_index: &HashMap<CellType, Vec<Rule>>,
+    rule_cache: &RuleDataCache,
+    bounds: (usize, usize),
+    reach: i32,
+    cam_positions: &CamPositions,
+    generation: u32,
+    starvation_counters: &StarvationCounters,
+    get_cell_age: impl Fn(usize, usize) -> u32 + Sync,
+) -> Vec<RuleMatch> {
+    if all_matches.len() < SPATIAL_THRESHOLD || reach <= 0 {
+        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, get_cell_age);
+    }
+
+    let margin = (2 * reach) as u32;
+    let (min_x, max_x) = all_matches.iter().fold((u32::MAX, 0u32), |(lo, hi), m| (lo.min(m.x), hi.max(m.x)));
+    let spread = max_x.saturating_sub(min_x);
+
+    // Число полос: не больше потоков rayon, и каждая полоса должна быть
+    // хотя бы вдвое шире запаса (иначе в ней в принципе не может быть core-
+    // совпадений — вся полоса окажется boundary, разбиение того не стоит).
+    let max_bands_by_spread = if margin == 0 { usize::MAX } else { (spread / (margin * 2)).max(1) as usize };
+    let num_bands = rayon::current_num_threads().min(max_bands_by_spread).max(1);
+
+    if num_bands < 2 {
+        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, get_cell_age);
+    }
+
+    let band_width = (spread / num_bands as u32).max(1);
+    let band_of = |x: u32| -> usize {
+        (((x - min_x) / band_width) as usize).min(num_bands - 1)
+    };
+    let band_range = |band: usize| -> (u32, u32) {
+        let start = min_x + band as u32 * band_width;
+        let end = if band == num_bands - 1 { max_x + 1 } else { min_x + (band as u32 + 1) * band_width };
+        (start, end)
+    };
+
+    let mut core_by_band: Vec<Vec<RuleMatch>> = (0..num_bands).map(|_| Vec::new()).collect();
+    let mut boundary: Vec<RuleMatch> = Vec::new();
+
+    for m in all_matches {
+        let band = band_of(m.x);
+        let (start, end) = band_range(band);
+        // "Расстояние до ОБЕИХ границ полосы ≥ 2K" (Definition 5) — граница
+        // полосы это [start, end), расстояние до левой — m.x - start,
+        // до правой — (end - 1) - m.x.
+        let dist_left = m.x - start;
+        let dist_right = (end - 1).saturating_sub(m.x);
+        if dist_left >= margin && dist_right >= margin {
+            core_by_band[band].push(m);
+        } else {
+            boundary.push(m);
+        }
+    }
+
+    // Core-полосы — параллельно (Lemma 6: разные полосы никогда не делят
+    // клетки), каждая через тот же детерминированный тотальный порядок.
+    let core_results: Vec<RuleMatch> = core_by_band
+        .into_par_iter()
+        .flat_map(|band_matches| {
+            if band_matches.is_empty() {
+                Vec::new()
+            } else {
+                arbitrate_with_cam(band_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, &get_cell_age)
+            }
+        })
+        .collect();
+
+    // Boundary — один общий последовательный проход, как и раньше.
+    let mut result = core_results;
+    result.extend(arbitrate_with_cam(boundary, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, &get_cell_age));
+    result
+}
+
 /// Приоритет и id правила, сработавшего в данном match'е, — ОДНИМ поиском
 /// в `rule_index`, а не двумя раздельными (как было раньше: `get_priority`
 /// и `resolve_rule_id` каждый делали свой `rule_index.get(&m.head)...`).
@@ -153,13 +350,28 @@ pub fn arbitrate(
 /// Использует `rule_idx`, а не поиск по одной лишь `head` — несколько правил
 /// могут иметь одинаковую голову, и только `rule_idx` однозначно определяет,
 /// какое именно правило сработало.
-fn resolve_priority_and_rule_id(
+///
+/// `priority` возвращается уже с учётом голодания (см. `Rule::starvation_after`
+/// и `Engine::starvation_counters`): если у сработавшего правила это поле
+/// установлено И счётчик проигрышей ЭТОГО конкретного `(x, y, rule_idx)` уже
+/// достиг порога — возвращается `u32::MAX` вместо номинального `rule.priority`,
+/// что гарантирует победу на этот тик (после чего вызывающая сторона сбросит
+/// счётчик — см. `run_tick_with_cache`). Без этого поля (`None`, по умолчанию)
+/// или пока счётчик ниже порога — обычный номинальный `priority`, без изменений.
+fn resolve_sort_fields(
     m: &RuleMatch,
     rule_index: &HashMap<CellType, Vec<Rule>>,
-) -> (u32, RuleIdKey) {
+    starvation_counters: &StarvationCounters,
+) -> (u32, u32, RuleIdKey) {
     match rule_index.get(&m.head).and_then(|rules| rules.get(m.rule_idx)) {
-        Some(rule) => (rule.priority, RuleIdKey::from_id(&rule.id)),
-        None => (0, RuleIdKey::Small([0u8; 16], 0)),
+        Some(rule) => {
+            let priority = match rule.starvation_after {
+                Some(threshold) if starvation_counters.get(&(m.x, m.y, m.rule_idx)).copied().unwrap_or(0) >= threshold => u32::MAX,
+                _ => rule.priority,
+            };
+            (priority, rule.tie_break, RuleIdKey::from_id(&rule.id))
+        }
+        None => (0, 0, RuleIdKey::Small([0u8; 16], 0)),
     }
 }
 
@@ -235,10 +447,23 @@ fn get_match_affected_cells(
     rule_index: &HashMap<CellType, Vec<Rule>>,
     rule_cache: &RuleDataCache,
     bounds: (usize, usize),
+    cam_positions: &CamPositions,
     out: &mut Vec<(i32, i32)>,
 ) {
     out.clear();
     let head = m.head;
+
+    // CAM-матч: точные affected cells — найденная позиция (не
+    // консервативный весь-диск из `RuleData::write_cells`, который годится
+    // только для статического графа конфликтов, см. её doc-комментарий в
+    // `conflict_analyzer.rs`) плюс сама позиция магнита. `cam_positions`
+    // всегда содержит запись для КАЖДОГО CAM-матча, дошедшего сюда — она
+    // заполняется в `detect_cam_matches` синхронно с самим `RuleMatch`.
+    if let Some(&(fx, fy)) = cam_positions.get(&(m.x, m.y, m.rule_idx)) {
+        out.push((fx as i32, fy as i32));
+        out.push((m.x as i32, m.y as i32));
+        return;
+    }
 
     let rule_data = match get_rule_data(rule_cache, head, m.rule_idx) {
         Some(rd) => rd,

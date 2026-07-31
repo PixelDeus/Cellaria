@@ -47,12 +47,18 @@ fn build_universal_machine() -> HashMap<CellType, Vec<Rule>> {
             id: vec![t], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
             changes: vec![], active_only: false, priority: 10, min_age: 0,
             overflow: OverflowAction::Write(0), // неси своё значение как есть
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         }]);
     }
     idx.insert(CellType(255), vec![Rule {
         id: vec![CellType(255)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
         changes: vec![], active_only: false, priority: 10, min_age: 0,
         overflow: OverflowAction::WriteLiteral(0), // единственный, кому нужен буквальный 0
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     }]);
     idx
 }

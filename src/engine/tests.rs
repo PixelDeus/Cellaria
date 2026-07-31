@@ -1,6 +1,6 @@
 use super::*;
 use crate::types::{
-    Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule, ShiftSpec,
+    CamSearch, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule, ShiftSpec,
 };
 use crate::BoundaryBuffer;
 use crate::VecStorage;
@@ -35,6 +35,9 @@ fn test_run_tick() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -65,12 +68,16 @@ fn test_shift_right() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Right,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![],
         active_only: false,
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -102,6 +109,7 @@ fn test_shift_with_change() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Right,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![
             (0, 0, ChangeValue::Literal(1)),
@@ -111,6 +119,9 @@ fn test_shift_with_change() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -154,12 +165,16 @@ fn test_overflow_discard() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Right,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![],
         active_only: false,
         priority: 10,
         min_age: 0,
         overflow: OverflowAction::Discard,
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -185,12 +200,16 @@ fn test_overflow_write() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Right,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![],
         active_only: false,
         priority: 10,
         min_age: 0,
         overflow: OverflowAction::Write(99),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -221,12 +240,16 @@ fn test_overflow_write_literal_zero_fallback() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Right,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![],
         active_only: false,
         priority: 10,
         min_age: 0,
         overflow: OverflowAction::WriteLiteral(0),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -257,12 +280,16 @@ fn test_overflow_write_literal_zero_boundary() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Right,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![],
         active_only: false,
         priority: 10,
         min_age: 0,
         overflow: OverflowAction::WriteLiteral(0),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -301,6 +328,9 @@ fn test_guarded_self_modification_accepts_safe_and_rejects_unsafe() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     }]);
     let mut engine = Engine::new(grid, rule_index);
     engine.enable_guarded_self_modification();
@@ -350,6 +380,9 @@ fn test_self_modification_extending_existing_head_preserves_original() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![original.clone()]));
     engine.enable_self_modification();
@@ -389,7 +422,7 @@ fn test_self_modification_remove_rule_actually_removes() {
     inject(&mut engine, &[10, 1, 50, 0xFF]);
     assert!(engine.rule_index.contains_key(&CellType(50)));
 
-    inject(&mut engine, &[0xF0, 50, 0xFF]); // RemoveRule(50): [OP_REMOVE, id, terminator]
+    inject(&mut engine, &[0xF0, 1, 50, 0xFF]); // RemoveRule(50): [OP_REMOVE, id_len, id, terminator]
     assert!(
         !engine.rule_index.contains_key(&CellType(50)),
         "RemoveRule must actually take effect in rule_index, not just in RuleStore's internal state"
@@ -419,6 +452,9 @@ fn test_self_modification_preserves_rule_added_after_construction() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     engine.rule_index.insert(CellType(1), vec![original.clone()]);
     engine.rebuild_rule_cache();
@@ -462,6 +498,9 @@ fn test_guarded_self_modification_on_chunk_storage() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     }]);
     let mut engine = Engine::new(grid, rule_index);
     engine.enable_guarded_self_modification();
@@ -591,6 +630,9 @@ fn test_detect_termination_active() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -613,6 +655,9 @@ fn test_apply_match() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -654,6 +699,9 @@ fn test_run_tick_simple() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -688,12 +736,16 @@ fn test_io_boundary() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Right,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![(0, 0, ChangeValue::Literal(0))],
         active_only: false,
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -775,6 +827,9 @@ fn test_2d_pattern_match() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let mut grid = make_grid(3, 3);
@@ -838,6 +893,9 @@ fn test_pattern_packing_9_16_17_cells() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     let mut grid9 = make_grid(5, 5);
     for y in 1..=3 {
@@ -875,6 +933,9 @@ fn test_pattern_packing_9_16_17_cells() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     let mut grid16 = make_grid(6, 6);
     for y in 0..4 {
@@ -901,6 +962,9 @@ fn test_pattern_packing_9_16_17_cells() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     let mut grid17 = make_grid(7, 6);
     for y in 0..4 {
@@ -939,6 +1003,7 @@ fn test_nondeterministic_same_priority() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Right,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![
             (0, 0, ChangeValue::Literal(5)),
@@ -948,6 +1013,9 @@ fn test_nondeterministic_same_priority() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_b = Rule {
@@ -956,6 +1024,7 @@ fn test_nondeterministic_same_priority() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Left,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![
             (0, 0, ChangeValue::Literal(5)),
@@ -965,6 +1034,9 @@ fn test_nondeterministic_same_priority() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule_a, rule_b]);
@@ -999,12 +1071,16 @@ fn test_same_id_resolves_actually_matched_rule() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Right,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![],
         active_only: false,
         priority: 20,
         min_age: 100,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     // Ниже приоритет, второй в отсортированном Vec, но именно оно
@@ -1015,12 +1091,16 @@ fn test_same_id_resolves_actually_matched_rule() {
         shifts: vec![vec![ShiftSpec {
             direction: Direction::Left,
             steps: 1,
+            broadcast: false,
         }]],
         changes: vec![],
         active_only: false,
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     let rule_index = make_rule_index(vec![rule_hi, rule_lo]);
@@ -1121,6 +1201,9 @@ fn test_gol_block_still_life() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     let ri = make_rule_index(vec![rule]);
 
@@ -1151,14 +1234,14 @@ fn test_gol_beacon_period2() {
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(2))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let flip_back = Rule {
         id: vec![CellType(2)],
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let ri = make_rule_index(vec![flip, flip_back]);
 
@@ -1192,9 +1275,9 @@ fn test_wireworld_corner() {
     let shift_right = Rule {
         id: vec![CellType(1)],
         pattern: vec![],
-        shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 1 }]],
+        shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false }]],
         changes: vec![],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let ri = make_rule_index(vec![shift_right]);
     run_tick_ca(&mut grid, &ri);
@@ -1224,7 +1307,7 @@ fn test_wireworld_split() {
             (1, 0, ChangeValue::Literal(1)),
             (0, 1, ChangeValue::Literal(1)),
         ],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let ri = make_rule_index(vec![split]);
     run_tick_ca(&mut grid, &ri);
@@ -1248,7 +1331,7 @@ fn test_wave_collision() {
         pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(2))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(0)), (1, 0, ChangeValue::Literal(0))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let ri = make_rule_index(vec![collide]);
     run_tick_ca(&mut grid, &ri);
@@ -1281,7 +1364,7 @@ fn test_wave_obstacle() {
         pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(9))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let ri = make_rule_index(vec![blocked]);
     run_tick_ca(&mut grid, &ri);
@@ -1317,7 +1400,7 @@ fn test_conv_full_pass() {
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(99))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
         });
     }
     let ri = make_rule_index(rules);
@@ -1349,7 +1432,7 @@ fn test_physics_elastic() {
         pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(2))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(2)), (1, 0, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let ri = make_rule_index(vec![exchange]);
     run_tick_ca(&mut grid, &ri);
@@ -1380,7 +1463,7 @@ fn test_physics_gravity() {
         pattern: vec![(0, 0, CellType(1)), (0, 1, CellType(0))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(0)), (0, 1, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let ri = make_rule_index(vec![fall]);
     run_tick_ca(&mut grid, &ri);
@@ -1419,7 +1502,7 @@ fn test_replication_2d() {
             (0, 1, ChangeValue::Literal(1)),
             (0, -1, ChangeValue::Literal(1)),
         ],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let ri = make_rule_index(vec![replicate]);
 
@@ -1441,5 +1524,519 @@ fn test_replication_2d() {
         grid.get_cell(3, 3).map(|c| c.value),
         Some(CellValue(CellType(1))),
         "replication: center should remain alive"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────
+// CAM (content-addressable поиск с ограниченным радиусом)
+// ──────────────────────────────────────────────────────────────
+
+const MAGNET: u8 = 40;
+const TARGET: u8 = 41;
+
+fn magnet_rule(radius: u8, priority: u32) -> Rule {
+    Rule {
+        id: vec![CellType(MAGNET)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![],
+        active_only: false,
+        priority,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: Some(CamSearch { radius, target_type: CellType(TARGET) }),
+        tie_break: 0,
+        starvation_after: None,
+    }
+}
+
+/// Одиночный магнит без конфликтов: находит ближайшую цель в радиусе,
+/// притягивает её — цель очищается, магнит становится типом цели.
+#[test]
+fn test_cam_single_magnet_pulls_nearest_target() {
+    let mut grid = make_grid(10, 1);
+    grid.set_cell(0, 0, Cell::new(MAGNET));
+    grid.set_cell(4, 0, Cell::new(TARGET));
+    let ri = make_rule_index(vec![magnet_rule(5, 0)]);
+    let mut engine = Engine::new(grid, ri);
+
+    engine.run_tick();
+
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(TARGET), "magnet must become the target type");
+    assert_eq!(engine.grid().get_cell(4, 0).map(|c| c.value.0 .0), Some(0), "found cell must be cleared to default");
+}
+
+/// Цель вне радиуса — магнит не находит ничего, остаётся собой.
+#[test]
+fn test_cam_target_outside_radius_no_match() {
+    let mut grid = make_grid(10, 1);
+    grid.set_cell(0, 0, Cell::new(MAGNET));
+    grid.set_cell(6, 0, Cell::new(TARGET));
+    let ri = make_rule_index(vec![magnet_rule(5, 0)]);
+    let mut engine = Engine::new(grid, ri);
+
+    engine.run_tick();
+
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(MAGNET), "magnet unchanged: target out of reach");
+    assert_eq!(engine.grid().get_cell(6, 0).map(|c| c.value.0 .0), Some(TARGET), "target untouched");
+}
+
+/// Два магнита претендуют на ОДНУ цель (обе в радиусе обоих) — арбитраж по
+/// priority решает all-or-nothing, ровно как и для обычных сдвигов
+/// (см. `test_gpu_engine_arbitrated_write_conflict_all_or_nothing`'s
+/// CPU-аналог этого же принципа).
+#[test]
+fn test_cam_two_magnets_conflict_resolved_by_priority() {
+    let mut grid = make_grid(10, 1);
+    grid.set_cell(1, 0, Cell::new(MAGNET)); // низкий priority
+    grid.set_cell(8, 0, Cell::new(MAGNET)); // высокий priority — должен выиграть
+    grid.set_cell(4, 0, Cell::new(TARGET));
+
+    let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
+    idx.insert(CellType(MAGNET), vec![magnet_rule(5, 9), magnet_rule(5, 1)]);
+    // rule_idx=0 (priority=9) и rule_idx=1 (priority=1) — арбитраж должен
+    // предпочесть rule_idx=0 независимо от того, какая клетка его выбрала;
+    // здесь обе клетки могут матчить ОБА rule_idx одной головы MAGNET, так
+    // что тай-брейк реально решает priority самого правила, не позицию.
+    let mut engine = Engine::new(grid, idx);
+
+    engine.run_tick();
+
+    let winner_at_1 = engine.grid().get_cell(1, 0).map(|c| c.value.0 .0) == Some(TARGET);
+    let winner_at_8 = engine.grid().get_cell(8, 0).map(|c| c.value.0 .0) == Some(TARGET);
+    assert!(winner_at_1 ^ winner_at_8, "ровно один магнит должен выиграть цель (all-or-nothing)");
+    assert_eq!(engine.grid().get_cell(4, 0).map(|c| c.value.0 .0), Some(0), "цель в любом случае забрана");
+}
+
+/// Несколько тиков подряд: магнит без цели рядом остаётся собой сколько
+/// угодно тиков, затем "видит" цель, как только она появляется в радиусе —
+/// проверяет, что `max_pattern_radius`/dirty-tracking корректно расширяет
+/// кандидатов на CAM-радиус (см. её doc-комментарий в `engine/mod.rs`),
+/// а не только на радиус обычных паттернов.
+#[test]
+fn test_cam_detects_target_appearing_later_without_touching_magnet() {
+    let mut grid = make_grid(10, 1);
+    grid.set_cell(0, 0, Cell::new(MAGNET));
+    let ri = make_rule_index(vec![magnet_rule(5, 0)]);
+    let mut engine = Engine::new(grid.clone(), ri.clone());
+
+    engine.run_tick();
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(MAGNET), "no target yet");
+
+    // Цель появляется на 3-м тике — НЕ трогая сам магнит, только записывая
+    // клетку TARGET напрямую в решётку (имитирует "что-то ещё" появившееся
+    // рядом, не связанное с магнитом).
+    engine.grid_mut().set_cell(4, 0, Cell::new(TARGET));
+    engine.run_tick();
+
+    assert_eq!(
+        engine.grid().get_cell(0, 0).map(|c| c.value.0 .0),
+        Some(TARGET),
+        "magnet must detect the newly-appeared target even though the magnet cell itself never changed"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────
+// Broadcast-сдвиг (`ShiftSpec::broadcast`)
+// ──────────────────────────────────────────────────────────────
+
+const EMITTER: u8 = 50;
+
+/// Источник очищается, ВСЕ клетки пути (не только финальная) получают
+/// копию значения.
+#[test]
+fn test_broadcast_shift_fills_entire_path() {
+    let mut grid = make_grid(10, 1);
+    grid.set_cell(0, 0, Cell::new(EMITTER));
+    let rule = Rule {
+        id: vec![CellType(EMITTER)],
+        pattern: vec![],
+        shifts: vec![vec![ShiftSpec::broadcast(Direction::Right, 4)]],
+        changes: vec![],
+        active_only: false,
+        priority: 0,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+    };
+    let ri = make_rule_index(vec![rule]);
+    let mut engine = Engine::new(grid, ri);
+    engine.run_tick();
+
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(0), "source must be cleared");
+    for x in 1..=4 {
+        assert_eq!(engine.grid().get_cell(x, 0).map(|c| c.value.0 .0), Some(EMITTER), "cell x={x} on the path must get a copy");
+    }
+    assert_eq!(engine.grid().get_cell(5, 0).map(|c| c.value.0 .0), Some(0), "cell past the path must stay untouched");
+}
+
+/// Обычный (не broadcast) сдвиг с тем же `steps` — контроль: промежуточные
+/// клетки НЕ трогаются, только финальная (существующее поведение, не
+/// должно было измениться).
+#[test]
+fn test_ordinary_shift_skips_intermediate_cells_unlike_broadcast() {
+    let mut grid = make_grid(10, 1);
+    grid.set_cell(0, 0, Cell::new(EMITTER));
+    let rule = Rule {
+        id: vec![CellType(EMITTER)],
+        pattern: vec![],
+        shifts: vec![vec![ShiftSpec::new(Direction::Right, 4)]],
+        changes: vec![],
+        active_only: false,
+        priority: 0,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+    };
+    let ri = make_rule_index(vec![rule]);
+    let mut engine = Engine::new(grid, ri);
+    engine.run_tick();
+
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(0), "source cleared");
+    for x in 1..=3 {
+        assert_eq!(engine.grid().get_cell(x, 0).map(|c| c.value.0 .0), Some(0), "intermediate cell x={x} must stay untouched (ordinary shift = teleport)");
+    }
+    assert_eq!(engine.grid().get_cell(4, 0).map(|c| c.value.0 .0), Some(EMITTER), "only the final target gets the value");
+}
+
+/// Broadcast за пределами решётки: путь заполняется до края, дальше
+/// `OverflowAction::Discard` — головка "теряется" в точке выхода, клетки
+/// пути ДО края уже записаны и не откатываются.
+#[test]
+fn test_broadcast_shift_stops_at_grid_boundary() {
+    let mut grid = make_grid(4, 1); // width=4: x=0..3
+    grid.set_cell(0, 0, Cell::new(EMITTER));
+    let rule = Rule {
+        id: vec![CellType(EMITTER)],
+        pattern: vec![],
+        shifts: vec![vec![ShiftSpec::broadcast(Direction::Right, 10)]], // намного больше решётки
+        changes: vec![],
+        active_only: false,
+        priority: 0,
+        min_age: 0,
+        overflow: OverflowAction::Discard,
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+    };
+    let ri = make_rule_index(vec![rule]);
+    let mut engine = Engine::new(grid, ri);
+    engine.run_tick();
+
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(0), "source cleared");
+    for x in 1..4 {
+        assert_eq!(engine.grid().get_cell(x, 0).map(|c| c.value.0 .0), Some(EMITTER), "cell x={x} within grid bounds must get a copy");
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// "Активный таймер" — доказательство, что это УЖЕ выражается
+// существующими примитивами (min_age / счётная цепочка self-change),
+// не новая возможность модели.
+// ──────────────────────────────────────────────────────────────
+
+const TIMER: u8 = 60;
+const FIRED: u8 = 61;
+
+/// Способ 1 — `min_age` буквально И ЕСТЬ таймер по определению: правило
+/// срабатывает, только когда возраст клетки достиг порога. Клетка стоит
+/// TIMER ровно `THRESHOLD` тиков, затем "выстреливает" в FIRED — без
+/// единого дополнительного механизма.
+#[test]
+fn test_timer_via_min_age_is_already_expressible() {
+    const THRESHOLD: u64 = 5;
+    let mut grid = make_grid(1, 1);
+    grid.set_cell(0, 0, Cell::new(TIMER));
+    let rule = Rule {
+        id: vec![CellType(TIMER)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(0, 0, ChangeValue::Literal(FIRED))],
+        active_only: false,
+        priority: 0,
+        min_age: THRESHOLD,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+    };
+    let ri = make_rule_index(vec![rule]);
+    let mut engine = Engine::new(grid, ri);
+
+    for tick in 0..THRESHOLD {
+        engine.run_tick();
+        assert_eq!(
+            engine.grid().get_cell(0, 0).map(|c| c.value.0 .0),
+            Some(TIMER),
+            "must still be TIMER before threshold (tick={tick})"
+        );
+    }
+    engine.run_tick(); // tick == THRESHOLD: min_age condition finally satisfied
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(FIRED), "must fire exactly at the threshold");
+}
+
+/// Способ 2 — счётная цепочка self-change правил (типы TIMER..TIMER+N-1,
+/// каждый тик +1), для случаев, когда сам счёт должен быть ВИДИМ/читаем
+/// другими правилами по пути (min_age скрыт внутри клетки, недоступен
+/// чтению соседями) — тоже уже существующий примитив, не новый.
+#[test]
+fn test_timer_via_self_change_counting_chain_is_already_expressible() {
+    const N: u8 = 5;
+    let mut grid = make_grid(1, 1);
+    grid.set_cell(0, 0, Cell::new(TIMER));
+    let mut rules = Vec::new();
+    for k in 0..N {
+        let (from, to) = (TIMER + k, if k + 1 == N { FIRED } else { TIMER + k + 1 });
+        rules.push(Rule {
+            id: vec![CellType(from)],
+            pattern: vec![],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(to))],
+            active_only: false,
+            priority: 0,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+        });
+    }
+    let ri = make_rule_index(rules);
+    let mut engine = Engine::new(grid, ri);
+
+    for k in 0..N {
+        engine.run_tick();
+        let expected = if k + 1 == N { FIRED } else { TIMER + k + 1 };
+        assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(expected), "counting chain step {k}");
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// Модульный tie-break в арбитраже (block F, п.3): два правила с ОДИНАКОВЫМ
+// priority, матчащие одну и ту же клетку (тип 1, никогда не меняется — ни
+// одно из правил не пишет в неё саму, только в соседнюю (1,0)) КАЖДЫЙ тик,
+// так что age у обоих матчей тоже всегда совпадает — приоритет и возраст
+// специально уравнены, чтобы изолировать именно tie_break как решающий
+// фактор (иначе он бы никогда не дошёл до сравнения).
+// ──────────────────────────────────────────────────────────────
+
+fn make_tie_break_rules(tie_break_a: u32, tie_break_b: u32) -> HashMap<CellType, Vec<Rule>> {
+    let rule_a = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(1, 0, ChangeValue::Literal(100))],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: tie_break_a,
+        starvation_after: None,
+    };
+    let rule_b = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(1, 0, ChangeValue::Literal(200))],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: tie_break_b,
+        starvation_after: None,
+    };
+    make_rule_index(vec![rule_a, rule_b])
+}
+
+/// tie_break=0 у ОБОИХ правил (значение по умолчанию) не должно менять
+/// старое поведение: арбитраж по-прежнему падает на лексикографический
+/// порядок id/rule_idx, который НЕ зависит от поколения — победитель обязан
+/// быть одним и тем же на каждом тике.
+#[test]
+fn test_tie_break_default_zero_preserves_old_rule_id_order() {
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let mut engine = Engine::new(grid, make_tie_break_rules(0, 0));
+
+    let mut winners = Vec::new();
+    for _ in 0..10 {
+        engine.run_tick();
+        winners.push(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0));
+    }
+    assert!(
+        winners.iter().all(|&w| w == winners[0]),
+        "с tie_break=0 у обоих правил победитель не должен зависеть от поколения: {winners:?}"
+    );
+}
+
+/// Два правила с tie_break, расставленными РОВНО на M/2 друг от друга
+/// (см. doc-комментарий `arbitrator::TIE_BREAK_MODULUS`), должны чередовать
+/// победу СТРОГО поровну за один полный период M поколений — прямая
+/// проверка формулы `(tie_break + generation) % M`, а не просто "иногда
+/// меняется".
+#[test]
+fn test_tie_break_rotates_fairly_when_spaced_half_modulus_apart() {
+    use crate::engine::arbitrator::TIE_BREAK_MODULUS;
+
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let mut engine = Engine::new(grid, make_tie_break_rules(0, TIE_BREAK_MODULUS / 2));
+
+    let (mut a_wins, mut b_wins) = (0u32, 0u32);
+    for gen in 0..TIE_BREAK_MODULUS {
+        engine.run_tick();
+        match engine.grid().get_cell(1, 0).map(|c| c.value.0 .0) {
+            Some(100) => a_wins += 1,
+            Some(200) => b_wins += 1,
+            other => panic!("неожиданное значение (1,0) на поколении {gen}: {other:?}"),
+        }
+    }
+    assert_eq!(a_wins, TIE_BREAK_MODULUS / 2, "правило A должно выигрывать ровно половину периода");
+    assert_eq!(b_wins, TIE_BREAK_MODULUS / 2, "правило B должно выигрывать ровно половину периода");
+}
+
+// ──────────────────────────────────────────────────────────────
+// Опциональный temporal arbitration против голодания по РАЗНОМУ приоритету
+// (block F, п.5) — в отличие от tie_break (решает только РАВНЫЙ приоритет),
+// здесь HIGH (priority=20) и LOW (priority=5) конкурируют за одну и ту же
+// клетку каждый тик; без starvation_after HIGH обязан побеждать НАВСЕГДА
+// (priority — первое и решающее поле ключа сортировки).
+// ──────────────────────────────────────────────────────────────
+
+fn make_starvation_rules(low_starvation_after: Option<u32>) -> HashMap<CellType, Vec<Rule>> {
+    let rule_high = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(1, 0, ChangeValue::Literal(100))],
+        active_only: false,
+        priority: 20,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+    };
+    let rule_low = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(1, 0, ChangeValue::Literal(200))],
+        active_only: false,
+        priority: 5,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: low_starvation_after,
+    };
+    make_rule_index(vec![rule_high, rule_low])
+}
+
+/// Без `starvation_after` (значение по умолчанию, `None`) более низкий
+/// priority обязан проигрывать НАВСЕГДА — это сам факт голодания, который
+/// п.5 призван решать; проверяем, что проблема РЕАЛЬНО существует без
+/// защиты (негативный контроль), а не просто что защита работает.
+#[test]
+fn test_without_starvation_guard_low_priority_never_wins() {
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let mut engine = Engine::new(grid, make_starvation_rules(None));
+
+    for tick in 0..30 {
+        engine.run_tick();
+        assert_eq!(
+            engine.grid().get_cell(1, 0).map(|c| c.value.0 .0),
+            Some(100),
+            "без starvation_after HIGH должен побеждать абсолютно всегда (тик {tick}) — иначе голодание не доказано"
+        );
+    }
+}
+
+/// `starvation_after = Some(K)` на LOW: проигрывает K тиков подряд, потом
+/// гарантированно побеждает РОВНО на (K+1)-м тике (эффективный priority в
+/// этот тик становится u32::MAX), после чего счётчик сбрасывается и цикл
+/// повторяется — строго периодический паттерн побед на тиках K+1, 2(K+1),
+/// 3(K+1), ... — прямая проверка формулы, а не просто "хоть раз победил".
+#[test]
+fn test_starvation_guard_guarantees_periodic_progress() {
+    const K: u32 = 3;
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let mut engine = Engine::new(grid, make_starvation_rules(Some(K)));
+
+    let mut low_wins_at = Vec::new();
+    const TOTAL_TICKS: u32 = 20;
+    for tick in 1..=TOTAL_TICKS {
+        engine.run_tick();
+        match engine.grid().get_cell(1, 0).map(|c| c.value.0 .0) {
+            Some(200) => low_wins_at.push(tick),
+            Some(100) => {}
+            other => panic!("неожиданное значение (1,0) на тике {tick}: {other:?}"),
+        }
+    }
+
+    let expected: Vec<u32> = (1..=TOTAL_TICKS).filter(|t| t % (K + 1) == 0).collect();
+    assert_eq!(low_wins_at, expected, "LOW должен побеждать РОВНО каждый (K+1)-й тик, не чаще и не реже");
+}
+
+/// Block G, п.3 ("грубость повторной проверки min_age"): регрессионный тест
+/// на РЕАЛЬНЫЙ механизм, который эту "грубость" устраняет —
+/// `min_age_gated_types` в `SearchRadiusCache` заставляет
+/// `resolve_search_coords_advance` каждый тик безусловно досканировать ВСЕ
+/// активные клетки типов, у которых есть хоть одно правило с `min_age > 0`,
+/// независимо от dirty-состояния (см. `build_candidates` в `engine/mod.rs`).
+///
+/// Клетка-таймер стоит ОДНА на большой (50×1) решётке, далеко от края и без
+/// единой другой активной клетки рядом — обычное dirty-расширение (радиус
+/// вокруг недавних изменений) в принципе не может её найти, ей неоткуда
+/// взяться в кандидатах, КРОМЕ безусловного пересканирования по типу.
+/// Если бы этот механизм был сломан или удалён, клетка осталась бы TIMER
+/// НАВСЕГДА (её тип никогда не помечается dirty, никто рядом не меняется) —
+/// тест ловит именно такую регрессию, а не просто "min_age вообще работает"
+/// (для этого хватило бы уже существующего теста на 1×1 решётке).
+#[test]
+fn test_min_age_gated_cell_matures_exactly_on_time_when_isolated_on_sparse_grid() {
+    const THRESHOLD: u64 = 7;
+    const ISOLATED_X: usize = 40;
+
+    let mut grid = make_grid(50, 1);
+    grid.set_cell(ISOLATED_X, 0, Cell::new(TIMER));
+    let rule = Rule {
+        id: vec![CellType(TIMER)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(0, 0, ChangeValue::Literal(FIRED))],
+        active_only: false,
+        priority: 0,
+        min_age: THRESHOLD,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+    };
+    let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
+
+    for tick in 0..THRESHOLD {
+        engine.run_tick();
+        assert_eq!(
+            engine.grid().get_cell(ISOLATED_X, 0).map(|c| c.value.0 .0),
+            Some(TIMER),
+            "изолированная клетка должна оставаться TIMER до порога (тик {tick}) — если это не так, вероятно \
+             сработал ложный full-scan или клетка вообще не переоценивалась и осталась бы TIMER навсегда"
+        );
+    }
+    engine.run_tick(); // tick == THRESHOLD
+    assert_eq!(
+        engine.grid().get_cell(ISOLATED_X, 0).map(|c| c.value.0 .0),
+        Some(FIRED),
+        "изолированная клетка обязана дозреть РОВНО на пороговом тике, несмотря на отсутствие какой-либо \
+         соседней активности, которая могла бы её случайно пометить dirty"
     );
 }

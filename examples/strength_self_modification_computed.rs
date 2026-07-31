@@ -64,6 +64,9 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             priority: 10,
             min_age: 0,
             overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         }],
     );
 
@@ -87,6 +90,9 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             priority: 20,
             min_age: 0,
             overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         });
 
         // Тихо (никто не прилетал QUIET_THRESHOLD тиков) — перевести
@@ -104,6 +110,9 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 priority: 10,
                 min_age: QUIET_THRESHOLD,
                 overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
             });
         }
         idx.insert(counter_id, rules);
@@ -123,6 +132,9 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 priority: 10,
                 min_age: 0,
                 overflow: OverflowAction::Write(0),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
             }],
         );
     }
@@ -140,6 +152,9 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 priority: 10,
                 min_age: 0,
                 overflow: OverflowAction::Write(byte),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
             }],
         );
     }

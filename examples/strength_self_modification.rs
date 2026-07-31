@@ -68,6 +68,9 @@ fn main() {
                 priority: 10,
                 min_age: 0,
                 overflow: OverflowAction::Write(byte),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
             }],
         );
     }

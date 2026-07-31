@@ -22,7 +22,7 @@ fn main() {
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(2))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule_1_to_2]);
@@ -40,7 +40,7 @@ fn main() {
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(3))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     };
     engine.rule_index.insert(CellType(2), vec![rule_2_to_3]);
     engine.rebuild_rule_cache(); // сама будит все активные клетки — см. её doc-комментарий

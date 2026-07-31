@@ -104,6 +104,9 @@ pub fn translate_tm(
             priority: 10,
             min_age: 0,
             overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         });
     }
 

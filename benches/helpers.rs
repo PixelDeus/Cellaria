@@ -69,6 +69,9 @@ pub fn turing_rules(n: usize) -> Vec<Rule> {
             priority: 10,
             min_age: 0,
             overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         });
         state += 1;
     }
@@ -87,6 +90,9 @@ pub fn simple_turing_rules(n: usize) -> Vec<Rule> {
             priority: 10,
             min_age: 0,
             overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         })
         .collect()
 }
@@ -107,6 +113,9 @@ pub fn tag_rules(len: usize) -> Vec<Rule> {
             priority: 10,
             min_age: 0,
             overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         })
         .collect()
 }
@@ -139,6 +148,9 @@ pub fn priority_conflict_rules(m: usize) -> Vec<Rule> {
             priority: i as u32,
             min_age: 0,
             overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         })
         .collect();
     rules.push(Rule {
@@ -150,6 +162,9 @@ pub fn priority_conflict_rules(m: usize) -> Vec<Rule> {
         priority: 0,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     });
     rules
 }
@@ -265,6 +280,9 @@ pub fn replication_rules(len: usize) -> Vec<Rule> {
             priority: 10,
             min_age: 0,
             overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         })
         .collect()
 }

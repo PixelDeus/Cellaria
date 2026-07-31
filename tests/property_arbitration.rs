@@ -36,8 +36,8 @@ use std::collections::{HashMap, HashSet};
 use proptest::prelude::*;
 
 use cellaria::conflict_analyzer::{build_rule_data_cache, get_rule_data, ConflictGraph};
-use cellaria::engine::{apply_matches, arbitrate, detect_matches};
-use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule, ShiftSpec};
+use cellaria::engine::{apply_matches, arbitrate, arbitrate_spatial, detect_matches};
+use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule, RuleMatch, ShiftSpec};
 use cellaria::{Grid, VecStorage};
 
 const CELL_ALPHABET: u8 = 4; // типы клеток: 1..=CELL_ALPHABET (0 зарезервирован как "пусто")
@@ -127,6 +127,9 @@ fn rule_strategy() -> impl Strategy<Value = Rule> {
                 priority,
                 min_age,
                 overflow,
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
             }
         })
 }
@@ -568,4 +571,99 @@ fn reference_full_scan_tick(grid: &mut Grid<VecStorage>, rule_index: &HashMap<Ce
             }
         }
     }
+}
+
+// ============================================================================
+// arbitrate_spatial (Theorem 6, paper2.md §6.2) — крупномасштабная проверка
+// ============================================================================
+//
+// `arbitrate_spatial` ниже `SPATIAL_THRESHOLD` (4096 матчей) просто зовёт
+// `arbitrate` напрямую — существующие property-тесты выше (решётки 4×4..8×8)
+// никогда не производят столько матчей и НИКОГДА не задевают реальное
+// разбиение на полосы. Эта проверка — единственная, что реально прогоняет
+// код полос: тысячи матчей, множество независимых "кластеров" конфликта
+// (M конкурирующих правил на одной клетке — как `configs`'ный сценарий
+// приоритетного конфликта), разнесённых далеко друг от друга по x.
+
+fn conflict_cluster_rule_index(m: usize) -> (HashMap<CellType, Vec<Rule>>, cellaria::conflict_analyzer::RuleDataCache) {
+    // M правил, все читают (0,0)=1 И (1,0)=2 (radius=1, чтобы `reach` не был
+    // тривиальным нулём), конкурируют по приоритету за клетку (0,0).
+    let rules: Vec<Rule> = (0..m)
+        .map(|i| Rule {
+            id: vec![CellType(1)],
+            pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(2))],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal((i % 250 + 1) as u8))],
+            active_only: false,
+            priority: i as u32,
+            min_age: 0,
+            overflow: OverflowAction::Discard,
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+        })
+        .collect();
+    let rule_index = make_rule_index(&rules);
+    let rule_cache = build_rule_data_cache(&rule_index);
+    (rule_index, rule_cache)
+}
+
+#[test]
+fn test_arbitrate_spatial_matches_centralized_many_isolated_clusters() {
+    let (rule_index, rule_cache) = conflict_cluster_rule_index(5);
+    const N_CLUSTERS: u32 = 1500; // 1500 * 5 = 7500 матчей > SPATIAL_THRESHOLD
+    const SPACING: u32 = 1000; // >> 2*reach — кластеры гарантированно независимы
+    const REACH: i32 = 1;
+
+    let mut matches: Vec<RuleMatch> = Vec::new();
+    for cluster in 0..N_CLUSTERS {
+        let x = cluster * SPACING;
+        for rule_idx in 0..5usize {
+            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+        }
+    }
+
+    let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(2654435761) % 7; // произвольный, но детерминированный "возраст"
+
+    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
+    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), REACH, get_age);
+
+    let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+    let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+
+    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+    assert_eq!(centralized_set, spatial_set, "разбиение на полосы должно принимать РОВНО ТЕ ЖЕ матчи, что централизованный арбитраж");
+
+    // Ровно один победитель на кластер (M конкурирующих правил за одну клетку).
+    assert_eq!(spatial.len() as u32, N_CLUSTERS, "должен победить ровно один матч на кластер");
+}
+
+#[test]
+fn test_arbitrate_spatial_matches_centralized_dense_adjacent_clusters() {
+    // То же самое, но кластеры расположены ПЛОТНО (spacing=2, сравнимо с
+    // 2*reach=2) — многие матчи должны попасть в boundary-класс, а не core,
+    // проверяя именно пограничный, последовательный путь.
+    let (rule_index, rule_cache) = conflict_cluster_rule_index(3);
+    const N_CLUSTERS: u32 = 3000;
+    const SPACING: u32 = 2;
+    const REACH: i32 = 1;
+
+    let mut matches: Vec<RuleMatch> = Vec::new();
+    for cluster in 0..N_CLUSTERS {
+        let x = cluster * SPACING;
+        for rule_idx in 0..3usize {
+            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+        }
+    }
+
+    let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(40503) % 5;
+
+    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
+    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), REACH, get_age);
+
+    let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+    let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+
+    assert_eq!(centralized.len(), spatial.len());
+    assert_eq!(centralized_set, spatial_set, "плотная упаковка (много boundary-матчей) не должна расходиться с централизованным арбитражем");
 }

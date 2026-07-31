@@ -35,7 +35,7 @@ fn active_rule(steps: u16) -> HashMap<CellType, Vec<Rule>> {
     idx.insert(CellType(ACTIVE), vec![Rule {
         id: vec![CellType(ACTIVE)], pattern: vec![],
         shifts: vec![vec![ShiftSpec::new(Direction::Right, steps)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(),
+        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
     }]);
     idx
 }

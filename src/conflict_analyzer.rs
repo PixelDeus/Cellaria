@@ -322,7 +322,33 @@ pub struct RuleData {
 }
 
 /// Вычислить все данные для правила.
+///
+/// `cam`-правила — отдельная ветка: их реальная запись зависит от
+/// содержимого решётки в рантайме (найденная клетка), а не от фиксированных
+/// офсетов, так что `affected_cells`/`write_cells` здесь — КОНСЕРВАТИВНАЯ
+/// граница (весь диск радиуса `cam.radius`), а не точный список. Это
+/// корректно ИМЕННО для статического графа конфликтов (`ConflictGraph`,
+/// `arbitrate_spatial`'s `reach`, `spatial_bypass_split`'s `max_radius`) —
+/// они и так уже консервативны по построению (проверяют "могло бы
+/// пересечься", не "пересеклось"). Точные affected cells КОНКРЕТНОГО матча
+/// на КОНКРЕТНОМ тике вычисляет `arbitrator::get_match_affected_cells`
+/// отдельно, из найденной позиции, не из этого `RuleData` — см. её
+/// doc-комментарий и `types::CamSearch`.
 pub fn compute_rule_data(rule: &Rule) -> RuleData {
+    if let Some(cam) = rule.cam {
+        let disc = cam_disc_cells(cam.radius);
+        let bbox = compute_bbox(&disc);
+        let pattern_cells: Vec<(i32, i32)> = effective_pattern(rule).iter().map(|&(dx, dy, _)| (dx, dy)).collect();
+        return RuleData {
+            affected_cells: disc.clone(),
+            bbox,
+            pattern_cells,
+            total_shift: (0, 0),
+            shift_targets: Vec::new(),
+            write_cells: disc,
+        };
+    }
+
     let affected_cells = compute_affected_cells(rule);
     let bbox = compute_bbox(&affected_cells);
     let pattern_cells: Vec<(i32, i32)> = effective_pattern(rule).iter().map(|&(dx, dy, _)| (dx, dy)).collect();
@@ -340,13 +366,52 @@ pub fn compute_rule_data(rule: &Rule) -> RuleData {
     }
 }
 
+/// Все (dx, dy) с Chebyshev-расстоянием ≤ radius от (0,0) — консервативная
+/// статическая граница `cam`-правила, см. doc-комментарий `compute_rule_data`.
+fn cam_disc_cells(radius: u8) -> Vec<(i32, i32)> {
+    let r = radius as i32;
+    let mut cells = Vec::with_capacity((2 * r as usize + 1).pow(2));
+    for dy in -r..=r {
+        for dx in -r..=r {
+            cells.push((dx, dy));
+        }
+    }
+    cells
+}
+
+/// Промежуточные клетки пути КАЖДОГО broadcast-сдвига правила (`k=1..steps`,
+/// включая финальную точку — дедуп в вызывающем коде уберёт пересечение с
+/// `shift_targets`) — см. `types::ShiftSpec::broadcast`. Пусто, если ни один
+/// сдвиг правила не broadcast (типичный случай, без лишней работы).
+fn broadcast_path_cells(rule: &Rule) -> Vec<(i32, i32)> {
+    let mut cells = Vec::new();
+    for shift_group in &rule.shifts {
+        for shift in shift_group {
+            if !shift.broadcast {
+                continue;
+            }
+            let (dx, dy) = match shift.direction {
+                Direction::Up => (0, -1),
+                Direction::Down => (0, 1),
+                Direction::Left => (-1, 0),
+                Direction::Right => (1, 0),
+            };
+            for k in 1..=shift.steps as i32 {
+                cells.push((dx * k, dy * k));
+            }
+        }
+    }
+    cells
+}
+
 /// Вычислить ячейки, в которые правило реально пишет — зеркалит ровно то,
 /// что `apply_rule_buffered`/`apply_shift_buffered` кладут в write_buffer:
 /// без сдвигов — только цели `changes` относительно (0,0); со сдвигами —
 /// очищаемая исходная позиция (0,0) один раз плюс, для КАЖДОЙ цели сдвига,
 /// сама цель и цели `changes` относительно неё (репликация, не цепочка —
-/// см. `RuleData::shift_targets`). Паттерн (чтение) сюда намеренно не
-/// входит — см. doc-комментарий `RuleData::write_cells`.
+/// см. `RuleData::shift_targets`), плюс промежуточные клетки пути КАЖДОГО
+/// broadcast-сдвига (см. `broadcast_path_cells`). Паттерн (чтение) сюда
+/// намеренно не входит — см. doc-комментарий `RuleData::write_cells`.
 fn compute_write_cells(rule: &Rule, shift_targets: &[(i32, i32)]) -> Vec<(i32, i32)> {
     let mut cells = Vec::new();
 
@@ -362,6 +427,7 @@ fn compute_write_cells(rule: &Rule, shift_targets: &[(i32, i32)]) -> Vec<(i32, i
                 cells.push((sdx + dx, sdy + dy));
             }
         }
+        cells.extend(broadcast_path_cells(rule));
     }
 
     cells.sort();
@@ -406,6 +472,7 @@ pub fn compute_affected_cells(rule: &Rule) -> Vec<(i32, i32)> {
                 cells.push((sdx + dx, sdy + dy));
             }
         }
+        cells.extend(broadcast_path_cells(rule));
     }
 
     // Удаляем дубликаты

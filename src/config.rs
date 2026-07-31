@@ -6,8 +6,8 @@ use crate::error::CellariaError;
 use crate::grid::Grid;
 use crate::storage::VecStorage;
 use crate::types::{
-    BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule,
-    ShiftSpec,
+    BoundaryBuffer, Cell, CamSearch, CellType, CellValue, ChangeValue, Direction, OverflowAction,
+    Rule, ShiftSpec,
 };
 
 // === Вспомогательный тип — входной шаблон конфига ===
@@ -17,6 +17,9 @@ use crate::types::{
 struct YamlShift {
     direction: String,
     steps: u16,
+    /// См. `types::ShiftSpec::broadcast`.
+    #[serde(default)]
+    broadcast: bool,
 }
 
 /// YAML-формат группы сдвигов приоритета.
@@ -40,6 +43,13 @@ struct YamlPatternEntry {
     offset: [i8; 2],
     #[serde(rename = "type")]
     cell_type: u8,
+}
+
+/// YAML-формат content-addressable поиска — см. `types::CamSearch`.
+#[derive(Debug, Deserialize)]
+struct YamlCam {
+    radius: u8,
+    target_type: u8,
 }
 
 /// YAML-формат одного правила.
@@ -66,6 +76,16 @@ struct YamlRule {
     /// Действие при overflow (выходе за границу решётки).
     #[serde(default)]
     overflow: OverflowAction,
+    /// Content-addressable поиск с ограниченным радиусом.
+    #[serde(default)]
+    cam: Option<YamlCam>,
+    /// Опциональный тай-брейк для арбитража при равном приоритете — см.
+    /// `Rule::tie_break`.
+    #[serde(default)]
+    tie_break: u32,
+    /// Защита от голодания при разном приоритете — см. `Rule::starvation_after`.
+    #[serde(default)]
+    starvation_after: Option<u32>,
 }
 
 /// YAML-формат начальной ячейки.
@@ -169,9 +189,22 @@ pub fn load_config(path: &str) -> ConfigResult {
     let default_type = yg.default_cell_type;
     let mut initial_active: HashSet<(usize, usize)> = HashSet::new();
 
-    // Ячейки с не-дефолтным типом — активны
+    // Ячейки с не-дефолтным типом — активны. Границы проверяются здесь явно
+    // (не молча пропускаются) — раньше клетка вне [0,width)×[0,height)
+    // попадала в `initial_active` (и тем самым в dirty-множество новой
+    // решётки), но реальный `grid.set_cell` ниже её тихо пропускал
+    // (`x < width && y < height`) — координата оставалась "активной" без
+    // единой реальной ячейки за ней. Несогласованно с остальной
+    // валидацией в этой функции (например, проверкой 0xFF в id ниже),
+    // которая явно возвращает ошибку, а не молча теряет данные.
     for yc in &yg.initial_cells {
         let [x, y] = yc.coord;
+        if x >= yg.width || y >= yg.height {
+            return Err(CellariaError::Config(format!(
+                "initial_cells: coordinate ({}, {}) is out of bounds for grid {}x{}",
+                x, y, yg.width, yg.height
+            )));
+        }
         if yc.cell_type != default_type {
             initial_active.insert((x, y));
         }
@@ -180,7 +213,14 @@ pub fn load_config(path: &str) -> ConfigResult {
     // Граничные ячейки — всегда активны
     if let Some(boundaries) = &yg.boundaries {
         for b in boundaries {
-            initial_active.insert((b.cell[0], b.cell[1]));
+            let [x, y] = b.cell;
+            if x >= yg.width || y >= yg.height {
+                return Err(CellariaError::Config(format!(
+                    "boundaries: coordinate ({}, {}) is out of bounds for grid {}x{}",
+                    x, y, yg.width, yg.height
+                )));
+            }
+            initial_active.insert((x, y));
         }
     }
 
@@ -194,19 +234,17 @@ pub fn load_config(path: &str) -> ConfigResult {
 
     let mut grid = Grid::new(storage, initial_active);
 
-    // Устанавливаем явно указанные ячейки
+    // Устанавливаем явно указанные ячейки — границы уже проверены выше.
     for yc in &yg.initial_cells {
         let [x, y] = yc.coord;
-        if x < yg.width && y < yg.height {
-            grid.set_cell(
-                x,
-                y,
-                Cell {
-                    value: CellValue(CellType(yc.cell_type)),
-                    born_at: 0,
-                },
-            );
-        }
+        grid.set_cell(
+            x,
+            y,
+            Cell {
+                value: CellValue(CellType(yc.cell_type)),
+                born_at: 0,
+            },
+        );
     }
 
     // Устанавливаем граничные буферы с очередями
@@ -238,6 +276,23 @@ pub fn load_config(path: &str) -> ConfigResult {
             ));
         }
 
+        // Валидация: cam и shifts взаимоисключающи — притяжение уже само
+        // по себе единственный сдвиг правила (см. CamSearch).
+        if yr.cam.is_some() && !yr.shifts.is_empty() {
+            return Err(CellariaError::RuleValidation(
+                "Rule with `cam` must not also have `shifts`".to_string(),
+            ));
+        }
+        // Валидация: у cam-правила паттерн — только сама голова, без
+        // дополнительных проверок соседей. Изолированный путь детекции CAM
+        // (см. `matcher::detect_cam_matches`) не прогоняет полное
+        // сопоставление паттерна — только это ограниченное подмножество.
+        if yr.cam.is_some() && !yr.pattern.is_empty() {
+            return Err(CellariaError::RuleValidation(
+                "Rule with `cam` must not have an explicit `pattern` (only the head cell type is checked)".to_string(),
+            ));
+        }
+
         // Преобразуем сдвиги
         let mut shifts: Vec<Vec<ShiftSpec>> = Vec::new();
         for group in yr.shifts {
@@ -247,6 +302,7 @@ pub fn load_config(path: &str) -> ConfigResult {
                 group_shifts.push(ShiftSpec {
                     direction,
                     steps: yshift.steps,
+                    broadcast: yshift.broadcast,
                 });
             }
             if !group_shifts.is_empty() {
@@ -290,6 +346,9 @@ pub fn load_config(path: &str) -> ConfigResult {
             priority: yr.priority,
             min_age: yr.min_age,
             overflow: yr.overflow,
+            cam: yr.cam.map(|c| CamSearch { radius: c.radius, target_type: CellType::new(c.target_type) }),
+            tie_break: yr.tie_break,
+            starvation_after: yr.starvation_after,
         });
     }
 

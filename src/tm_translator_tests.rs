@@ -267,6 +267,9 @@ fn test_tm_translator_no_left_rule_match() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     assert_eq!(l_rule.id, vec![CellType::new(2), CellType::new(10)]);
     assert_eq!(l_rule.shifts[0][0].direction, Direction::Left);

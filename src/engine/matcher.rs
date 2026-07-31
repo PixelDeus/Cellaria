@@ -6,6 +6,13 @@ use crate::grid::Grid;
 use crate::storage::GridStorage;
 use crate::types::{Cell, CellType, Rule, RuleMatch};
 
+/// Найденная позиция CAM-совпадения, ключ — (x, y, rule_idx) магнита (то же
+/// самое, что уникально идентифицирует матч в тай-брейке арбитража, см.
+/// `arbitrator::arbitrate`'s doc-комментарий про (x,y,rule_idx)) — переживает
+/// сортировку/фильтрацию матчей в `arbitrate`, в отличие от позиционного
+/// индекса в исходном Vec.
+pub(crate) type CamPositions = FxHashMap<(u32, u32, usize), (u32, u32)>;
+
 /// Предвычисленные данные для группы правил с общим head-типом.
 /// Строится один раз до параллельной фазы — дёшево, O(число head-типов).
 ///
@@ -20,7 +27,17 @@ use crate::types::{Cell, CellType, Rule, RuleMatch};
 pub(crate) struct GroupData {
     /// (min_age, active_only) каждого правила группы, в том же порядке,
     /// что и `rule_index[head]` — используется вместо `&[Rule]`.
-    rule_meta: Vec<(u64, bool)>,
+    /// (min_age, active_only, is_cam). `is_cam` — правило с `Rule::cam`
+    /// (см. её doc-комментарий в `types.rs`) детектируется ОТДЕЛЬНЫМ
+    /// проходом (`detect_cam_matches`), не здесь — этот флаг нужен только
+    /// чтобы такое правило НИКОГДА не попало в обычный `match_cell` тоже
+    /// (иначе получится дубликат: фиктивный "пустой" матч без сдвигов/
+    /// changes от обычного пути И реальный от CAM-пути с тем же
+    /// (x,y,rule_idx) — оба бы попали в один и тот же слот `cam_positions`,
+    /// и обычный (никогда не находивший цель) мог бы случайно применить
+    /// притяжение через fallback в `apply_cam_buffered`, даже когда CAM
+    /// ничего не нашёл — найдено экспериментально настоящим тестом).
+    rule_meta: Vec<(u64, bool, bool)>,
     effective_patterns: Vec<Vec<(i8, i8, CellType)>>,
     all_offsets: Vec<(i8, i8)>,
     /// `FxHashMap`/`FxHashSet` здесь и ниже (`exact_lookup`, `GroupCache`) —
@@ -88,7 +105,8 @@ pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> Gro
                 })
                 .collect();
 
-            let rule_meta: Vec<(u64, bool)> = rules.iter().map(|r| (r.min_age, r.active_only)).collect();
+            let rule_meta: Vec<(u64, bool, bool)> =
+                rules.iter().map(|r| (r.min_age, r.active_only, r.cam.is_some())).collect();
 
             // Собираем все уникальные смещения (dx, dy) для группы правил
             let mut all_offsets: Vec<(i8, i8)> = Vec::new();
@@ -404,7 +422,10 @@ fn match_cell<S: GridStorage>(
     if let (Some(lookup), Some(cache_packed)) = (&gd.exact_lookup, cache_u128) {
         if let Some(candidates) = lookup.get(&cache_packed) {
             for &rule_idx in candidates {
-                let (min_age, active_only) = gd.rule_meta[rule_idx];
+                let (min_age, active_only, is_cam) = gd.rule_meta[rule_idx];
+                if is_cam {
+                    continue; // детектируется отдельно, см. doc-комментарий `rule_meta`
+                }
                 if center_age < min_age {
                     continue;
                 }
@@ -422,7 +443,10 @@ fn match_cell<S: GridStorage>(
     }
 
     for &rule_idx in &gd.fallback_rules {
-        let (min_age, active_only) = gd.rule_meta[rule_idx];
+        let (min_age, active_only, is_cam) = gd.rule_meta[rule_idx];
+        if is_cam {
+            continue; // детектируется отдельно, см. doc-комментарий `rule_meta`
+        }
         if center_age < min_age {
             continue;
         }
@@ -475,3 +499,96 @@ fn match_cell<S: GridStorage>(
         }
     }
 }
+
+/// Изолированный проход детекции CAM-совпадений (`Rule::cam`, см. её
+/// doc-комментарий в `types.rs`) — намеренно ОТДЕЛЬНЫЙ от
+/// `detect_matches_with_group_data`/`match_cell` (packed-паттерны и
+/// exact-lookup там заточены под ФИКСИРОВАННЫЕ офсеты; CAM — принципиально
+/// другой алгоритм, скан диска в поисках типа). Цена для конфигов БЕЗ
+/// `cam`-правил — один быстрый ранний выход (`has_cam`), ноль лишней
+/// работы в горячем пути.
+///
+/// Возвращает обычные `RuleMatch` (участвуют в арбитраже наравне со всеми —
+/// тот же тай-брейк priority→age→id→x→y→rule_idx) плюс побочную карту
+/// найденных позиций — `get_match_affected_cells`/`apply_rule_buffered`
+/// используют её вместо статических `RuleData::write_cells` (которые для
+/// `cam`-правил хранят консервативную границу — весь диск, см.
+/// `conflict_analyzer::compute_rule_data` — а не точную найденную клетку).
+pub(crate) fn detect_cam_matches<S: GridStorage>(
+    grid: &Grid<S>,
+    rule_index: &HashMap<CellType, Vec<Rule>>,
+    active_coords: &[(usize, usize)],
+) -> (Vec<RuleMatch>, CamPositions) {
+    let has_cam = rule_index.values().flatten().any(|r| r.cam.is_some());
+    if !has_cam {
+        return (Vec::new(), FxHashMap::default());
+    }
+
+    let mut matches = Vec::new();
+    let mut positions = FxHashMap::default();
+
+    for &(cx, cy) in active_coords {
+        let Some(center_cell) = grid.get_cell(cx, cy) else { continue };
+        let Some(rules) = rule_index.get(&center_cell.value.0) else { continue };
+        let center_age = grid.get_age(cx, cy);
+
+        for (rule_idx, rule) in rules.iter().enumerate() {
+            let Some(cam) = rule.cam else { continue };
+            if center_age < rule.min_age {
+                continue;
+            }
+            if rule.active_only && center_cell.value == Cell::default().value && center_age == 0 {
+                continue;
+            }
+
+            if let Some((fx, fy)) = search_nearest(grid, cx, cy, cam.radius, cam.target_type) {
+                matches.push(RuleMatch { x: cx as u32, y: cy as u32, head: center_cell.value.0, rule_idx });
+                positions.insert((cx as u32, cy as u32, rule_idx), (fx as u32, fy as u32));
+            }
+        }
+    }
+
+    (matches, positions)
+}
+
+/// Ближайшая клетка типа `target` в Chebyshev-радиусе `radius` вокруг
+/// (cx, cy) — по состоянию решётки ДО тика (то же чтение, что и обычный
+/// `pattern_matches`, никогда не видит изменений этого же тика). При
+/// равном расстоянии — детерминированный тай-брейк по (y, x), не зависит
+/// от порядка сканирования.
+fn search_nearest<S: GridStorage>(
+    grid: &Grid<S>,
+    cx: usize,
+    cy: usize,
+    radius: u8,
+    target: CellType,
+) -> Option<(usize, usize)> {
+    let r = radius as i64;
+    let mut best: Option<(i64, i64, i64)> = None; // (dist, y, x) — минимум лексикографически
+    for dy in -r..=r {
+        let ny = cy as i64 + dy;
+        if ny < 0 {
+            continue;
+        }
+        for dx in -r..=r {
+            let nx = cx as i64 + dx;
+            if nx < 0 || (nx as usize, ny as usize) == (cx, cy) {
+                continue;
+            }
+            let Some(cell) = grid.get_cell(nx as usize, ny as usize) else { continue };
+            if cell.value.0 != target {
+                continue;
+            }
+            let dist = dx.abs().max(dy.abs());
+            let candidate = (dist, ny, nx);
+            if best.is_none_or(|b| candidate < b) {
+                best = Some(candidate);
+            }
+        }
+    }
+    best.map(|(_, y, x)| (x as usize, y as usize))
+}
+
+#[cfg(test)]
+#[path = "matcher_tests.rs"]
+mod tests;

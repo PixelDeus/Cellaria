@@ -10,20 +10,26 @@
 #   . . . . .                                 . 1 1 1 .
 #   . . . . .                                 . . 1 . .
 
-id_suffix: [w, a, v, e]
-active_only: false
+grid:
+  width: 21
+  height: 21
+  default_cell_type: 0
+  initial_cells:
+    - coord: [10, 10]
+      type: 1
+
 rules:
   # Правило: клетка 1 с пустыми соседями → размножается во все 4 стороны
   - id: [1, 0, 0, 0, 0]
     pattern:
-      - [0,  0, 1]
-      - [0, -1, 0]
-      - [0,  1, 0]
-      - [-1, 0, 0]
-      - [1,  0, 0]
+      - { offset: [0, 0], type: 1 }
+      - { offset: [0, -1], type: 0 }
+      - { offset: [0, 1], type: 0 }
+      - { offset: [-1, 0], type: 0 }
+      - { offset: [1, 0], type: 0 }
     changes:
-      - [0, -1, 1]
-      - [0,  1, 1]
-      - [-1, 0, 1]
-      - [1,  0, 1]
+      - { dx: 0, dy: -1, value: 1 }
+      - { dx: 0, dy: 1, value: 1 }
+      - { dx: -1, dy: 0, value: 1 }
+      - { dx: 1, dy: 0, value: 1 }
     priority: 10

@@ -11,9 +11,11 @@ use crate::storage::GridStorage;
 use crate::types::{AffectedRegion, Cell, CellType, CellValue, Rule, RuleMatch, DEFAULT_CELL_VALUE};
 
 pub use applicator::apply_matches;
-pub use arbitrator::arbitrate;
+use applicator::apply_matches_with_cam;
+pub use arbitrator::{arbitrate, arbitrate_spatial};
+use arbitrator::{arbitrate_spatial_with_cam, arbitrate_with_cam};
 pub use matcher::detect_matches;
-use matcher::{build_group_data, detect_matches_with_group_data, GroupCache};
+use matcher::{build_group_data, detect_cam_matches, detect_matches_with_group_data, GroupCache};
 
 /// Двигатель симуляции Cellaria.
 pub struct Engine<S: GridStorage> {
@@ -121,6 +123,15 @@ pub struct Engine<S: GridStorage> {
     /// Сколько раз [`Engine::enable_guarded_self_modification`] отклонила
     /// самопереданное правило как небезопасное для композиции.
     pub rejected_self_modifications: u64,
+    /// Сколько тиков ПОДРЯД конкретный матч `(x, y, rule_idx)` детектировался,
+    /// но проигрывал арбитраж — только для правил с `Rule::starvation_after
+    /// = Some(_)` (см. её doc-комментарий и `arbitrator::TIE_BREAK_MODULUS`
+    /// по аналогии). Сбрасывается (запись удаляется) при выигрыше матча;
+    /// растёт (`saturating_add`, чтобы не переполниться на очень длинных
+    /// прогонах) при проигрыше. Пусто и не трогается, если ни одно правило
+    /// набора не использует это поле — нулевые накладные расходы для кода,
+    /// который об этом не просил.
+    starvation_counters: FxHashMap<(u32, u32, usize), u32>,
 }
 
 impl<S: GridStorage> Engine<S> {
@@ -149,6 +160,7 @@ impl<S: GridStorage> Engine<S> {
             original_rule_index: HashMap::new(),
             self_mod_managed_heads: FxHashSet::default(),
             rejected_self_modifications: 0,
+            starvation_counters: FxHashMap::default(),
         }
     }
 
@@ -194,6 +206,12 @@ impl<S: GridStorage> Engine<S> {
     // ─── Обнаружение совпадений ───
 
     /// Обнаружить все совпадения на текущей решётке.
+    ///
+    /// НЕ включает `cam`-совпадения (`types::CamSearch`) — их детекция
+    /// (`matcher::detect_cam_matches`) требует найденные позиции для
+    /// последующего арбитража, а этот путь (ручная связка
+    /// `detect_matches` → `arbitrate` → `apply_matches`) их никуда не
+    /// передаёт. Полностью работают только через `run_tick`/`Engine::run_tick`.
     pub fn detect_matches(&self) -> Vec<RuleMatch> {
         let search_coords = resolve_search_coords_peek(&self.grid, &self.search_radius_cache);
         detect_matches_with_group_data(&self.grid, &self.group_cache, &search_coords)
@@ -202,6 +220,10 @@ impl<S: GridStorage> Engine<S> {
     // ─── Арбитраж ───
 
     /// Выбрать непротиворечивый набор совпадений.
+    ///
+    /// См. doc-комментарий `detect_matches` — `cam`-матчи сюда не попадают
+    /// (детектируются отдельно, только внутри `run_tick`); `arbitrate`
+    /// (свободная функция) сама подставляет пустую карту позиций внутри.
     pub fn arbitrate(&self, all_matches: Vec<RuleMatch>) -> Vec<RuleMatch> {
         arbitrate(
             all_matches,
@@ -467,7 +489,15 @@ impl<S: GridStorage> Engine<S> {
     /// перед следующим тиком.
     pub fn run_tick(&mut self) -> (Vec<RuleMatch>, Vec<(u32, Cell)>) {
         let conflict_ctx = ConflictContext { partners: &self.conflict_partners, max_radius: self.max_affected_radius };
-        let result = run_tick_with_cache(&mut self.grid, &self.rule_index, &self.rule_cache, &self.group_cache, &self.search_radius_cache, Some(&conflict_ctx));
+        let result = run_tick_with_cache(
+            &mut self.grid,
+            &self.rule_index,
+            &self.rule_cache,
+            &self.group_cache,
+            &self.search_radius_cache,
+            Some(&conflict_ctx),
+            &mut self.starvation_counters,
+        );
         self.absorb_self_modifications();
         result
     }
@@ -702,6 +732,11 @@ struct ConflictContext<'a> {
 /// свободной функции — не "пренебрежимо мало", как rule_cache/group_cache, а
 /// реальная регрессия (найдено экспериментально: наивная версия этой
 /// оптимизации замедлила GoL на порядки).
+///
+/// `Rule::starvation_after` для этого пути всегда no-op — см. её
+/// doc-комментарий: нужна память МЕЖДУ вызовами, а эта функция её не хранит
+/// (свежая пустая `StarvationCounters` на каждый вызов, как и `CamPositions`
+/// выше).
 pub fn run_tick<S: GridStorage>(
     grid: &mut Grid<S>,
     rule_index: &HashMap<CellType, Vec<Rule>>,
@@ -709,7 +744,8 @@ pub fn run_tick<S: GridStorage>(
     let rule_cache = crate::conflict_analyzer::build_rule_data_cache(rule_index);
     let group_cache = build_group_data(rule_index);
     let search_radius_cache = compute_search_radius_cache(rule_index);
-    run_tick_with_cache(grid, rule_index, &rule_cache, &group_cache, &search_radius_cache, None)
+    let mut starvation_counters = arbitrator::StarvationCounters::default();
+    run_tick_with_cache(grid, rule_index, &rule_cache, &group_cache, &search_radius_cache, None, &mut starvation_counters)
 }
 
 /// Общая логика одного тика, параметризованная источниками `rule_cache`/
@@ -800,10 +836,18 @@ fn run_tick_with_cache<S: GridStorage>(
     group_cache: &GroupCache,
     search_radius_cache: &SearchRadiusCache,
     conflict_ctx: Option<&ConflictContext>,
+    starvation_counters: &mut arbitrator::StarvationCounters,
 ) -> (Vec<RuleMatch>, Vec<(u32, Cell)>) {
     let search_coords = resolve_search_coords_advance(grid, search_radius_cache);
 
-    let matches = detect_matches_with_group_data(grid, group_cache, &search_coords);
+    let mut matches = detect_matches_with_group_data(grid, group_cache, &search_coords);
+    // CAM-детекция (см. её doc-комментарий в `matcher.rs`) — изолированный
+    // проход, ноль стоимости без `cam`-правил в конфиге (ранний выход
+    // внутри `detect_cam_matches`). `search_coords` — тот же кандидатный
+    // список, что и у обычной детекции: `max_pattern_radius`/`pattern_radius`
+    // уже учитывают `cam.radius` в своём расширении (см. её doc-комментарий).
+    let (cam_matches, cam_positions) = detect_cam_matches(grid, rule_index, &search_coords);
+    matches.extend(cam_matches);
     if matches.is_empty() {
         // Время всё равно идёт: без этого симуляция, где на каком-то тике не
         // нашлось ни одного совпадения (например, поле держит `min_age`-
@@ -827,12 +871,24 @@ fn run_tick_with_cache<S: GridStorage>(
         grid.mark_dirty(m.x as usize, m.y as usize);
     }
 
+    // Матчи правил с `Rule::starvation_after` — единственные, за которыми
+    // вообще стоит следить (см. doc-комментарий `Engine::starvation_counters`);
+    // список нужен ДО того, как `matches` уйдёт по значению в арбитраж ниже.
+    let starving_keys: Vec<(u32, u32, usize)> = matches
+        .iter()
+        .filter(|m| {
+            rule_index.get(&m.head).and_then(|rules| rules.get(m.rule_idx)).is_some_and(|r| r.starvation_after.is_some())
+        })
+        .map(|m| (m.x, m.y, m.rule_idx))
+        .collect();
+
     // Арбитраж: матчи, у которых в ЭТОМ тике физически нет рядом ни одного
     // структурного конфликт-партнёра, принимаются напрямую, без единого
     // сравнения (см. doc-комментарий функции); остальные — через обычный
     // арбитраж.
+    let generation = grid.generation() as u32;
     let accepted = match conflict_ctx {
-        None => arbitrate(matches, rule_index, rule_cache, (grid.width(), grid.height()), |x, y| {
+        None => arbitrate_with_cam(matches, rule_index, rule_cache, (grid.width(), grid.height()), &cam_positions, generation, starvation_counters, |x, y| {
             grid.get_age(x, y) as u32
         }),
         Some(ctx) => {
@@ -841,17 +897,38 @@ fn run_tick_with_cache<S: GridStorage>(
                 safe
             } else {
                 let mut accepted = safe;
-                accepted.extend(arbitrate(
+                accepted.extend(arbitrate_spatial_with_cam(
                     unsafe_matches,
                     rule_index,
                     rule_cache,
                     (grid.width(), grid.height()),
+                    ctx.max_radius,
+                    &cam_positions,
+                    generation,
+                    starvation_counters,
                     |x, y| grid.get_age(x, y) as u32,
                 ));
                 accepted
             }
         }
     };
+
+    // Обновление счётчиков голодания: выигравшие сбрасываются (запись
+    // удаляется), проигравшие растут на 1 (saturating — см. doc-комментарий
+    // поля). Делается ПОСЛЕ арбитража, а не во время — сам арбитраж только
+    // ЧИТАЕТ счётчики (см. `resolve_sort_fields`), обновление их же в
+    // процессе сортировки было бы порядко-зависимым UB-по-смыслу.
+    if !starving_keys.is_empty() {
+        let accepted_keys: FxHashSet<(u32, u32, usize)> = accepted.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+        for key in starving_keys {
+            if accepted_keys.contains(&key) {
+                starvation_counters.remove(&key);
+            } else {
+                let counter = starvation_counters.entry(key).or_insert(0);
+                *counter = counter.saturating_add(1);
+            }
+        }
+    }
 
     if accepted.is_empty() {
         // См. комментарий выше — то же самое: тик "случился", даже если всё
@@ -861,7 +938,7 @@ fn run_tick_with_cache<S: GridStorage>(
     }
 
     // Применение
-    let (regions, outputs) = apply_matches(grid, accepted.clone(), rule_index, rule_cache);
+    let (regions, outputs) = apply_matches_with_cam(grid, accepted.clone(), rule_index, rule_cache, &cam_positions);
 
     // Старение
     grid.advance_age();
@@ -909,6 +986,15 @@ fn pattern_radius<'a>(rules: impl Iterator<Item = &'a Rule>) -> i32 {
             for &(dx, dy, _) in &rule.pattern {
                 max_r = max_r.max(dx.unsigned_abs() as i32).max(dy.unsigned_abs() as i32);
             }
+        }
+        // `cam.radius` — тот же смысл, что и офсет паттерна, симметрично:
+        // если клетка-ЦЕЛЬ (тип X) появилась/исчезла в радиусе R от
+        // магнита, статус его CAM-совпадения мог измениться, даже если сам
+        // магнит не менялся ни разу — без этого dirty-tracking не заметил
+        // бы такое изменение (см. doc-комментарий `max_pattern_radius`, та
+        // же логика, что уже применена к `min_age`).
+        if let Some(cam) = rule.cam {
+            max_r = max_r.max(cam.radius as i32);
         }
     }
     max_r

@@ -97,6 +97,9 @@ fn rule_strategy() -> impl Strategy<Value = Rule> {
                 priority,
                 min_age,
                 overflow,
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
             }
         })
 }

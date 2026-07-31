@@ -29,6 +29,9 @@ pub fn make_pattern_rule(pattern_size: usize) -> Rule {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     }
 }
 
@@ -64,6 +67,9 @@ pub fn rules_per_head(k: usize) -> Vec<Rule> {
             priority: 10,
             min_age: 0,
             overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
         })
         .collect()
 }

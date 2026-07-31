@@ -30,6 +30,9 @@ fn make_rule(
         priority,
         min_age,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     }
 }
 

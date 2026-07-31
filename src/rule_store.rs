@@ -9,9 +9,21 @@ use std::collections::HashMap;
 const TERMINATOR: u8 = 0xFF;
 
 /// Маркер операции RemoveRule.
+///
+/// ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ ПРОТОКОЛА: это же значение — первый байт пакета
+/// AddRule (`priority`, см. `deserialize_packet`). Значит приоритет 240
+/// (0xF0) физически невозможно закодировать в AddRule-пакете — первый байт
+/// 0xF0 ВСЕГДА разбирается как RemoveRule, независимо от намерения
+/// отправителя. Не исправлено: любой фикс требует смены формата пакета
+/// (например, отдельного байта "тип операции" перед priority), что ломает
+/// уже существующий, много где захардкоженный байт-в-байт формат
+/// (`strength_self_modification*.rs` и другие примеры/тесты). Дешевле и
+/// безопаснее держать priority вне диапазона 240..=241 (см. OP_CLEAR ниже),
+/// чем переписывать формат протокола.
 const OP_REMOVE: u8 = 0xF0;
 
-/// Маркер операции ClearAll.
+/// Маркер операции ClearAll. Та же оговорка, что у `OP_REMOVE` — приоритет
+/// 241 (0xF1) для AddRule тоже недостижим.
 const OP_CLEAR: u8 = 0xF1;
 
 /// Маркер флага shift в пакете AddRule.
@@ -19,10 +31,6 @@ const SHIFT_FLAG: u8 = 0xFE;
 
 /// Максимальный размер буфера накопления для одного канала (в байтах).
 const MAX_BUFFER_SIZE: usize = 1024;
-
-/// Базовый ID для автоматически назначаемых правил (чтобы не конфликтовать
-/// с правилами из конфига, которые обычно < 1000).
-const AUTO_RULE_ID_BASE: u8 = 200;
 
 // === Types ===
 
@@ -61,8 +69,6 @@ pub struct RuleStore {
     accum_buffers: HashMap<(usize, usize), Vec<u8>>,
     /// Закешированный индекс (перестраивается только при dirty).
     index: Option<HashMap<CellType, Vec<Rule>>>,
-    /// Счётчик для авто-назначения ID новым правилам.
-    next_id: u8,
     /// Счётчик ошибок декодирования пакетов (битые пакеты в канале).
     decode_errors: u64,
 }
@@ -81,7 +87,6 @@ impl RuleStore {
             dirty: false,
             accum_buffers: HashMap::new(),
             index: None,
-            next_id: AUTO_RULE_ID_BASE,
             decode_errors: 0,
         }
     }
@@ -93,7 +98,6 @@ impl RuleStore {
             dirty: true,
             accum_buffers: HashMap::new(),
             index: None,
-            next_id: AUTO_RULE_ID_BASE,
             decode_errors: 0,
         }
     }
@@ -141,11 +145,8 @@ impl RuleStore {
             while let Some(end) = find_terminator(buf) {
                 let packet: Vec<u8> = buf.drain(..=end).collect();
                 let data = &packet[..packet.len() - 1];
-                match deserialize_packet(data, self.next_id) {
+                match deserialize_packet(data) {
                     Ok(op) => {
-                        if let RuleOp::AddRule(_) = &op {
-                            self.next_id = self.next_id.wrapping_add(1);
-                        }
                         completed.push(CompletedOp { op });
                     }
                     Err(e) => {
@@ -222,7 +223,13 @@ fn find_terminator(buf: &[u8]) -> Option<usize> {
 ///
 /// Формат пакета AddRule:
 /// `[priority, id_len, (type_byte × id_len), 0xFE, dir_byte, steps, 255]`
-fn deserialize_packet(data: &[u8], _next_id: u8) -> Result<RuleOp, String> {
+///
+/// Формат пакета RemoveRule: `[0xF0, id_len, (type_byte × id_len), 255]` —
+/// тот же `id_len`-префикс, что и у AddRule. Раньше поддерживался только
+/// однобайтовый id (`[0xF0, rule_id, 255]`), хотя `RuleStore::apply`
+/// сравнивает на удаление ПОЛНЫЙ `rule.id` (может быть многоэлементным) —
+/// правило с составным id в принципе нельзя было убрать через протокол.
+fn deserialize_packet(data: &[u8]) -> Result<RuleOp, String> {
     if data.is_empty() {
         return Err("empty packet".to_string());
     }
@@ -238,8 +245,21 @@ fn deserialize_packet(data: &[u8], _next_id: u8) -> Result<RuleOp, String> {
                     data.len()
                 ));
             }
-            let rule_id = data[1];
-            Ok(RuleOp::RemoveRule(vec![CellType(rule_id)]))
+            let id_len = data[1] as usize;
+            if id_len == 0 {
+                return Err("RemoveRule: id_len must be > 0".to_string());
+            }
+            let id_start = 2;
+            let id_end = id_start + id_len;
+            if data.len() < id_end {
+                return Err(format!(
+                    "RemoveRule packet too short: need {} bytes for id, have {}",
+                    id_end,
+                    data.len()
+                ));
+            }
+            let id: RuleId = data[id_start..id_end].iter().map(|&b| CellType(b)).collect();
+            Ok(RuleOp::RemoveRule(id))
         }
         _ => {
             // AddRule: [priority, id_len, type_byte × id_len, SHIFT_FLAG?, dir_byte, steps, 255]
@@ -313,7 +333,11 @@ fn deserialize_packet(data: &[u8], _next_id: u8) -> Result<RuleOp, String> {
                 // Группировка не влияет на применение (см. doc-комментарий
                 // Rule::shifts) — каждый разобранный SHIFT_FLAG-триплет
                 // просто становится своей независимой записью.
-                shifts.push(vec![crate::types::ShiftSpec { direction, steps }]);
+                // Протокол не кодирует `broadcast` (та же категория
+                // ограничения, что и `cam`/`ChangeValue::Ref` — см. их
+                // doc-комментарии выше в этом файле): переданные по каналу
+                // правила никогда не используют broadcast-сдвиг.
+                shifts.push(vec![crate::types::ShiftSpec { direction, steps, broadcast: false }]);
             }
 
             // Парсим изменения (оставшиеся байты до 255)
@@ -349,6 +373,13 @@ fn deserialize_packet(data: &[u8], _next_id: u8) -> Result<RuleOp, String> {
                 priority,
                 min_age: 0,
                 overflow: Default::default(),
+                // Протокол RuleStore не кодирует `cam` (та же категория
+                // ограничения, что и `ChangeValue::Ref` — см. её
+                // doc-комментарий выше в этом файле): переданные по каналу
+                // правила никогда не используют CAM-поиск.
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
             };
 
             Ok(RuleOp::AddRule(rule))

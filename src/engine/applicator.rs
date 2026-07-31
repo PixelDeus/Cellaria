@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::conflict_analyzer::{get_rule_data, RuleDataCache};
+use crate::engine::matcher::CamPositions;
 use crate::fast_hash::FxHashMap;
 use crate::grid::Grid;
 use crate::storage::GridStorage;
@@ -32,6 +33,21 @@ pub fn apply_matches<S: GridStorage>(
     rule_index: &HashMap<CellType, Vec<Rule>>,
     rule_cache: &RuleDataCache,
 ) -> (Vec<AffectedRegion>, Vec<(u32, Cell)>) {
+    apply_matches_with_cam(grid, matches, rule_index, rule_cache, &CamPositions::default())
+}
+
+/// Как [`apply_matches`], но с картой найденных CAM-позиций (см.
+/// `matcher::detect_cam_matches`) — только `run_tick`/`Engine::run_tick`
+/// имеют что туда передать (см. doc-комментарий `Engine::detect_matches`),
+/// поэтому `apply_matches` остаётся публичным с прежней сигнатурой и просто
+/// подставляет пустую карту.
+pub(crate) fn apply_matches_with_cam<S: GridStorage>(
+    grid: &mut Grid<S>,
+    matches: Vec<RuleMatch>,
+    rule_index: &HashMap<CellType, Vec<Rule>>,
+    rule_cache: &RuleDataCache,
+    cam_positions: &CamPositions,
+) -> (Vec<AffectedRegion>, Vec<(u32, Cell)>) {
     let mut pending_boundary: Vec<(u32, Cell)> = Vec::new();
     let mut regions: Vec<AffectedRegion> = Vec::new();
     // Общий буфер для всех match'ей
@@ -50,6 +66,11 @@ pub fn apply_matches<S: GridStorage>(
             .get(&m.head)
             .and_then(|rules| rules.get(m.rule_idx));
         if let Some(rule) = rule {
+            if let Some(cam) = rule.cam {
+                let region = apply_cam_buffered(&m, cam, cam_positions, grid.generation(), &mut write_buffer);
+                regions.push(region);
+                continue;
+            }
             let rule_data = get_rule_data(rule_cache, m.head, m.rule_idx);
             // Пишем сразу в общий буфер, а не в свой локальный внутри
             // `apply_rule_buffered` с последующим `extend` — arbitration уже
@@ -79,6 +100,49 @@ pub fn apply_matches<S: GridStorage>(
     }
 
     (regions, pending_boundary)
+}
+
+/// Применить CAM-матч (`types::CamSearch`) с буферизацией — притягивает
+/// значение найденной клетки на позицию магнита: найденная клетка
+/// становится дефолтной (очищается), магнит получает `cam.target_type`.
+/// Ровно 2 записанные клетки, всегда — не зависит от `rule.changes`/`shifts`
+/// (CAM-правило их не имеет, см. валидацию в `config.rs`).
+fn apply_cam_buffered(
+    m: &RuleMatch,
+    cam: crate::types::CamSearch,
+    cam_positions: &CamPositions,
+    gen: u64,
+    write_buffer: &mut WriteBuffer,
+) -> AffectedRegion {
+    // `cam_positions` ОБЯЗАНА содержать запись для КАЖДОГО CAM-матча,
+    // дошедшего до `apply` (заполняется в `detect_cam_matches` синхронно с
+    // самим `RuleMatch`, см. её doc-комментарий) — падаем явно, а не
+    // подставляем (magnet, magnet) молча: такой fallback раньше маскировал
+    // реальный баг (CAM-правило дублировалось через обычный `match_cell`,
+    // не только через `detect_cam_matches` — см. doc-комментарий
+    // `GroupData::rule_meta`) — молчаливая подстановка "нашли самого себя"
+    // заставляла магнит без цели в радиусе всё равно "успешно" становиться
+    // target_type, найдено настоящим тестом (`test_cam_target_outside_radius_no_match`).
+    let (fx, fy) = *cam_positions.get(&(m.x, m.y, m.rule_idx)).expect(
+        "apply_cam_buffered: matched CAM RuleMatch without a corresponding cam_positions entry — \
+         detect_cam_matches and match_cell have gone out of sync (see GroupData::rule_meta doc-comment)",
+    );
+    let magnet = (m.x, m.y);
+    let found = (fx, fy);
+
+    write_buffer.insert(found, Cell { value: CellValue::default(), born_at: gen });
+    write_buffer.insert(magnet, Cell { value: CellValue(cam.target_type), born_at: gen });
+
+    let xs = [found.0, magnet.0];
+    let ys = [found.1, magnet.1];
+    AffectedRegion {
+        x_start: *xs.iter().min().expect("xs has 2 fixed elements, never empty"),
+        x_end: *xs.iter().max().expect("xs has 2 fixed elements, never empty"),
+        y_start: *ys.iter().min().expect("ys has 2 fixed elements, never empty"),
+        y_end: *ys.iter().max().expect("ys has 2 fixed elements, never empty"),
+        has_changes: false,
+        written_cells: vec![found, magnet],
+    }
 }
 
 /// Применить одно правило к ячейке с буферизацией.
@@ -298,32 +362,71 @@ fn apply_shift_buffered<S: GridStorage>(
     write_buffer.insert((ox as u32, oy as u32), Cell::default());
     affected.written_cells.push((ox as u32, oy as u32));
 
-    if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
-        // Normal shift — move head
-        write_buffer.insert((nx as u32, ny as u32), head_cell);
-        affected.written_cells.push((nx as u32, ny as u32));
-        affected.x_start = affected.x_start.min(nx as u32);
-        affected.x_end = affected.x_end.max(nx as u32 + 1);
-        affected.y_start = affected.y_start.min(ny as u32);
-        affected.y_end = affected.y_end.max(ny as u32 + 1);
-    } else {
-        // Overflow (уходит за границу ЛИБО меньше нуля, ЛИБО (только на
-        // конечных решётках) не меньше ширины/высоты — на ChunkStorage
-        // верхняя граница практически недостижима, реальный overflow там
-        // означает только уход в отрицательные координаты).
-        let bx = if nx < 0 { 0 } else { (nx as usize).min(w.saturating_sub(1)) };
-        let by = if ny < 0 { 0 } else { (ny as usize).min(h.saturating_sub(1)) };
-        match rule.overflow {
-            OverflowAction::Discard => {
-                // head cell is lost
+    if !shift.broadcast {
+        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+            // Normal shift — move head
+            write_buffer.insert((nx as u32, ny as u32), head_cell);
+            affected.written_cells.push((nx as u32, ny as u32));
+            affected.x_start = affected.x_start.min(nx as u32);
+            affected.x_end = affected.x_end.max(nx as u32 + 1);
+            affected.y_start = affected.y_start.min(ny as u32);
+            affected.y_end = affected.y_end.max(ny as u32 + 1);
+        } else {
+            // Overflow (уходит за границу ЛИБО меньше нуля, ЛИБО (только на
+            // конечных решётках) не меньше ширины/высоты — на ChunkStorage
+            // верхняя граница практически недостижима, реальный overflow там
+            // означает только уход в отрицательные координаты).
+            let bx = if nx < 0 { 0 } else { (nx as usize).min(w.saturating_sub(1)) };
+            let by = if ny < 0 { 0 } else { (ny as usize).min(h.saturating_sub(1)) };
+            match rule.overflow {
+                OverflowAction::Discard => {
+                    // head cell is lost
+                }
+                OverflowAction::Write(value) => {
+                    let output_value = if value != 0 { Some(value) } else { None };
+                    apply_overflow_write(grid, bx, by, output_value, head_cell, gen, write_buffer, affected, pending_outputs);
+                }
+                OverflowAction::WriteLiteral(value) => {
+                    apply_overflow_write(grid, bx, by, Some(value), head_cell, gen, write_buffer, affected, pending_outputs);
+                }
             }
-            OverflowAction::Write(value) => {
-                let output_value = if value != 0 { Some(value) } else { None };
-                apply_overflow_write(grid, bx, by, output_value, head_cell, gen, write_buffer, affected, pending_outputs);
+        }
+        return;
+    }
+
+    // Broadcast (см. `ShiftSpec::broadcast`): КАЖДАЯ клетка пути (k=1..steps)
+    // получает копию значения головки, не только финальная (nx,ny). Путь
+    // монотонен (фиксированное направление, фиксированный шаг) — как только
+    // k-я позиция выходит за границу решётки, ВСЕ последующие тоже вне
+    // границ, значит `overflow` применяется РОВНО ОДИН РАЗ в точке выхода,
+    // дальше цикл останавливается — не "теряем" уже записанные клетки пути
+    // до этой точки, просто не продолжаем размножение за край.
+    for k in 1..=steps {
+        let px = ox + dx * k;
+        let py = oy + dy * k;
+        if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+            write_buffer.insert((px as u32, py as u32), head_cell);
+            affected.written_cells.push((px as u32, py as u32));
+            affected.x_start = affected.x_start.min(px as u32);
+            affected.x_end = affected.x_end.max(px as u32 + 1);
+            affected.y_start = affected.y_start.min(py as u32);
+            affected.y_end = affected.y_end.max(py as u32 + 1);
+        } else {
+            let bx = if px < 0 { 0 } else { (px as usize).min(w.saturating_sub(1)) };
+            let by = if py < 0 { 0 } else { (py as usize).min(h.saturating_sub(1)) };
+            match rule.overflow {
+                OverflowAction::Discard => {
+                    // head cell is lost at this point of the path
+                }
+                OverflowAction::Write(value) => {
+                    let output_value = if value != 0 { Some(value) } else { None };
+                    apply_overflow_write(grid, bx, by, output_value, head_cell, gen, write_buffer, affected, pending_outputs);
+                }
+                OverflowAction::WriteLiteral(value) => {
+                    apply_overflow_write(grid, bx, by, Some(value), head_cell, gen, write_buffer, affected, pending_outputs);
+                }
             }
-            OverflowAction::WriteLiteral(value) => {
-                apply_overflow_write(grid, bx, by, Some(value), head_cell, gen, write_buffer, affected, pending_outputs);
-            }
+            break; // монотонный путь — дальше тоже вне границ
         }
     }
 }

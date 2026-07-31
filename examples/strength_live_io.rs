@@ -40,6 +40,9 @@ fn main() {
         priority: 10,
         min_age: 0,
         overflow: OverflowAction::Write(0), // 0 = пронести исходное значение как есть
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(PACKET), vec![rule]);

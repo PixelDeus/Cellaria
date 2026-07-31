@@ -17,6 +17,16 @@
 //! Нативная реализация ниже сознательно воспроизводит то же самое
 //! (не обновляет граничное кольцо), чтобы сравнение было честным —
 //! иначе это была бы не менее быстрая, а просто ДРУГАЯ функция.
+//!
+//! С `--features gpu` добавляется третья колонка: тот же самый набор
+//! правил (`build_gol_rules`), выполненный через `gpu::GpuEngine` (v1
+//! compute-шейдер) вместо CPU `Engine` — см. `tests/gpu_v1_correctness.rs`
+//! про то, где и как это сверено с `engine::run_tick` побитово, включая
+//! born_at. Тайминг GPU-стороны включает `read_grid()` (блокирующий
+//! readback) — без него не с чем было бы сравнить результат на CPU, но это
+//! значит, что цифра здесь заведомо консервативнее той, что была бы у
+//! реального многотикового прогона без readback между тиками (см.
+//! `GpuEngine::run_ticks`).
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -71,6 +81,9 @@ fn build_gol_rules() -> Vec<Rule> {
                 priority: 10,
                 min_age: 0,
                 overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
             });
         }
     }
@@ -133,6 +146,62 @@ fn run_cellaria_gol_step(n: usize, seed: &[u8]) -> (u128, Vec<u8>) {
 }
 
 // ============================================================================
+// Сторона GPU (feature `gpu`) — тот же rule_index, что и у Cellaria-CPU
+// выше, через v1 compute-шейдер (см. doc-комментарий модуля).
+// ============================================================================
+
+#[cfg(feature = "gpu")]
+fn run_gpu_gol_step(n: usize, seed: &[u8], rule_index: &HashMap<CellType, Vec<Rule>>) -> (u128, Vec<u8>) {
+    let mut engine = build_gpu_engine(n, seed, rule_index);
+    let t0 = Instant::now();
+    engine.run_tick();
+    let result_cells = engine.read_grid();
+    let elapsed = t0.elapsed().as_nanos() as u128;
+
+    let mut result = vec![DEAD; n * n];
+    for (i, cell) in result_cells.into_iter().enumerate() {
+        result[i] = cell.value.0 .0;
+    }
+    (elapsed, result)
+}
+
+#[cfg(feature = "gpu")]
+fn build_gpu_engine(n: usize, seed: &[u8], rule_index: &HashMap<CellType, Vec<Rule>>) -> cellaria::gpu::GpuEngine {
+    use cellaria::gpu::GpuEngine;
+
+    let mut initial = Vec::new();
+    for y in 0..n {
+        for x in 0..n {
+            let v = seed[y * n + x];
+            if v != DEAD {
+                initial.push((x, y, Cell { value: CellValue(CellType(v)), born_at: 0 }));
+            }
+        }
+    }
+    GpuEngine::new(n, n, &initial, rule_index)
+        .expect("build_gol_rules() produces a v1-compatible rule set (no shifts, self-only Literal changes)")
+}
+
+/// `reps` тиков подряд на ОДНОМ `GpuEngine` (не пересоздавая устройство и
+/// не сбрасывая решётку каждый rep, в отличие от CPU/Native веток ниже,
+/// которые честно повторяют один и тот же ПЕРВЫЙ шаг `reps` раз) —
+/// пересоздание `wgpu`-устройства 200 раз подряд доминировало бы над самим
+/// измерением. Решётка при этом просто продолжает эволюционировать —
+/// пропускная способность одного тика GoL не зависит от того, какой именно
+/// это тик по счёту при сравнимой плотности, так что это не искажает
+/// сравнение throughput.
+#[cfg(feature = "gpu")]
+fn run_gpu_gol_reps(n: usize, seed: &[u8], rule_index: &HashMap<CellType, Vec<Rule>>, reps: u32) -> u128 {
+    let mut engine = build_gpu_engine(n, seed, rule_index);
+    let t0 = Instant::now();
+    for _ in 0..reps {
+        engine.run_tick();
+    }
+    let _ = engine.read_grid(); // синхронизация: дождаться реального завершения всех тиков
+    t0.elapsed().as_nanos() as u128
+}
+
+// ============================================================================
 // Сторона "прямая реализация" — подсчёт соседей, отдельный выходной буфер.
 // Граничное кольцо (как и в Cellaria) не обновляется — см. комментарий
 // в начале файла.
@@ -174,17 +243,37 @@ fn main() {
     // affected_cells; арбитраж теперь сравнивает только реальные записи).
     // Ниже — проверка корректности на нескольких плотностях, затем честная
     // throughput-таблица, раз результаты теперь побитово идентичны.
+    #[cfg(feature = "gpu")]
+    let gpu_rule_index = build_rule_index(build_gol_rules());
+
     for &density in &[10u64, 30, 50] {
         let n0 = 20;
         let seed0 = seeded_fill(n0, density);
         let (_, c_res) = run_cellaria_gol_step(n0, &seed0);
         let (_, n_res) = run_native_gol_step(n0, &seed0);
         assert_eq!(c_res, n_res, "Cellaria и нативная реализация должны давать БИТ В БИТ одинаковый результат (плотность {}%)", density);
+
+        #[cfg(feature = "gpu")]
+        {
+            let (_, g_res) = run_gpu_gol_step(n0, &seed0, &gpu_rule_index);
+            assert_eq!(c_res, g_res, "GPU и CPU-эталон должны давать БИТ В БИТ одинаковый результат (плотность {}%)", density);
+        }
     }
     println!("Корректность (N=20, плотности 10/30/50%): результаты идентичны побитово ✓\n");
 
-    println!("{:>10} | {:>18} | {:>18} | {:>12}", "N (сторона)", "Cellaria (кл/с)", "Native (кл/с)", "во сколько раз");
-    println!("{}", "-".repeat(68));
+    #[cfg(not(feature = "gpu"))]
+    {
+        println!("{:>10} | {:>18} | {:>18} | {:>12}", "N (сторона)", "Cellaria (кл/с)", "Native (кл/с)", "во сколько раз");
+        println!("{}", "-".repeat(68));
+    }
+    #[cfg(feature = "gpu")]
+    {
+        println!(
+            "{:>10} | {:>18} | {:>18} | {:>18} | {:>14} | {:>14}",
+            "N (сторона)", "Cellaria (кл/с)", "Native (кл/с)", "GPU (кл/с)", "Native/Cellaria", "GPU/Cellaria"
+        );
+        println!("{}", "-".repeat(105));
+    }
 
     for &n in &[10usize, 30, 50, 100, 200] {
         let seed = seeded_fill(n, 30);
@@ -203,9 +292,24 @@ fn main() {
         let n_per_sec = cells / (n_total_ns as f64 / reps as f64 / 1e9);
         let ratio = n_per_sec / c_per_sec;
 
+        #[cfg(not(feature = "gpu"))]
         println!(
             "{:>10} | {:>18.0} | {:>18.0} | {:>10.0}x",
             n, c_per_sec, n_per_sec, ratio
         );
+
+        #[cfg(feature = "gpu")]
+        {
+            // Одно измерение на `reps` тиков подряд (не `reps` отдельных
+            // замеров, как у CPU/Native выше) — см. doc-комментарий
+            // `run_gpu_gol_reps`.
+            let g_total_ns = run_gpu_gol_reps(n, &seed, &gpu_rule_index, reps as u32);
+            let g_per_sec = cells * reps as f64 / (g_total_ns as f64 / 1e9);
+            let g_ratio = g_per_sec / c_per_sec;
+            println!(
+                "{:>10} | {:>18.0} | {:>18.0} | {:>18.0} | {:>13.0}x | {:>13.0}x",
+                n, c_per_sec, n_per_sec, g_per_sec, ratio, g_ratio
+            );
+        }
     }
 }

@@ -332,6 +332,9 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     let rule_index = helpers::make_rule_index(vec![rule]);
 
@@ -450,6 +453,9 @@ fn full_tick_bench(n: usize) -> u128 {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
     let rule_index = helpers::make_rule_index(vec![rule]);
 

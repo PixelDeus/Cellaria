@@ -19,7 +19,7 @@ fn test_deserialize_add_rule() {
     let packet = vec![10, 1, 5, 255];
     let idx = find_terminator(&packet).unwrap();
     let data = &packet[..idx];
-    let op = deserialize_packet(data, 100).unwrap();
+    let op = deserialize_packet(data).unwrap();
     match op {
         RuleOp::AddRule(rule) => {
             assert_eq!(rule.id, vec![CellType(5)]);
@@ -31,11 +31,11 @@ fn test_deserialize_add_rule() {
 
 #[test]
 fn test_deserialize_remove_rule() {
-    // RemoveRule: [0xF0, rule_id=42, 255]
-    let packet = vec![0xF0, 42, 255];
+    // RemoveRule: [0xF0, id_len=1, rule_id=42, 255]
+    let packet = vec![0xF0, 1, 42, 255];
     let idx = find_terminator(&packet).unwrap();
     let data = &packet[..idx];
-    let op = deserialize_packet(data, 0).unwrap();
+    let op = deserialize_packet(data).unwrap();
     assert_eq!(op, RuleOp::RemoveRule(vec![CellType(42)]));
 }
 
@@ -44,7 +44,7 @@ fn test_deserialize_clear_all() {
     let packet = vec![0xF1, 255];
     let idx = find_terminator(&packet).unwrap();
     let data = &packet[..idx];
-    let op = deserialize_packet(data, 0).unwrap();
+    let op = deserialize_packet(data).unwrap();
     assert_eq!(op, RuleOp::ClearAll);
 }
 
@@ -58,6 +58,9 @@ fn make_rule(id: Vec<CellType>, priority: u32, changes: Vec<(i32, i32, crate::ty
         priority,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     }
 }
 
@@ -125,7 +128,7 @@ fn test_get_index_rebuilds_when_dirty() {
 fn test_deserialize_rejects_255_in_id() {
     // data = [priority=10, id_len=1, type=255]
     let data = vec![10, 1, 0xFF];
-    let result = deserialize_packet(&data, 100);
+    let result = deserialize_packet(&data);
     assert!(result.is_err(), "Should reject 255 in id");
 }
 
@@ -272,6 +275,9 @@ fn test_integration_self_modification() {
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     // 3) Правило 2: id=[9], priority=5,
@@ -284,6 +290,9 @@ fn test_integration_self_modification() {
         priority: 5,
         min_age: 0,
         overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
     };
 
     // 4) RuleStore с правилом 1
