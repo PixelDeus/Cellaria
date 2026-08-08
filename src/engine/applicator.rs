@@ -6,8 +6,8 @@ use crate::fast_hash::FxHashMap;
 use crate::grid::Grid;
 use crate::storage::GridStorage;
 use crate::types::{
-    AffectedRegion, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule,
-    RuleMatch, ShiftSpec,
+    AffectedRegion, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction,
+    RecordTrigger, RecordedValue, Rule, RuleMatch, ShiftSpec,
 };
 
 /// Буфер изменений: координата → новое значение ячейки.
@@ -33,20 +33,34 @@ pub fn apply_matches<S: GridStorage>(
     rule_index: &HashMap<CellType, Vec<Rule>>,
     rule_cache: &RuleDataCache,
 ) -> (Vec<AffectedRegion>, Vec<(u32, Cell)>) {
-    apply_matches_with_cam(grid, matches, rule_index, rule_cache, &CamPositions::default())
+    apply_matches_with_cam(
+        grid,
+        matches,
+        rule_index,
+        rule_cache,
+        &CamPositions::default(),
+        &mut crate::engine::arbitrator::FeedbackCounters::default(),
+        &mut crate::engine::arbitrator::MemoryBuffers::default(),
+    )
 }
 
 /// Как [`apply_matches`], но с картой найденных CAM-позиций (см.
-/// `matcher::detect_cam_matches`) — только `run_tick`/`Engine::run_tick`
-/// имеют что туда передать (см. doc-комментарий `Engine::detect_matches`),
-/// поэтому `apply_matches` остаётся публичным с прежней сигнатурой и просто
-/// подставляет пустую карту.
+/// `matcher::detect_cam_matches`) и счётчиками обратной связи (см.
+/// `Engine::feedback_counters`/`Rule::feedback`) — только `run_tick`/
+/// `Engine::run_tick` имеют что туда передать (см. doc-комментарий
+/// `Engine::detect_matches`), поэтому `apply_matches` остаётся публичным с
+/// прежней сигнатурой и просто подставляет пустые карты. `feedback_counters`
+/// — `&mut`, а не `&`: маркер физически ДВИГАЕТСЯ при сдвиге, так что запись
+/// счётчика нужно ПЕРЕНОСИТЬ на новую позицию (см. doc-комментарий
+/// `apply_shift_buffered`), а не только читать.
 pub(crate) fn apply_matches_with_cam<S: GridStorage>(
     grid: &mut Grid<S>,
     matches: Vec<RuleMatch>,
     rule_index: &HashMap<CellType, Vec<Rule>>,
     rule_cache: &RuleDataCache,
     cam_positions: &CamPositions,
+    feedback_counters: &mut crate::engine::arbitrator::FeedbackCounters,
+    memory_buffers: &mut crate::engine::arbitrator::MemoryBuffers,
 ) -> (Vec<AffectedRegion>, Vec<(u32, Cell)>) {
     let mut pending_boundary: Vec<(u32, Cell)> = Vec::new();
     let mut regions: Vec<AffectedRegion> = Vec::new();
@@ -67,7 +81,8 @@ pub(crate) fn apply_matches_with_cam<S: GridStorage>(
             .and_then(|rules| rules.get(m.rule_idx));
         if let Some(rule) = rule {
             if let Some(cam) = rule.cam {
-                let region = apply_cam_buffered(&m, cam, cam_positions, grid.generation(), &mut write_buffer);
+                let gen = grid.generation();
+                let region = apply_cam_buffered(&*grid, &m, rule, cam, cam_positions, gen, &mut write_buffer);
                 regions.push(region);
                 continue;
             }
@@ -77,7 +92,7 @@ pub(crate) fn apply_matches_with_cam<S: GridStorage>(
             // гарантирует отсутствие пересечения записей между matches, так
             // что объединять нечего, а лишний HashMap на каждый match — это
             // лишняя аллокация и хэширование на пустом месте.
-            let (region, outputs) = apply_rule_buffered(grid, &m, rule, rule_data, &mut write_buffer);
+            let (region, outputs) = apply_rule_buffered(grid, &m, rule, rule_data, &mut write_buffer, feedback_counters, memory_buffers);
             regions.push(region);
             pending_boundary.extend(outputs);
         }
@@ -105,10 +120,31 @@ pub(crate) fn apply_matches_with_cam<S: GridStorage>(
 /// Применить CAM-матч (`types::CamSearch`) с буферизацией — притягивает
 /// значение найденной клетки на позицию магнита: найденная клетка
 /// становится дефолтной (очищается), магнит получает `cam.target_type`.
-/// Ровно 2 записанные клетки, всегда — не зависит от `rule.changes`/`shifts`
-/// (CAM-правило их не имеет, см. валидацию в `config.rs`).
-fn apply_cam_buffered(
+/// Без `rule.recursion` — ровно 2 записанные клетки, всегда, не зависит от
+/// `rule.changes`/`shifts` (CAM-правило их не имеет, см. валидацию в
+/// `config.rs`).
+///
+/// С `rule.recursion` (см. Corollary D в `conflict_analyzer::compute_rule_data`'s
+/// doc-комментарий и `paper/paper4.md` §8/§9): после притяжения уровня 0
+/// (выше) — цепочка НЕЗАВИСИМЫХ магнитов вдоль `recursion.direction`,
+/// каждый на фиксированном смещении `k × direction` от исходного матча,
+/// `k = 1..=max_depth`. Уровень продолжается, только если клетка на его
+/// позиции имеет тип головы правила (`rule.id[0]`, гарантированно есть —
+/// у cam-правила `pattern` пуст по валидации, значит `id` не пуст по общей
+/// валидации "id or pattern must not be empty") И в её собственном диске
+/// радиуса `cam.radius` находится `cam.target_type` — иначе каскад
+/// останавливается на первом же несовпадении, та же граница, что и у
+/// обычной (не-cam) рекурсии. Чтение — ЭФФЕКТИВНОЕ (`read_cell_effective`/
+/// `search_nearest_effective`, учитывает уже накопленный этим же каскадом
+/// `write_buffer`), не устаревший срез "до тика" — по той же причине, что и
+/// у обычной рекурсии (см. её doc-комментарий в `types.rs`): это ЕДИНСТВЕННЫЙ
+/// способ не дать двум соседним уровням каскада независимо "найти" и
+/// притянуть одну и ту же физическую клетку дважды (без эффективного чтения
+/// уровень k+1 не увидел бы, что уровень k уже очистил найденную клетку).
+fn apply_cam_buffered<S: GridStorage>(
+    grid: &Grid<S>,
     m: &RuleMatch,
+    rule: &Rule,
     cam: crate::types::CamSearch,
     cam_positions: &CamPositions,
     gen: u64,
@@ -133,16 +169,100 @@ fn apply_cam_buffered(
     write_buffer.insert(found, Cell { value: CellValue::default(), born_at: gen });
     write_buffer.insert(magnet, Cell { value: CellValue(cam.target_type), born_at: gen });
 
-    let xs = [found.0, magnet.0];
-    let ys = [found.1, magnet.1];
-    AffectedRegion {
-        x_start: *xs.iter().min().expect("xs has 2 fixed elements, never empty"),
-        x_end: *xs.iter().max().expect("xs has 2 fixed elements, never empty"),
-        y_start: *ys.iter().min().expect("ys has 2 fixed elements, never empty"),
-        y_end: *ys.iter().max().expect("ys has 2 fixed elements, never empty"),
-        has_changes: false,
-        written_cells: vec![found, magnet],
+    let mut xs = vec![found.0, magnet.0];
+    let mut ys = vec![found.1, magnet.1];
+    let mut written_cells = vec![found, magnet];
+
+    if let Some(spec) = rule.recursion {
+        // Гарантировано валидацией `config::load_config`: `cam` требует
+        // пустой `pattern`, а общая валидация требует непустым хотя бы один
+        // из `id`/`pattern` — значит `id` здесь непуст.
+        let head_type = rule.id.first().copied().expect(
+            "apply_cam_buffered: cam rule with empty `pattern` must have non-empty `id` (see config::load_config validation)",
+        );
+        let (ddx, ddy) = match spec.direction {
+            Direction::Up => (0, -1),
+            Direction::Down => (0, 1),
+            Direction::Left => (-1, 0),
+            Direction::Right => (1, 0),
+        };
+        let mut cx = m.x as i32;
+        let mut cy = m.y as i32;
+        for _ in 1..=spec.max_depth {
+            cx += ddx;
+            cy += ddy;
+            if cx < 0 || cy < 0 {
+                break;
+            }
+            if read_cell_effective(grid, write_buffer, cx, cy).0 != head_type {
+                break;
+            }
+            let Some((nfx, nfy)) = search_nearest_effective(grid, write_buffer, cx, cy, cam.radius, cam.target_type)
+            else {
+                break;
+            };
+            let level_magnet = (cx as u32, cy as u32);
+            let level_found = (nfx as u32, nfy as u32);
+            write_buffer.insert(level_found, Cell { value: CellValue::default(), born_at: gen });
+            write_buffer.insert(level_magnet, Cell { value: CellValue(cam.target_type), born_at: gen });
+            xs.push(level_found.0);
+            xs.push(level_magnet.0);
+            ys.push(level_found.1);
+            ys.push(level_magnet.1);
+            written_cells.push(level_found);
+            written_cells.push(level_magnet);
+        }
     }
+
+    AffectedRegion {
+        x_start: *xs.iter().min().expect("xs always has at least the level-0 pair, never empty"),
+        x_end: *xs.iter().max().expect("xs always has at least the level-0 pair, never empty"),
+        y_start: *ys.iter().min().expect("ys always has at least the level-0 pair, never empty"),
+        y_end: *ys.iter().max().expect("ys always has at least the level-0 pair, never empty"),
+        has_changes: false,
+        written_cells,
+    }
+}
+
+/// Ближайшая клетка типа `target` в Chebyshev-радиусе `radius` вокруг
+/// (cx, cy), читая ЭФФЕКТИВНОЕ состояние (`read_cell_effective` — grid плюс
+/// уже накопленный `write_buffer` этого же тика) — вариант
+/// `matcher::search_nearest` для каскада `cam`+`recursion` (см.
+/// `apply_cam_buffered`'s doc-комментарий), которому, в отличие от обычного
+/// CAM-детекта, нужно видеть изменения, сделанные более ранними уровнями
+/// ТОГО ЖЕ каскада. Тай-брейк идентичен `search_nearest`: минимум по
+/// (dist, y, x).
+fn search_nearest_effective<S: GridStorage>(
+    grid: &Grid<S>,
+    write_buffer: &WriteBuffer,
+    cx: i32,
+    cy: i32,
+    radius: u8,
+    target: CellType,
+) -> Option<(i32, i32)> {
+    let r = radius as i32;
+    let mut best: Option<(i32, i32, i32)> = None; // (dist, y, x) — минимум лексикографически
+    for dy in -r..=r {
+        let ny = cy + dy;
+        if ny < 0 {
+            continue;
+        }
+        for dx in -r..=r {
+            let nx = cx + dx;
+            if nx < 0 || (nx, ny) == (cx, cy) {
+                continue;
+            }
+            if read_cell_effective(grid, write_buffer, nx, ny).0 != target {
+                continue;
+            }
+            let dist = dx.abs().max(dy.abs());
+            let candidate = (dist, ny, nx);
+            if best.is_none_or(|b| candidate < b) {
+                best = Some(candidate);
+            }
+        }
+    }
+    best.map(|(_, y, x)| (x, y))
 }
 
 /// Применить одно правило к ячейке с буферизацией.
@@ -158,12 +278,15 @@ fn apply_cam_buffered(
 /// перезаписывая любые конфликтующие записи. Это даёт sequential-семантику
 /// в пределах одного правила (сдвиг → change), но CA-семантику между
 /// разными правилами.
+#[allow(clippy::too_many_arguments)]
 fn apply_rule_buffered<S: GridStorage>(
     grid: &mut Grid<S>,
     m: &RuleMatch,
     rule: &Rule,
     rule_data: Option<&crate::conflict_analyzer::RuleData>,
     write_buffer: &mut WriteBuffer,
+    feedback_counters: &mut crate::engine::arbitrator::FeedbackCounters,
+    memory_buffers: &mut crate::engine::arbitrator::MemoryBuffers,
 ) -> (AffectedRegion, Vec<(u32, Cell)>) {
     let cx = m.x as i32;
     let cy = m.y as i32;
@@ -209,10 +332,25 @@ fn apply_rule_buffered<S: GridStorage>(
 
     // Фаза 1: сдвиги — перемещают головку.
     // Читают из grid (старое состояние), пишут в буфер.
+    //
+    // `Rule::feedback` (см. её doc-комментарий и Лемму 4, `paper/paper4.md`
+    // §8): если счётчик для ЭТОГО конкретного матча уже защёлкнут (достиг
+    // `timeout`), реальный применённый сдвиг — `new_direction`, а не
+    // декларированное направление. Правило с `feedback` гарантированно
+    // имеет РОВНО один сдвиг (см. валидацию в `config::load_config`), так
+    // что подмена направления применима к единственной итерации цикла ниже.
+    let feedback_override = rule.feedback.and_then(|spec| {
+        let latched = feedback_counters.get(&(m.x, m.y, m.rule_idx)).copied().unwrap_or(0) >= spec.timeout;
+        latched.then_some(spec.new_direction)
+    });
     for shift_group in &rule.shifts {
         for shift in shift_group {
+            let effective_shift = match feedback_override {
+                Some(direction) => ShiftSpec { direction, ..*shift },
+                None => *shift,
+            };
             apply_shift_buffered(
-                grid, cx, cy, shift, rule, &mut affected,
+                grid, cx, cy, &effective_shift, rule, m.rule_idx, feedback_counters, memory_buffers, &mut affected,
                 write_buffer, &mut pending_outputs, gen,
             );
         }
@@ -247,7 +385,149 @@ fn apply_rule_buffered<S: GridStorage>(
         }
     }
 
+    // Фаза 3: `Rule::recursion` — каскад ВНУТРИ ОДНОГО тика (см. её
+    // doc-комментарий и Лемму 4, `paper/paper4.md` §8, Corollary B).
+    // Каждый уровень k=1..=max_depth заново проверяет ТОТ ЖЕ `pattern`,
+    // сдвинутый на k×direction, читая уже НАКОПЛЕННЫЙ этим же каскадом
+    // `write_buffer` (не устаревший срез grid "до тика") — единственное
+    // осознанное исключение из общего правила detect-читает-pre-tick,
+    // ограниченное ОДНИМ выигравшим арбитраж матчем (см. её doc-комментарий
+    // в `types.rs`). Останавливается на первом уровне, где паттерн не
+    // совпал — естественная граница каскада, как и у заливки.
+    if let Some(spec) = rule.recursion {
+        let (ddx, ddy) = match spec.direction {
+            Direction::Up => (0, -1),
+            Direction::Down => (0, 1),
+            Direction::Left => (-1, 0),
+            Direction::Right => (1, 0),
+        };
+        for k in 1..=spec.max_depth as i32 {
+            let ox = cx + ddx * k;
+            let oy = cy + ddy * k;
+            if !pattern_matches_effective(grid, write_buffer, &rule.pattern, ox, oy, rule.min_age, gen) {
+                break;
+            }
+            // `memory` + `recursion` (только `NeighborType` — см.
+            // `config.rs`'s валидацию: `RuleOutcome` остаётся запрещённым,
+            // семантика "Applied/Missed" для уровня каскада, у которого нет
+            // отдельного арбитража, попросту не определена). Уровень k —
+            // САМОСТОЯТЕЛЬНАЯ позиция со своим собственным буфером (ключ
+            // `(ox, oy, rule_idx)`, НЕ позиция исходного матча) — та же
+            // клетка на будущих тиках может независимо стать top-level
+            // матчем и продолжить ТОТ ЖЕ буфер (см. push-логику в
+            // `engine/mod.rs`, тот же ключ). Гейт проверяется по буферу
+            // КАК ОН БЫЛ до этого тика (та же семантика, что и у top-level
+            // матчей), затем — НОВОЕ наблюдение пушится безусловно (буфер
+            // продолжает наблюдать даже когда гейт закрыт), и только ПОСЛЕ
+            // ЭТОГО закрытый гейт останавливает каскад (тот же класс
+            // границы, что и несовпавший pattern/min_age выше).
+            if let Some(mem_spec) = &rule.memory {
+                if let RecordTrigger::NeighborType(dir) = mem_spec.record_trigger {
+                    let key = (ox as u32, oy as u32, m.rule_idx);
+                    let gate_open = memory_buffers
+                        .get(&key)
+                        .is_some_and(|buf| buf.len() == mem_spec.window && buf.iter().eq(mem_spec.match_pattern.iter()));
+                    let (ndx, ndy) = crate::engine::arbitrator::direction_delta(dir);
+                    let neighbor_type = read_cell_effective(grid, write_buffer, ox + ndx, oy + ndy).0;
+                    let buf = memory_buffers.entry(key).or_default();
+                    buf.push_back(RecordedValue::Type(neighbor_type));
+                    while buf.len() > mem_spec.window {
+                        buf.pop_front();
+                    }
+                    if !gate_open {
+                        break;
+                    }
+                }
+            }
+            let level_pattern_buffer = read_pattern_buffer_effective(grid, write_buffer, &rule.pattern, ox, oy);
+            apply_changes_at(rule, &level_pattern_buffer, ox, oy, (0, 0), grid, gen, write_buffer, &mut affected);
+        }
+    }
+
     (affected, pending_outputs)
+}
+
+/// Прочитать одну ячейку, учитывая уже накопленный `write_buffer` (если
+/// клетка уже записана ЭТИМ ЖЕ тиком — вернуть её, иначе честно прочитать
+/// grid) — используется ТОЛЬКО каскадом `Rule::recursion`, см. её
+/// doc-комментарий про единственное осознанное исключение из
+/// detect-читает-pre-tick.
+fn read_cell_effective<S: GridStorage>(grid: &Grid<S>, write_buffer: &WriteBuffer, x: i32, y: i32) -> CellValue {
+    if x < 0 || y < 0 {
+        return CellValue::default();
+    }
+    if let Some(cell) = write_buffer.get(&(x as u32, y as u32)) {
+        return cell.value;
+    }
+    grid.get_cell(x as usize, y as usize).map(|c| c.value).unwrap_or_default()
+}
+
+/// Вычислить возраст ОДНОЙ ячейки, учитывая уже накопленный `write_buffer` —
+/// аналог `read_cell_effective`, но для возраста, а не значения. Используется
+/// ТОЛЬКО каскадом `Rule::recursion`, чтобы каждый уровень каскада мог
+/// применить `rule.min_age` к СВОЕЙ клетке-анкеру `(ox, oy)`, той же ролью,
+/// которую `center_age`/`(cx, cy)` играют в обычном `matcher::match_cell`.
+///
+/// Если клетка уже записана этим же тиком (есть в `write_buffer`), её
+/// эффективный `born_at` — РОВНО `gen`: и `apply_changes_at`/
+/// `apply_shift_buffered`/`apply_overflow_write`/`apply_cam_buffered` (Фазы
+/// 1-2 и предыдущие уровни каскада), и финальный flush в
+/// `apply_matches_with_cam` пишут `born_at: gen` для любой записи буфера —
+/// значит `gen - born_at == 0` ВСЕГДА для буферных записей. Это не костыль, а
+/// ровно то же самое, что `Grid::get_age` вернула бы для этой клетки, если
+/// бы её прочитали из решётки СРАЗУ после `set_cell` в этот же тик (до
+/// `advance_age`) — клетка, которую каскад только что создал/очистил в этом
+/// тике, имеет возраст 0 для следующего уровня, точно как любая другая
+/// свежезаписанная клетка имеет возраст 0 до конца текущего тика. Не
+/// переизобретаем `is_default`-ветку `Grid::get_age` собственной логикой —
+/// копируем её дословно на случай, если будущий код когда-нибудь положит в
+/// буфер запись с born_at ≠ gen.
+fn read_age_effective<S: GridStorage>(grid: &Grid<S>, write_buffer: &WriteBuffer, x: i32, y: i32, gen: u64) -> u64 {
+    if x < 0 || y < 0 {
+        return 0;
+    }
+    if let Some(cell) = write_buffer.get(&(x as u32, y as u32)) {
+        return if cell.is_default() { 0 } else { gen.saturating_sub(cell.born_at) };
+    }
+    grid.get_age(x as usize, y as usize)
+}
+
+/// Проверить, совпадает ли `pattern` (тот же список смещений, что и у
+/// исходного матча) в позиции `(ox, oy)`, читая эффективное (с учётом
+/// каскада) состояние — см. `read_cell_effective` — И удовлетворяет ли эта
+/// позиция-анкер `min_age` (см. `read_age_effective`). `(ox, oy)` играет ТУ
+/// ЖЕ роль, что `(cx, cy)` играет в `matcher::match_cell`: обычный путь
+/// проверяет `min_age` ОДИН РАЗ, против возраста клетки-анкера самого матча,
+/// а не против каждой клетки паттерна по отдельности — здесь то же самое,
+/// только анкер каждого уровня каскада — это `(ox, oy)`, а не исходные
+/// `(cx, cy)` матча.
+fn pattern_matches_effective<S: GridStorage>(
+    grid: &Grid<S>,
+    write_buffer: &WriteBuffer,
+    pattern: &[(i8, i8, CellType)],
+    ox: i32,
+    oy: i32,
+    min_age: u64,
+    gen: u64,
+) -> bool {
+    if min_age > 0 && read_age_effective(grid, write_buffer, ox, oy, gen) < min_age {
+        return false;
+    }
+    pattern.iter().all(|&(dx, dy, expected)| read_cell_effective(grid, write_buffer, ox + dx as i32, oy + dy as i32).0 == expected)
+}
+
+/// Пересобрать буфер значений паттерна (для `$N`-ссылок в `changes`) для
+/// ОДНОГО уровня каскада — та же логика, что и исходный `pattern_buffer` в
+/// `apply_rule_buffered`, но с эффективным (с учётом каскада) чтением и
+/// относительно НОВОЙ (сдвинутой) позиции этого уровня, а не исходного матча.
+fn read_pattern_buffer_effective<S: GridStorage>(
+    grid: &Grid<S>,
+    write_buffer: &WriteBuffer,
+    pattern: &[(i8, i8, CellType)],
+    ox: i32,
+    oy: i32,
+) -> Vec<CellValue> {
+    pattern.iter().map(|&(dx, dy, _)| read_cell_effective(grid, write_buffer, ox + dx as i32, oy + dy as i32)).collect()
 }
 
 /// Применить `rule.changes` относительно одной цели сдвига (или (0,0), если
@@ -310,14 +590,19 @@ fn apply_changes_at<S: GridStorage>(
 
 /// Применить цепочечный сдвиг с буферизацией.
 ///
-/// Читает головку из grid (старое значение), пишет очистку (0,0)
-/// и запись в (nx,ny) в буфер.
+/// Читает головку из grid (старое значение), пишет очистку (0,0) — если не
+/// `shift.keep_source` (см. её doc-комментарий, "излучение") — и запись в
+/// (nx,ny) в буфер.
+#[allow(clippy::too_many_arguments)]
 fn apply_shift_buffered<S: GridStorage>(
     grid: &mut Grid<S>,
     cx: i32,
     cy: i32,
     shift: &ShiftSpec,
     rule: &Rule,
+    rule_idx: usize,
+    feedback_counters: &mut crate::engine::arbitrator::FeedbackCounters,
+    memory_buffers: &mut crate::engine::arbitrator::MemoryBuffers,
     affected: &mut AffectedRegion,
     write_buffer: &mut WriteBuffer,
     pending_outputs: &mut Vec<(u32, Cell)>,
@@ -352,15 +637,56 @@ fn apply_shift_buffered<S: GridStorage>(
     let nx = ox + dx * steps;
     let ny = oy + dy * steps;
 
-    // Include original position in affected region
-    affected.x_start = affected.x_start.min(ox as u32);
-    affected.x_end = affected.x_end.max(ox as u32 + 1);
-    affected.y_start = affected.y_start.min(oy as u32);
-    affected.y_end = affected.y_end.max(oy as u32 + 1);
+    // Перенос счётчиков feedback/memory на новую позицию — ТОЛЬКО когда
+    // источник реально освобождается (`!shift.keep_source`). С
+    // `keep_source: true` ("излучение") исходная клетка НЕ исчезает: она
+    // по-прежнему тот же самый маркер на той же позиции и должна сохранить
+    // СВОЙ счётчик как есть — перенос (remove+insert) стёр бы его историю,
+    // хотя оригинал физически никуда не делся. Новая позиция при этом
+    // получает копию ЗНАЧЕНИЯ клетки, но не копию счётчика — это НОВЫЙ,
+    // независимый экземпляр, его собственный счётчик естественно начнётся с
+    // нуля на следующем тике (обычный `.entry(key).or_insert(0)` в
+    // пост-арбитражном апдейте), а не унаследует историю оригинала.
+    if !shift.keep_source {
+        // `Rule::feedback`: счётчик отслеживает "сколько тиков подряд ЭТОТ
+        // конкретный маркер пытается", а не "сколько тиков подряд что-то
+        // происходило в ЭТОЙ клетке" — маркер физически ДВИГАЕТСЯ каждый
+        // тик (в отличие от `starvation_after`, где матч перепроверяет ОДНУ
+        // и ту же клетку), так что запись нужно ПЕРЕНЕСТИ на новую позицию
+        // вместе со сдвигом, а не оставлять сиротой на старой (там счётчик
+        // просто исчезнет из карты) и стартовать с нуля на новой. Перенос —
+        // независимо от того, какое направление сейчас эффективно
+        // применяется (обычное или `new_direction`): счётчик всегда следует
+        // за физическим положением головки.
+        if rule.feedback.is_some() && nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+            if let Some(val) = feedback_counters.remove(&(ox as u32, oy as u32, rule_idx)) {
+                feedback_counters.insert((nx as u32, ny as u32, rule_idx), val);
+            }
+        }
 
-    // Clear original position (write to buffer, not grid)
-    write_buffer.insert((ox as u32, oy as u32), Cell::default());
-    affected.written_cells.push((ox as u32, oy as u32));
+        // `Rule::memory`: тот же перенос и по той же причине, что и у
+        // `feedback` выше — буфер наблюдений отслеживает КОНКРЕТНЫЙ маркер,
+        // а не клетку; правило с `memory` и сдвигом (0 или 1, см. валидацию
+        // в `config::load_config`) физически двигается, так что запись
+        // нужно перенести на новую позицию, иначе буфер обнулялся бы
+        // (терялся из карты) на каждом шагу — тот же класс бага, что уже
+        // найден для `feedback` (см. её doc-комментарий).
+        if rule.memory.is_some() && nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+            if let Some(val) = memory_buffers.remove(&(ox as u32, oy as u32, rule_idx)) {
+                memory_buffers.insert((nx as u32, ny as u32, rule_idx), val);
+            }
+        }
+
+        // Include original position in affected region
+        affected.x_start = affected.x_start.min(ox as u32);
+        affected.x_end = affected.x_end.max(ox as u32 + 1);
+        affected.y_start = affected.y_start.min(oy as u32);
+        affected.y_end = affected.y_end.max(oy as u32 + 1);
+
+        // Clear original position (write to buffer, not grid)
+        write_buffer.insert((ox as u32, oy as u32), Cell::default());
+        affected.written_cells.push((ox as u32, oy as u32));
+    }
 
     if !shift.broadcast {
         if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {

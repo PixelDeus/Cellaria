@@ -66,7 +66,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         }],
     );
 
@@ -92,7 +92,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         });
 
         // Тихо (никто не прилетал QUIET_THRESHOLD тиков) — перевести
@@ -112,7 +112,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             });
         }
         idx.insert(counter_id, rules);
@@ -134,7 +134,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(0),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             }],
         );
     }
@@ -154,7 +154,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             }],
         );
     }

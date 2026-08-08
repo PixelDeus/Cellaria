@@ -14,6 +14,16 @@ use crate::types::{CellType, OverflowAction, Rule, RuleMatch};
 /// индекс сработавшего правила).
 pub(crate) type StarvationCounters = FxHashMap<(u32, u32, usize), u32>;
 
+/// Счётчики "сколько тиков подряд этот матч детектировался" (защёлка, не
+/// сбрасывается) — см. `Engine::feedback_counters` и `Rule::feedback`. Тот
+/// же ключ `(x, y, rule_idx)`.
+pub(crate) type FeedbackCounters = FxHashMap<(u32, u32, usize), u64>;
+
+/// FIFO-буферы наблюдений памяти (см. `Engine::memory_buffers` и
+/// `Rule::memory`) — тот же ключ `(x, y, rule_idx)`, что и у остальных
+/// per-match Engine-состояний.
+pub(crate) type MemoryBuffers = FxHashMap<(u32, u32, usize), std::collections::VecDeque<crate::types::RecordedValue>>;
+
 /// Ниже этого числа матчей накладные расходы rayon (work-stealing,
 /// синхронизация пула потоков) не окупаются — та же логика, что и
 /// `matcher::PARALLEL_THRESHOLD` (см. её doc-комментарий: там это уже
@@ -74,10 +84,21 @@ pub fn arbitrate(
     // корректно (не паникует, не расходится с CPU-эталоном), просто не
     // вращается между вызовами; только `run_tick`/`Engine::run_tick` знают
     // настоящее поколение (см. doc-комментарий `arbitrate_with_cam` про ту
-    // же причину для `cam_positions`). Пустая `StarvationCounters` — та же
-    // история: свободная функция не хранит состояние МЕЖДУ вызовами, так что
-    // `Rule::starvation_after` для нeё всегда no-op (см. её doc-комментарий).
-    arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, &CamPositions::default(), 0, &StarvationCounters::default(), get_cell_age)
+    // же причину для `cam_positions`). Пустые `StarvationCounters`/
+    // `FeedbackCounters` — та же история: свободная функция не хранит
+    // состояние МЕЖДУ вызовами, так что `Rule::starvation_after`/
+    // `Rule::feedback` для неё всегда no-op (см. их doc-комментарии).
+    arbitrate_with_cam(
+        all_matches,
+        rule_index,
+        rule_cache,
+        bounds,
+        &CamPositions::default(),
+        0,
+        &StarvationCounters::default(),
+        &FeedbackCounters::default(),
+        get_cell_age,
+    )
 }
 
 /// Как [`arbitrate`], но с картой найденных CAM-позиций (см.
@@ -107,6 +128,7 @@ pub(crate) fn arbitrate_with_cam(
     cam_positions: &CamPositions,
     generation: u32,
     starvation_counters: &StarvationCounters,
+    feedback_counters: &FeedbackCounters,
     get_cell_age: impl Fn(usize, usize) -> u32,
 ) -> Vec<RuleMatch> {
     if all_matches.is_empty() {
@@ -205,7 +227,7 @@ pub(crate) fn arbitrate_with_cam(
     let mut affected: Vec<(i32, i32)> = Vec::new();
     for m in sorted {
         // Получаем предвычисленные affected cells из кэша
-        get_match_affected_cells(&m, rule_index, rule_cache, bounds, cam_positions, &mut affected);
+        get_match_affected_cells(&m, rule_index, rule_cache, bounds, cam_positions, feedback_counters, &mut affected);
         let conflict = affected.iter().any(|coord| used_cells.contains(coord));
 
         if !conflict {
@@ -258,13 +280,24 @@ pub fn arbitrate_spatial(
     reach: i32,
     get_cell_age: impl Fn(usize, usize) -> u32 + Sync,
 ) -> Vec<RuleMatch> {
-    arbitrate_spatial_with_cam(all_matches, rule_index, rule_cache, bounds, reach, &CamPositions::default(), 0, &StarvationCounters::default(), get_cell_age)
+    arbitrate_spatial_with_cam(
+        all_matches,
+        rule_index,
+        rule_cache,
+        bounds,
+        reach,
+        &CamPositions::default(),
+        0,
+        &StarvationCounters::default(),
+        &FeedbackCounters::default(),
+        get_cell_age,
+    )
 }
 
 /// Как [`arbitrate_spatial`], но с картой найденных CAM-позиций — см.
 /// doc-комментарий [`arbitrate_with_cam`] про ту же причину раздельных
-/// публичной/`pub(crate)` версий. `generation`/`starvation_counters` — см.
-/// её doc-комментарий там же.
+/// публичной/`pub(crate)` версий. `generation`/`starvation_counters`/
+/// `feedback_counters` — см. её doc-комментарий там же.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn arbitrate_spatial_with_cam(
     all_matches: Vec<RuleMatch>,
@@ -275,10 +308,11 @@ pub(crate) fn arbitrate_spatial_with_cam(
     cam_positions: &CamPositions,
     generation: u32,
     starvation_counters: &StarvationCounters,
+    feedback_counters: &FeedbackCounters,
     get_cell_age: impl Fn(usize, usize) -> u32 + Sync,
 ) -> Vec<RuleMatch> {
     if all_matches.len() < SPATIAL_THRESHOLD || reach <= 0 {
-        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, get_cell_age);
+        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, get_cell_age);
     }
 
     let margin = (2 * reach) as u32;
@@ -292,7 +326,7 @@ pub(crate) fn arbitrate_spatial_with_cam(
     let num_bands = rayon::current_num_threads().min(max_bands_by_spread).max(1);
 
     if num_bands < 2 {
-        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, get_cell_age);
+        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, get_cell_age);
     }
 
     let band_width = (spread / num_bands as u32).max(1);
@@ -331,14 +365,14 @@ pub(crate) fn arbitrate_spatial_with_cam(
             if band_matches.is_empty() {
                 Vec::new()
             } else {
-                arbitrate_with_cam(band_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, &get_cell_age)
+                arbitrate_with_cam(band_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &get_cell_age)
             }
         })
         .collect();
 
     // Boundary — один общий последовательный проход, как и раньше.
     let mut result = core_results;
-    result.extend(arbitrate_with_cam(boundary, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, &get_cell_age));
+    result.extend(arbitrate_with_cam(boundary, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &get_cell_age));
     result
 }
 
@@ -448,21 +482,47 @@ fn get_match_affected_cells(
     rule_cache: &RuleDataCache,
     bounds: (usize, usize),
     cam_positions: &CamPositions,
+    feedback_counters: &FeedbackCounters,
     out: &mut Vec<(i32, i32)>,
 ) {
     out.clear();
     let head = m.head;
+    let matched_rule = rule_index.get(&head).and_then(|rules| rules.get(m.rule_idx));
 
-    // CAM-матч: точные affected cells — найденная позиция (не
-    // консервативный весь-диск из `RuleData::write_cells`, который годится
-    // только для статического графа конфликтов, см. её doc-комментарий в
-    // `conflict_analyzer.rs`) плюс сама позиция магнита. `cam_positions`
-    // всегда содержит запись для КАЖДОГО CAM-матча, дошедшего сюда — она
-    // заполняется в `detect_cam_matches` синхронно с самим `RuleMatch`.
-    if let Some(&(fx, fy)) = cam_positions.get(&(m.x, m.y, m.rule_idx)) {
-        out.push((fx as i32, fy as i32));
-        out.push((m.x as i32, m.y as i32));
-        return;
+    // CAM-матч БЕЗ `recursion`: точные affected cells — найденная позиция
+    // (не консервативный весь-диск из `RuleData::write_cells`, который
+    // годится только для статического графа конфликтов, см. её
+    // doc-комментарий в `conflict_analyzer.rs`) плюс сама позиция магнита.
+    // `cam_positions` всегда содержит запись для КАЖДОГО CAM-матча,
+    // дошедшего сюда — она заполняется в `detect_cam_matches` синхронно с
+    // самим `RuleMatch`.
+    //
+    // CAM-матч С `recursion`: уровни каскада `k = 1..=max_depth` (см.
+    // `applicator::apply_cam_buffered`) находят свои клетки ПРОЦЕДУРНО во
+    // время apply, читая `write_buffer`, уже накопленный БОЛЕЕ РАННИМИ
+    // (по порядку арбитража) матчами того же тика — то есть их реальные
+    // affected cells зависят от порядка применения, который на момент
+    // арбитража ещё не определён (та же причина, по которой уровень 0
+    // сам не знает своей цели без `cam_positions`, только для уровней
+    // 1..=max_depth даже такой пост-детект записи нет). Использовать здесь
+    // только [found, magnet] уровня 0, как раньше, — это НЕДОоценка: два
+    // разных cam+recursion матча, чьи диски уровня 0 не пересекаются, но
+    // чьи каскады (уровни 1..=max_depth) МОГУТ physически пересечься,
+    // ошибочно считались бы точно (exact-cells) непересекающимися, даже
+    // когда статический граф конфликтов (построенный по union дисков всех
+    // уровней, см. `compute_rule_data`) уже верно завёл между ними ребро —
+    // exact-path тогда молча занижал бы то, что conservative-path верно
+    // расширил. Поэтому при наличии `recursion` используем ПОЛНЫЙ
+    // консервативный `rule_data.write_cells` (union дисков всех уровней)
+    // вместо точных 2 клеток — падаем в общий путь ниже, тот же приём, что
+    // уже применяется к обычной (не-cam) рекурсии через `RuleData::write_cells`.
+    let cam_has_recursion = matched_rule.is_some_and(|r| r.cam.is_some() && r.recursion.is_some());
+    if !cam_has_recursion {
+        if let Some(&(fx, fy)) = cam_positions.get(&(m.x, m.y, m.rule_idx)) {
+            out.push((fx as i32, fy as i32));
+            out.push((m.x as i32, m.y as i32));
+            return;
+        }
     }
 
     let rule_data = match get_rule_data(rule_cache, head, m.rule_idx) {
@@ -486,28 +546,59 @@ fn get_match_affected_cells(
     };
 
     let (w, h) = (bounds.0 as i32, bounds.1 as i32);
+    let overflow = matched_rule.map(|rule| rule.overflow);
+
+    // `Rule::feedback` (Лемма 4, `paper/paper4.md` §8, Corollary C): точное
+    // (не union) множество для ЭТОГО КОНКРЕТНОГО матча — зависит от того,
+    // защёлкнулся ли счётчик обратной связи, а не от `rule_data.write_cells`
+    // (тот всегда union обоих направлений, годится только для статического
+    // графа — см. её doc-комментарий). Та же логика раздельного пути, что
+    // и у CAM выше, только не early-return: клэмпинг на границу решётки
+    // нужен точно так же, как и в общем случае ниже.
+    if let Some(spec) = matched_rule.and_then(|rule| rule.feedback) {
+        let latched = feedback_counters.get(&(m.x, m.y, m.rule_idx)).copied().unwrap_or(0) >= spec.timeout;
+        let (cells, direction) = if latched {
+            (&rule_data.feedback_alt_write_cells, spec.new_direction)
+        } else {
+            let declared = matched_rule.and_then(|rule| rule.shifts.iter().flatten().next()).map(|s| s.direction);
+            (&rule_data.feedback_normal_write_cells, declared.unwrap_or(spec.new_direction))
+        };
+        let target = direction_delta(direction);
+        out.extend(cells.iter().map(|&(dx, dy)| clamp_shift_target(m, (dx, dy), (dx, dy) == target, overflow, w, h)));
+        return;
+    }
+
     // Правило с несколькими сдвигами реплицирует значение в КАЖДУЮ цель
     // независимо (см. RuleData::shift_targets) — клэмпинг при
     // OverflowAction::Write применим к любой из них, не только к первой.
-    let has_shift = !rule_data.shift_targets.is_empty();
-    let overflow: Option<OverflowAction> = if has_shift {
-        rule_index
-            .get(&head)
-            .and_then(|rules| rules.get(m.rule_idx))
-            .map(|rule| rule.overflow)
-    } else {
-        None
-    };
-
     out.extend(rule_data.write_cells.iter().map(|&(dx, dy)| {
-        let abs = (m.x as i32 + dx, m.y as i32 + dy);
-        if w > 0 && h > 0 && rule_data.shift_targets.contains(&(dx, dy)) {
-            if let Some(OverflowAction::Write(_) | OverflowAction::WriteLiteral(_)) = overflow {
-                if abs.0 < 0 || abs.0 >= w || abs.1 < 0 || abs.1 >= h {
-                    return (abs.0.clamp(0, w - 1), abs.1.clamp(0, h - 1));
-                }
+        clamp_shift_target(m, (dx, dy), rule_data.shift_targets.contains(&(dx, dy)), overflow, w, h)
+    }));
+}
+
+/// (dx, dy) направления сдвига — та же таблица, что и везде в проекте
+/// (`applicator::apply_shift_buffered`, `conflict_analyzer::shift_delta`).
+pub(crate) fn direction_delta(direction: crate::types::Direction) -> (i32, i32) {
+    use crate::types::Direction;
+    match direction {
+        Direction::Up => (0, -1),
+        Direction::Down => (0, 1),
+        Direction::Left => (-1, 0),
+        Direction::Right => (1, 0),
+    }
+}
+
+/// Клэмпинг одной относительной ячейки записи на границу решётки при
+/// `OverflowAction::Write`/`WriteLiteral` — общая логика для обычного пути и
+/// `Rule::feedback`'а, см. doc-комментарий `get_match_affected_cells`.
+fn clamp_shift_target(m: &RuleMatch, (dx, dy): (i32, i32), is_shift_target: bool, overflow: Option<OverflowAction>, w: i32, h: i32) -> (i32, i32) {
+    let abs = (m.x as i32 + dx, m.y as i32 + dy);
+    if w > 0 && h > 0 && is_shift_target {
+        if let Some(OverflowAction::Write(_) | OverflowAction::WriteLiteral(_)) = overflow {
+            if abs.0 < 0 || abs.0 >= w || abs.1 < 0 || abs.1 >= h {
+                return (abs.0.clamp(0, w - 1), abs.1.clamp(0, h - 1));
             }
         }
-        abs
-    }));
+    }
+    abs
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::*;
-use crate::types::{Direction, OverflowAction, ShiftSpec};
+use crate::types::{Direction, FeedbackSpec, MemorySpec, OverflowAction, RecordTrigger, ShiftSpec};
 
 fn base_rule(id: Vec<u8>, pattern: Vec<(i8, i8, u8)>, changes: Vec<(i32, i32, ChangeValue)>) -> Rule {
     Rule {
@@ -15,7 +15,7 @@ fn base_rule(id: Vec<u8>, pattern: Vec<(i8, i8, u8)>, changes: Vec<(i32, i32, Ch
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     }
 }
 
@@ -226,15 +226,409 @@ fn test_build_gpu_rule_table_rejects_ref_change() {
     assert_eq!(err, GpuUnsupportedReason::ChangeIsRef { head: 1, rule_idx: 0 });
 }
 
+/// `starvation_after` ТЕПЕРЬ поддерживается (см. `GpuRuleTable::needs_starvation`'s
+/// doc-комментарий) — раньше это правило отвергалось блэнкет-
+/// `StarvationGuardUnsupported`; теперь строится успешно, форсирует
+/// Arbitrated-пайплайн (голодание осмысленно только под конкуренцией) и
+/// корректно кодирует `has_starvation`/`starvation_threshold`.
 #[test]
-fn test_build_gpu_rule_table_rejects_starvation_guard() {
+fn test_build_gpu_rule_table_accepts_starvation_guard() {
     let mut idx = HashMap::new();
-    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    // Self-write-only иначе (self-change) -- проверяет, что starvation
+    // САМА форсирует арбитраж, а не просто "уже была нужна по другой причине".
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 0, ChangeValue::Literal(1))]);
     rule.starvation_after = Some(3);
     idx.insert(CellType(1), vec![rule]);
 
+    let table = build_gpu_rule_table(&idx).expect("starvation_after must be accepted");
+    assert!(table.needs_arbitration, "starvation_after must force the arbitrated pipeline even for an otherwise self-write-only rule");
+    assert!(table.needs_starvation);
+    let r = table.rules[table.head_slots[1].rules_start as usize];
+    assert_eq!(r.has_starvation, 1);
+    assert_eq!(r.starvation_threshold, 3);
+}
+
+/// Угловой случай, найденный при реализации: `starvation_after: Some(0)` —
+/// РЕАЛЬНОЕ, отличное от "не установлено" значение (побеждает через
+/// голодание СРАЗУ, см. `rule_table::GpuRule::has_starvation`'s
+/// doc-комментарий) — не должно тихо схлопнуться в "выключено" только
+/// потому, что 0 — естественный сентинел для ДРУГИХ полей
+/// (`cam_radius`/`recursion_max_depth`).
+#[test]
+fn test_build_gpu_rule_table_starvation_threshold_zero_is_not_disabled() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 0, ChangeValue::Literal(1))]);
+    rule.starvation_after = Some(0);
+    idx.insert(CellType(1), vec![rule]);
+
+    let table = build_gpu_rule_table(&idx).expect("starvation_after: Some(0) must be accepted");
+    let r = table.rules[table.head_slots[1].rules_start as usize];
+    assert_eq!(r.has_starvation, 1, "has_starvation must be 1 even though the threshold itself is 0");
+    assert_eq!(r.starvation_threshold, 0);
+}
+
+/// `feedback` (не-broadcast) ТЕПЕРЬ поддерживается (см.
+/// `GpuRuleTable::needs_feedback`'s doc-комментарий) — раньше отвергалось
+/// блэнкет-`FeedbackUnsupported`; теперь строится успешно и корректно
+/// кодирует альтернативное направление.
+#[test]
+fn test_build_gpu_rule_table_accepts_feedback() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![vec![ShiftSpec::new(Direction::Right, 1)]];
+    rule.feedback = Some(FeedbackSpec { timeout: 5, new_direction: Direction::Up });
+    idx.insert(CellType(1), vec![rule]);
+
+    let table = build_gpu_rule_table(&idx).expect("non-broadcast feedback must be accepted");
+    assert!(table.needs_feedback);
+    assert!(table.needs_arbitration, "feedback rules always have a shift, which already forces arbitration");
+    let r = table.rules[table.head_slots[1].rules_start as usize];
+    assert_eq!(r.has_feedback, 1);
+    assert_eq!(r.feedback_timeout, 5);
+    assert_eq!((r.feedback_alt_dx, r.feedback_alt_dy), (0, -1), "new_direction=Up must encode to (0,-1)");
+}
+
+/// `feedback` + `broadcast` ВМЕСТЕ — вне GPU-подмножества (см.
+/// `GpuUnsupportedReason::FeedbackBroadcastUnsupported`'s doc-комментарий:
+/// перенос счётчика читает `cells[1]` как "новая позиция", неверно для
+/// broadcast-пути, который пишет весь путь, не одну клетку).
+#[test]
+fn test_build_gpu_rule_table_rejects_feedback_with_broadcast() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: true, keep_source: false }]];
+    rule.feedback = Some(FeedbackSpec { timeout: 5, new_direction: Direction::Up });
+    idx.insert(CellType(1), vec![rule]);
+
     let err = build_gpu_rule_table(&idx).unwrap_err();
-    assert_eq!(err, GpuUnsupportedReason::StarvationGuardUnsupported { head: 1, rule_idx: 0 });
+    assert_eq!(err, GpuUnsupportedReason::FeedbackBroadcastUnsupported { head: 1, rule_idx: 0 });
+}
+
+/// Защитная проверка (та же философия, что и `cam`'s `id_len == 1`):
+/// правило с `feedback`, но НЕ ровно одним сдвигом, пришедшее мимо
+/// `config::load_config`'s собственной валидации (например, напрямую через
+/// Rust API), не должно тихо ломать однократное предположение
+/// `feedback_alt_dx/dy`'s кодирования.
+#[test]
+fn test_build_gpu_rule_table_rejects_feedback_without_exactly_one_shift() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![];
+    rule.feedback = Some(FeedbackSpec { timeout: 5, new_direction: Direction::Up });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::TooManyShifts { head: 1, rule_idx: 0, len: 0 });
+}
+
+/// `recursion` в пределах `MAX_RECURSION_DEPTH` ПОДДЕРЖИВАЕТСЯ (см.
+/// `MAX_RECURSION_DEPTH`'s doc-комментарий) — раньше это правило отвергалось
+/// блэнкет-`RecursionUnsupported`; теперь строится успешно, и матч уходит
+/// через needs_arbitration (каскад пишет вне self-клетки).
+#[test]
+fn test_build_gpu_rule_table_accepts_recursion_within_depth_limit() {
+    use crate::types::RecursionSpec;
+
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 0, ChangeValue::Literal(2))]);
+    rule.recursion = Some(RecursionSpec { max_depth: 2, direction: Direction::Right });
+    idx.insert(CellType(1), vec![rule]);
+
+    let table = build_gpu_rule_table(&idx).expect("recursion within MAX_RECURSION_DEPTH must be accepted");
+    assert!(table.needs_arbitration, "recursion cascade writes outside the self cell, must force the arbitrated pipeline");
+    assert_eq!(table.rules[0].recursion_max_depth, 2);
+    assert_eq!((table.rules[0].recursion_dx, table.rules[0].recursion_dy), (1, 0));
+}
+
+#[test]
+fn test_build_gpu_rule_table_rejects_recursion_depth_too_large() {
+    use crate::types::RecursionSpec;
+
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 0, ChangeValue::Literal(2))]);
+    rule.recursion = Some(RecursionSpec { max_depth: MAX_RECURSION_DEPTH + 1, direction: Direction::Right });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(
+        err,
+        GpuUnsupportedReason::RecursionDepthTooLarge { head: 1, rule_idx: 0, max_depth: MAX_RECURSION_DEPTH + 1 }
+    );
+}
+
+/// `cam` + `recursion` вместе — поддерживается на CPU (см. `applicator.rs`),
+/// но НЕ на GPU (см. `CamRecursionUnsupported`'s doc-комментарий: CAM-каскад
+/// нуждается в рантайм-поиске на каждом уровне, не в статическом офсете).
+#[test]
+fn test_build_gpu_rule_table_rejects_cam_with_recursion() {
+    use crate::types::{CamSearch, RecursionSpec};
+
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![], vec![]);
+    rule.cam = Some(CamSearch { radius: 3, target_type: CellType(2) });
+    rule.recursion = Some(RecursionSpec { max_depth: 1, direction: Direction::Right });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::CamRecursionUnsupported { head: 1, rule_idx: 0 });
+}
+
+#[test]
+fn test_build_gpu_rule_table_rejects_keep_source() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: true }]];
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::KeepSourceUnsupported { head: 1, rule_idx: 0 });
+}
+
+/// `Rule::memory` — ПОДДЕРЖИВАЕТСЯ (см. `GpuRuleTable::needs_memory`'s
+/// doc-комментарий: та же persistent-storage техника, что уже применена к
+/// `starvation_after`/`feedback`, снимает главное препятствие "GPU не
+/// хранит состояние между тиками"). `RuleOutcome`-триггер, без сдвига —
+/// простейший случай, окно в пределах потолка.
+#[test]
+fn test_build_gpu_rule_table_accepts_memory_rule_outcome() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 0, ChangeValue::Literal(2))]);
+    rule.memory = Some(MemorySpec {
+        window: 1,
+        record_trigger: RecordTrigger::RuleOutcome,
+        match_pattern: vec![crate::types::RecordedValue::Missed],
+    });
+    idx.insert(CellType(1), vec![rule]);
+
+    let table = build_gpu_rule_table(&idx).expect("memory (RuleOutcome, no shift, window within cap) is within the v2 subset");
+    assert!(table.needs_memory, "needs_memory must be true when a rule uses Rule::memory");
+    assert!(table.needs_arbitration, "memory must force the Arbitrated pipeline even for an otherwise self-write-only rule");
+    let r = &table.rules[0];
+    assert_eq!(r.has_memory, 1);
+    assert_eq!(r.memory_window, 1);
+    assert_eq!(r.memory_trigger, 1, "RuleOutcome must encode as 1");
+    assert_eq!(r.memory_pattern0, 257, "Missed must encode as 257");
+    assert_eq!(r.memory_has_shift, 0);
+}
+
+/// `NeighborType`-триггер, С сдвигом (буфер обязан переезжать — см.
+/// `memory_has_shift`).
+#[test]
+fn test_build_gpu_rule_table_accepts_memory_neighbor_type_with_shift() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![vec![ShiftSpec::new(Direction::Right, 1)]];
+    rule.memory = Some(MemorySpec {
+        window: 2,
+        record_trigger: RecordTrigger::NeighborType(Direction::Up),
+        match_pattern: vec![crate::types::RecordedValue::Type(CellType(9)), crate::types::RecordedValue::Type(CellType(3))],
+    });
+    idx.insert(CellType(1), vec![rule]);
+
+    let table = build_gpu_rule_table(&idx).expect("memory (NeighborType, one non-broadcast shift, window within cap) is within the v2 subset");
+    let r = &table.rules[0];
+    assert_eq!(r.has_memory, 1);
+    assert_eq!(r.memory_window, 2);
+    assert_eq!(r.memory_trigger, 0, "NeighborType must encode as 0");
+    assert_eq!((r.memory_dx, r.memory_dy), (0, -1), "Direction::Up must encode as (0,-1)");
+    assert_eq!(r.memory_pattern0, 9);
+    assert_eq!(r.memory_pattern1, 3);
+    assert_eq!(r.memory_has_shift, 1, "a rule with exactly one shift must set memory_has_shift");
+}
+
+/// `memory`+`recursion` — CPU-side поддерживает `NeighborType`+`recursion`
+/// (см. `applicator.rs`'s каскадный гейт), но GPU отвергает ЛЮБУЮ
+/// комбинацию `memory`+`recursion`, независимо от триггера — каскадный
+/// per-level гейт не реализован здесь (см. `MemoryRecursionUnsupported`'s
+/// doc-комментарий).
+#[test]
+fn test_build_gpu_rule_table_rejects_memory_with_recursion() {
+    use crate::types::RecursionSpec;
+
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 0, ChangeValue::Literal(2))]);
+    rule.recursion = Some(RecursionSpec { max_depth: 1, direction: Direction::Right });
+    rule.memory = Some(MemorySpec {
+        window: 1,
+        record_trigger: RecordTrigger::NeighborType(Direction::Up),
+        match_pattern: vec![crate::types::RecordedValue::Type(CellType(9))],
+    });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::MemoryRecursionUnsupported { head: 1, rule_idx: 0 });
+}
+
+#[test]
+fn test_build_gpu_rule_table_rejects_memory_with_cam() {
+    use crate::types::CamSearch;
+
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![], vec![]);
+    rule.cam = Some(CamSearch { radius: 3, target_type: CellType(9) });
+    rule.memory = Some(MemorySpec {
+        window: 1,
+        record_trigger: RecordTrigger::RuleOutcome,
+        match_pattern: vec![crate::types::RecordedValue::Applied],
+    });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::MemoryCamUnsupported { head: 1, rule_idx: 0 });
+}
+
+#[test]
+fn test_build_gpu_rule_table_rejects_memory_window_too_large() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 0, ChangeValue::Literal(2))]);
+    let window = super::MAX_MEMORY_WINDOW + 1;
+    rule.memory = Some(MemorySpec {
+        window,
+        record_trigger: RecordTrigger::RuleOutcome,
+        match_pattern: vec![crate::types::RecordedValue::Applied; window],
+    });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::MemoryWindowTooLarge { head: 1, rule_idx: 0, window });
+}
+
+#[test]
+fn test_build_gpu_rule_table_rejects_memory_with_broadcast_shift() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![vec![ShiftSpec::broadcast(Direction::Right, 2)]];
+    rule.memory = Some(MemorySpec {
+        window: 1,
+        record_trigger: RecordTrigger::NeighborType(Direction::Up),
+        match_pattern: vec![crate::types::RecordedValue::Type(CellType(9))],
+    });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::MemoryBroadcastUnsupported { head: 1, rule_idx: 0 });
+}
+
+/// `feedback` + `cam` — не имеет собственной защиты
+/// (`GpuUnsupportedReason::MemoryCamUnsupported` защищает только `memory`),
+/// но должна быть отвергнута ЗАЩИТНО через существующую проверку "ровно
+/// один сдвиг" (`feedback` требует `shift_count == 1`, а CAM-правило по
+/// построению имеет `shift_count == 0` — см. `config.rs`'s "CAM это
+/// единственный эффект правила"). Тест проверяет это ПРЕДПОЛОЖЕНИЕ, а не
+/// принимает его на веру.
+#[test]
+fn test_build_gpu_rule_table_rejects_feedback_with_cam() {
+    use crate::types::CamSearch;
+
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![], vec![]);
+    rule.cam = Some(CamSearch { radius: 3, target_type: CellType(9) });
+    rule.feedback = Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::TooManyShifts { head: 1, rule_idx: 0, len: 0 });
+}
+
+/// `feedback` + `changes` при том же смещении, что и объявленный сдвиг —
+/// CPU-семантика "changes побеждают shifts" значит реальный тип на новой
+/// позиции может оказаться НЕ `me.value`, ломая предположение переноса
+/// счётчика (`update_feedback_relocate_pass`'s `slot_in_cell`-reuse). См.
+/// `GpuUnsupportedReason::FeedbackChangeCollidesWithShiftTarget`'s
+/// doc-комментарий.
+#[test]
+fn test_build_gpu_rule_table_rejects_feedback_change_colliding_with_shift_target() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(1, 0, ChangeValue::Literal(99))]);
+    rule.shifts = vec![vec![ShiftSpec::new(Direction::Right, 1)]];
+    rule.feedback = Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::FeedbackChangeCollidesWithShiftTarget { head: 1, rule_idx: 0 });
+}
+
+/// Тот же класс коллизии, но через `new_direction` (альтернативное
+/// направление), а не декларированное — тоже обязано быть отвергнуто,
+/// поскольку `feedback` переключается между ними в рантайме одного и того
+/// же правила.
+#[test]
+fn test_build_gpu_rule_table_rejects_feedback_change_colliding_with_alt_direction() {
+    let mut idx = HashMap::new();
+    // Декларированный сдвиг — Right(1) => (1,0); alt-направление — Down =>
+    // (0,1); change коллидирует с alt, не с декларированным.
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 1, ChangeValue::Literal(99))]);
+    rule.shifts = vec![vec![ShiftSpec::new(Direction::Right, 1)]];
+    rule.feedback = Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::FeedbackChangeCollidesWithShiftTarget { head: 1, rule_idx: 0 });
+}
+
+/// То же для `memory` + сдвиг — см.
+/// `GpuUnsupportedReason::MemoryChangeCollidesWithShiftTarget`'s
+/// doc-комментарий.
+#[test]
+fn test_build_gpu_rule_table_rejects_memory_change_colliding_with_shift_target() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(1, 0, ChangeValue::Literal(99))]);
+    rule.shifts = vec![vec![ShiftSpec::new(Direction::Right, 1)]];
+    rule.memory = Some(MemorySpec {
+        window: 1,
+        record_trigger: RecordTrigger::NeighborType(Direction::Up),
+        match_pattern: vec![crate::types::RecordedValue::Type(CellType(9))],
+    });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::MemoryChangeCollidesWithShiftTarget { head: 1, rule_idx: 0 });
+}
+
+/// Non-collision sanity check — `changes` at a DIFFERENT offset than the
+/// shift target must still be accepted (the new validation must not be
+/// overly broad).
+#[test]
+fn test_build_gpu_rule_table_accepts_feedback_change_at_different_offset() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 2, ChangeValue::Literal(99))]);
+    rule.shifts = vec![vec![ShiftSpec::new(Direction::Right, 1)]];
+    rule.feedback = Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down });
+    idx.insert(CellType(1), vec![rule]);
+
+    build_gpu_rule_table(&idx).expect("change at an unrelated offset must not be rejected");
+}
+
+/// A `changes` entry at the SOURCE position (0,0) — a legitimate,
+/// DIFFERENT pattern (leave a marker behind at the vacated source cell
+/// instead of a plain clear) — must NOT be rejected by the new
+/// shift-target-collision check: the collision that matters is with the
+/// shift's TARGET, not its source.
+#[test]
+fn test_build_gpu_rule_table_accepts_feedback_change_at_source_position() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![(0, 0, ChangeValue::Literal(77))]);
+    rule.shifts = vec![vec![ShiftSpec::new(Direction::Right, 1)]];
+    rule.feedback = Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down });
+    idx.insert(CellType(1), vec![rule]);
+
+    build_gpu_rule_table(&idx).expect("change at the source (0,0), not the shift target, must not be rejected");
+}
+
+#[test]
+fn test_build_gpu_rule_table_rejects_memory_with_more_than_one_shift() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![vec![ShiftSpec::new(Direction::Right, 1), ShiftSpec::new(Direction::Down, 1)]];
+    rule.memory = Some(MemorySpec {
+        window: 1,
+        record_trigger: RecordTrigger::NeighborType(Direction::Up),
+        match_pattern: vec![crate::types::RecordedValue::Type(CellType(9))],
+    });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::TooManyShifts { head: 1, rule_idx: 0, len: 2 });
 }
 
 #[test]

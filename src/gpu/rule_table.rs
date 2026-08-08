@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 
 use crate::fast_hash::FxHashSet;
-use crate::types::{CellType, ChangeValue, Direction, OverflowAction, Rule};
+use crate::types::{CellType, ChangeValue, Direction, OverflowAction, RecordTrigger, RecordedValue, Rule};
 
 /// Тот же потолок, что у `matcher::GroupData::packed_patterns` (см. её
 /// doc-комментарий) — сохраняем для единообразия, хотя сама упаковка здесь
@@ -60,6 +60,33 @@ pub const MAX_SHIFT_REACH: i32 = 12;
 /// Потолок |dx|/|dy| одного `changes`-смещения.
 pub const MAX_CHANGE_REACH: i32 = 4;
 
+/// Потолок `ShiftSpec::steps` СПЕЦИФИЧНО для `broadcast: true` — отдельный
+/// (более узкий), НЕ равный [`MAX_SHIFT_REACH`], константа для обычных
+/// (не-broadcast) сдвигов. Почему отдельный: broadcast-путь пишет ВСЕ
+/// промежуточные клетки (`k=1..steps`), не только конечную точку (см.
+/// doc-комментарий `ShiftSpec` в `types.rs` и `applicator::apply_shift_buffered`),
+/// значит число ячеек записи ОДНОГО broadcast-сдвига растёт линейно с
+/// `steps`, а не константно (=1), как у обычного сдвига. [`MAX_WRITE_CELLS`]
+/// ниже — потолок ячеек записи ОДНОГО матча — это compile-time размер
+/// массива `GpuMatch::cells`/`values` в `shader.wgsl` (WGSL требует
+/// константный размер массива внутри структуры), общий для ВСЕХ матчей
+/// ВСЕХ конфигов сразу (шейдер компилируется ОДИН раз статически, см.
+/// `GpuEngine::init`'s `include_str!` — не перекомпилируется под
+/// конкретный `GpuRuleTable`, в отличие от `margin`/`max_matches_per_cell`,
+/// которые всего лишь границы циклов/размеры буферов через uniform, а не
+/// размеры полей структуры). Значит цена любого увеличения
+/// `MAX_WRITE_CELLS` платится БЕЗУСЛОВНО КАЖДЫМ arbitrated-конфигом, даже
+/// не использующим broadcast вовсе — если бы broadcast использовал тот же
+/// потолок, что обычный сдвиг (12), `MAX_WRITE_CELLS` пришлось бы поднять
+/// до 1+2*(12+4)=33 (рост в 3× от текущих 11) ради свойства, которым
+/// пользуется меньшинство конфигов. 4 — тот же порядок величины, что и
+/// [`MAX_CHANGES`]/[`MAX_SHIFTS`] в этом файле (скромный, но достаточный
+/// для подавляющего большинства реальных сценариев — "луч"/"провод"
+/// длиной несколько клеток), даёт `MAX_WRITE_CELLS`=17 (рост всего 55% от
+/// 11) — сценарии длиннее 4 клеток вне подмножества (см.
+/// `GpuUnsupportedReason::BroadcastPathTooLong`), а не молча урезаются.
+pub const MAX_BROADCAST_REACH: i32 = 4;
+
 /// Потолок радиуса `CamSearch` на GPU — в отличие от CPU (`CamSearch::radius:
 /// u8`, до 255, без искусственного потолка), GPU-версия сканирует диск
 /// (2R+1)² на клетку-кандидата КАЖДЫЙ тик (см. `shader.wgsl::cam_search`) и
@@ -69,6 +96,47 @@ pub const MAX_CHANGE_REACH: i32 = 4;
 /// больше `MAX_SHIFT_REACH`, разумный запас для "найди ближайшую цель
 /// поблизости" сценариев без превращения диска в скан половины решётки.
 pub const MAX_CAM_RADIUS: u8 = 16;
+
+/// Потолок `RecursionSpec::max_depth` на GPU. `Rule::recursion` ПОДДЕРЖИВАЕТСЯ
+/// (см. `GpuUnsupportedReason::RecursionDepthTooLarge` вместо старого
+/// блэнкет-отказа) — ключевое наблюдение: КАЖДЫЙ уровень каскада `k =
+/// 1..=max_depth` читает клетку на СТАТИЧЕСКИ известном смещении `k ×
+/// direction` от исходного матча и пишет свои `changes` относительно НЕЁ,
+/// используя эффективное чтение ТОЛЬКО клеток, УЖЕ ЗАПИСАННЫХ этим же
+/// каскадом (см. `read_cell_effective_local`/`read_age_effective_local` в
+/// `shader.wgsl`, зеркалящих CPU `applicator::read_cell_effective`/
+/// `read_age_effective`) — НИКОГДА клеток, записанных ДРУГИМ потоком/матчем
+/// (по построению: `recursion` требует пустые `shifts`, `changes`-цели
+/// каждого уровня уже включены в консервативную статическую границу
+/// `conflict_analyzer::compute_rule_data`'s recursion-ветку, так что любой
+/// РЕАЛЬНО конфликтующий чужой матч был бы исключён арбитражем ДО того, как
+/// этот каскад вообще начал выполняться). Значит ВЕСЬ каскад одного матча —
+/// чисто ЛОКАЛЬНОЕ вычисление ОДНОГО потока (ровно как путь broadcast-сдвига,
+/// см. [`MAX_BROADCAST_REACH`]), без какой-либо межпоточной синхронизации —
+/// именно ЭТО делает `recursion` GPU-совместимым, в отличие от `feedback`/
+/// `memory`/`starvation_after` (требуют персистентное МЕЖДУ тиками
+/// CPU-состояние, которого у `GpuEngine` в принципе нет).
+///
+/// 4 — тот же выбор, что и [`MAX_BROADCAST_REACH`] (см. её doc-комментарий):
+/// скромный, но достаточный для подавляющего большинства сценариев каскада,
+/// не раздувающий [`MAX_WRITE_CELLS`] сверх необходимого. Более глубокие
+/// каскады — вне подмножества, явный отказ, а не молчаливое усечение.
+pub const MAX_RECURSION_DEPTH: u8 = 4;
+
+/// Потолок `MemorySpec::window` на GPU. Как и `memory_pattern0..3` в
+/// [`GpuRule`] (плоские поля, не массив — см. `GpuRule`'s doc-комментарий
+/// про ограничение naga "may only be indexed by a constant" для значений),
+/// сам буфер-в-персистентном-storage (`shader.wgsl`'s `memory_buffers`
+/// binding) устроен как `array<atomic<u32>>`, индексируемый ОДНИМ плоским
+/// индексом `m * MAX_MEMORY_WINDOW + i` — это НЕ поле-массив внутри
+/// значения, загруженного динамическим индексом (тот случай, который
+/// действительно запрещён), а прямая индексация top-level storage-массива,
+/// тот же паттерн, что уже используют `matches[m]`/`starvation_counters[m]`
+/// — так что переменная длина здесь ограничивается только явным потолком
+/// (не техническим ограничением WGSL). 4 — тот же выбор, что и
+/// [`MAX_CHANGES`]/[`MAX_RECURSION_DEPTH`] (скромный, но достаточный для
+/// подавляющего большинства реальных последовательностей-триггеров).
+pub const MAX_MEMORY_WINDOW: usize = 4;
 
 /// Максимальная дистанция (по любой оси) от клетки-источника матча до
 /// ЛЮБОЙ клетки, которую он потенциально затрагивает для целей арбитража
@@ -163,6 +231,11 @@ pub struct GpuRule {
     pub shift_dy0: i32,
     pub shift_dx1: i32,
     pub shift_dy1: i32,
+    /// `ShiftSpec::broadcast` соответствующего сдвига (1 — broadcast, 0 —
+    /// обычный) — см. doc-комментарий [`MAX_BROADCAST_REACH`]. Осмыслено
+    /// только при `shift_count >= 1`/`>= 2` соответственно.
+    pub shift_broadcast0: u32,
+    pub shift_broadcast1: u32,
     /// Число `changes` (≤ [`MAX_CHANGES`]).
     pub change_count: u32,
     pub change_dx0: i32,
@@ -189,6 +262,83 @@ pub struct GpuRule {
     /// вращение `(tie_break + generation) % M` делается в шейдере при
     /// записи матча (`params.generation` уже доступен там), не здесь.
     pub tie_break: u32,
+    /// `RecursionSpec::max_depth` — 0, если правило НЕ использует recursion
+    /// (обычное поведение). См. [`MAX_RECURSION_DEPTH`]'s doc-комментарий
+    /// про то, почему каскад — чисто локальное, однопоточное вычисление.
+    pub recursion_max_depth: u32,
+    /// (dx, dy) единичного шага `RecursionSpec::direction` — тот же
+    /// формат, что и `shift_dx0/dy0`. Осмыслены только при
+    /// `recursion_max_depth > 0`.
+    pub recursion_dx: i32,
+    pub recursion_dy: i32,
+    /// 1, если у правила задан `Rule::starvation_after`, иначе 0. ОТДЕЛЬНЫЙ
+    /// булев флаг, а НЕ "0 в `starvation_threshold` = выключено" (как у
+    /// `cam_radius`/`recursion_max_depth` выше) — намеренно: в отличие от
+    /// тех двух (где 0 — по-настоящему вырожденное, ничего не делающее
+    /// значение: радиус 0 ничего не находит, глубина 0 никуда не
+    /// каскадирует), `Rule::starvation_after: Option<u32>` со значением
+    /// `Some(0)` — РЕАЛЬНЫЙ, отличный от "выключено" случай: порог 0
+    /// означает "матч побеждает через голодание СРАЗУ, с первого же тика"
+    /// (счётчик отсутствующего в HashMap ключа читается как 0, `0 >= 0`).
+    /// Кодировать это как "0 = выключено" тихо превратило бы
+    /// `starvation_after: 0` в `starvation_after: None` — расхождение
+    /// GPU/CPU ровно на этом угловом случае.
+    pub has_starvation: u32,
+    /// Осмыслен только при `has_starvation == 1`.
+    pub starvation_threshold: u32,
+    /// 1, если у правила задан `Rule::feedback` (гарантированно ровно один
+    /// сдвиг, без `broadcast` — см. `GpuUnsupportedReason::FeedbackBroadcastUnsupported`
+    /// и `TooManyShifts`'s защитную проверку в `build_gpu_rule_table`).
+    pub has_feedback: u32,
+    /// `FeedbackSpec::timeout: u64`, клэмпнутый к `u32::MAX` — то же
+    /// упрощение, что и у `GpuRule::min_age`.
+    pub feedback_timeout: u32,
+    /// (dx, dy) `FeedbackSpec::new_direction` — тот же формат, что и
+    /// `shift_dx0/dy0`, но АЛЬТЕРНАТИВНОЕ направление, применяемое вместо
+    /// декларированного (`shift_dx0/dy0`), когда persistent-счётчик
+    /// `feedback_counters[m]` (см. `shader.wgsl`'s binding) достиг
+    /// `feedback_timeout`. Осмыслены только при `has_feedback == 1`.
+    pub feedback_alt_dx: i32,
+    pub feedback_alt_dy: i32,
+    /// 1, если у правила задан `Rule::memory` — см. `GpuRuleTable::needs_memory`'s
+    /// doc-комментарий. Гарантированно исключает `recursion`/`cam`
+    /// (`GpuUnsupportedReason::MemoryRecursionUnsupported`/
+    /// `MemoryCamUnsupported`) и не-broadcast, ≤1 сдвиг (та же защита, что
+    /// и у `has_feedback`).
+    pub has_memory: u32,
+    /// `MemorySpec::window` — 1..=[`MAX_MEMORY_WINDOW`]. Осмыслен только при
+    /// `has_memory == 1`.
+    pub memory_window: u32,
+    /// `RecordTrigger` — 0 = `NeighborType`, 1 = `RuleOutcome`.
+    pub memory_trigger: u32,
+    /// (dx, dy) `RecordTrigger::NeighborType`'s направления — тот же формат,
+    /// что `shift_dx0/dy0`. Осмыслены только при `memory_trigger == 0`
+    /// (нули при `RuleOutcome`, там наблюдение не привязано к соседу).
+    pub memory_dx: i32,
+    pub memory_dy: i32,
+    /// 1, если у правила с `memory` есть РОВНО один сдвиг (значит буфер
+    /// физически переезжает на новую позицию при выигранном сдвиге — см.
+    /// `update_memory_relocate_pass` в `shader.wgsl`, зеркалит
+    /// `applicator.rs`'s перенос `Engine::memory_buffers` при
+    /// `apply_shift_buffered`), 0 — если сдвига нет вовсе (буфер живёт на
+    /// фиксированной позиции, никогда не переезжает). `MemorySpec` по
+    /// построению допускает только 0 или 1 сдвиг (см. `config::load_config`
+    /// и защитную проверку в `build_gpu_rule_table` ниже) — здесь плоский
+    /// булев, а не "число сдвигов", ровно потому что других значений тут
+    /// быть не может.
+    pub memory_has_shift: u32,
+    /// Целевая последовательность `MemorySpec::match_pattern`, поэлементно,
+    /// от старого к новому — плоские поля вместо массива (см. `GpuRule`'s
+    /// doc-комментарий про ограничение naga), значимы только первые
+    /// `memory_window` из них. Кодировка ОДНОГО `RecordedValue` (общая с
+    /// рантайм-записью буфера в `shader.wgsl`, см. `encode_recorded_value`
+    /// ниже): `0..=255` = `Type(CellType)` (значение — сам код типа
+    /// клетки), `256` = `Applied`, `257` = `Missed` — без коллизий,
+    /// `CellType` — `u8`.
+    pub memory_pattern0: u32,
+    pub memory_pattern1: u32,
+    pub memory_pattern2: u32,
+    pub memory_pattern3: u32,
 }
 
 /// Один офсет union-проверки границ (см. `GpuHeadSlot::offsets_start`) —
@@ -228,11 +378,22 @@ pub struct GpuHeadSlot {
     pub offsets_count: u32,
 }
 
-/// Потолок ячеек записи ОДНОГО матча: source-clear (1, только если есть
-/// сдвиг) + на каждый сдвиг — сама цель + её `changes`. Зеркалит
-/// `shader.wgsl`'s `MAX_WRITE_CELLS` — держать их синхронно ОБЯЗАТЕЛЬНО
-/// (см. doc-комментарий [`GpuMatchLayout`]).
-pub const MAX_WRITE_CELLS: usize = 1 + MAX_SHIFTS * (1 + MAX_CHANGES);
+/// Потолок ячеек записи ОДНОГО матча: max(путь сдвигов/changes, каскад
+/// recursion). Путь сдвигов: source-clear (1, только если есть сдвиг) + на
+/// каждый сдвиг — путь сдвига (обычный сдвиг пишет 1 ячейку — конечную
+/// точку; broadcast-сдвиг пишет до [`MAX_BROADCAST_REACH`] ячеек — см. её
+/// doc-комментарий про то, почему это отдельный, более узкий потолок, чем
+/// [`MAX_SHIFT_REACH`]) + его `changes`. Каскад recursion (взаимоисключим со
+/// сдвигами по валидации `config.rs`, см. [`MAX_RECURSION_DEPTH`]'s
+/// doc-комментарий): `MAX_RECURSION_DEPTH + 1` уровней (уровень 0 + каскад),
+/// каждый пишет до [`MAX_CHANGES`] ячеек. Зеркалит `shader.wgsl`'s
+/// `MAX_WRITE_CELLS` — держать их синхронно ОБЯЗАТЕЛЬНО (см.
+/// doc-комментарий [`GpuMatchLayout`]).
+pub const MAX_WRITE_CELLS: usize = {
+    let shift_path = 1 + MAX_SHIFTS * (MAX_BROADCAST_REACH as usize + MAX_CHANGES);
+    let recursion_path = (MAX_RECURSION_DEPTH as usize + 1) * MAX_CHANGES;
+    if shift_path > recursion_path { shift_path } else { recursion_path }
+};
 
 /// Раскладка `GpuMatch` из `shader.wgsl`, ТОЛЬКО для `std::mem::size_of`
 /// при выделении буфера матчей в `GpuEngine` — сам буфер целиком
@@ -256,6 +417,16 @@ pub struct GpuMatchLayout {
     pub cell_count: u32,
     pub cells: [u32; MAX_WRITE_CELLS],
     pub values: [u32; MAX_WRITE_CELLS],
+    /// См. `shader.wgsl::GpuMatch::matched`'s doc-комментарий.
+    pub matched: u32,
+    /// См. `shader.wgsl::GpuMatch::structural`'s doc-комментарий — нужен
+    /// ТОЛЬКО для `Rule::memory`'s буфера: в отличие от `matched` (который
+    /// для memory-правил означает "гейт открыт", т.е. финальный статус
+    /// кандидата), `structural` означает "структурно совпало, независимо
+    /// от гейта" — буфер обязан продолжать наблюдать, даже пока гейт
+    /// закрыт (зеркалит CPU `memory_targets`, взятый из ПОЛНОГО, ещё не
+    /// гейтованного списка матчей).
+    pub structural: u32,
 }
 
 /// Итог кодирования — то, что льётся в GPU-буферы как есть (`bytemuck::cast_slice`).
@@ -304,6 +475,33 @@ pub struct GpuRuleTable {
     /// сравнение офсета — см. её doc-комментарий. При `pattern_reach > 1`
     /// `GpuEngine` использует обычный `main` (общий случай, без tiling).
     pub pattern_reach: i32,
+    /// `true`, если ХОТЯ БЫ одно правило конфига использует `starvation_after`
+    /// — `GpuEngine` аллоцирует persistent storage-буфер счётчиков голодания
+    /// и подключает дополнительный `update_starvation_pass` ТОЛЬКО в этом
+    /// случае (нулевые накладные расходы для конфигов, которым это не нужно
+    /// — та же философия, что и `ExtensionFlags` на CPU-стороне). Всегда
+    /// подразумевает `needs_arbitration == true` (см. её вычисление ниже) —
+    /// голодание осмысленно только когда есть реальная конкуренция за
+    /// клетку, которую нужно арбитражировать.
+    pub needs_starvation: bool,
+    /// `true`, если ХОТЯ БЫ одно правило использует `feedback` —
+    /// `GpuEngine` аллоцирует persistent storage-буфер счётчиков обратной
+    /// связи и подключает `update_feedback_pass` ТОЛЬКО в этом случае, тот
+    /// же приём, что и `needs_starvation`. Всегда подразумевает
+    /// `needs_arbitration == true` (сдвиг — уже само по себе запись в
+    /// соседа, требующая арбитража, независимо от `feedback`).
+    pub needs_feedback: bool,
+    /// `true`, если ХОТЯ БЫ одно правило использует `memory` — `GpuEngine`
+    /// аллоцирует ДВА persistent storage-буфера (`memory_buffers`,
+    /// `memory_len`) и подключает `update_memory_push_pass`/
+    /// `update_memory_relocate_pass` ТОЛЬКО в этом случае, тот же приём,
+    /// что и `needs_starvation`/`needs_feedback`. Всегда подразумевает
+    /// `needs_arbitration == true` — ДАЖЕ для правила, которое иначе (без
+    /// `memory`) получило бы Simple-пайплайн (self-write, без сдвигов и
+    /// записи в соседа): гейт и persistent-буферы существуют только в
+    /// инфраструктуре Arbitrated-пайплайна (`matches[m]`/`match_state` и
+    /// т.д.), Simple-пайплайн их вообще не заводит.
+    pub needs_memory: bool,
 }
 
 /// Почему конфиг целиком не влезает в поддерживаемое подмножество GPU-бэкенда.
@@ -342,19 +540,95 @@ pub enum GpuUnsupportedReason {
     /// клетку-кандидата каждый тик и раздутие дополненной сетки на `2×radius`
     /// делают ОЧЕНЬ большой радиус реально дорогим именно на GPU).
     CamRadiusTooFar { head: u8, rule_idx: usize, radius: u8 },
-    /// `ShiftSpec::broadcast` — вне подмножества: шейдер пишет только
-    /// финальную точку пути сдвига, не весь путь (см. её doc-комментарий
-    /// в `types.rs` и валидацию в `build_gpu_rule_table`).
-    BroadcastShiftUnsupported { head: u8, rule_idx: usize },
-    /// `Rule::starvation_after` — вне подмножества: требует персистентных
-    /// МЕЖДУ тиками счётчиков (`Engine::starvation_counters`), а GPU-путь
-    /// (`GpuEngine`) не хранит никакого CPU-состояния между вызовами
-    /// `run_tick` вообще (см. её doc-комментарий в `types.rs`) — портировать
-    /// значило бы держать ещё один storage-буфер и синхронизировать его с
-    /// CPU-side `HashMap` на каждый тик, что сводит на нет саму цель GPU-пути
-    /// (минимизировать CPU↔GPU трафик). Явный отказ вместо молчаливого
-    /// игнорирования поля — та же философия, что и `BroadcastShiftUnsupported`.
-    StarvationGuardUnsupported { head: u8, rule_idx: usize },
+    /// `ShiftSpec::broadcast` с `steps` больше [`MAX_BROADCAST_REACH`] — вне
+    /// подмножества: см. её doc-комментарий про то, почему потолок
+    /// broadcast-пути отдельный (более узкий), чем [`MAX_SHIFT_REACH`]
+    /// обычных сдвигов. Короткие broadcast-сдвиги (`steps` в пределах
+    /// потолка) ПОДДЕРЖИВАЮТСЯ — см. `build_gpu_rule_table`.
+    BroadcastPathTooLong { head: u8, rule_idx: usize, steps: i32 },
+    /// `ShiftSpec::keep_source` — вне подмножества: шейдер безусловно
+    /// очищает исходную клетку сдвига, пропустить эту очистку избирательно
+    /// для одних сдвигов и не для других сейчас негде (см. её
+    /// doc-комментарий в `types.rs`,
+    /// "излучение").
+    KeepSourceUnsupported { head: u8, rule_idx: usize },
+    /// `Rule::feedback` + `ShiftSpec::broadcast` ВМЕСТЕ — вне GPU-подмножества
+    /// (обычный, не-broadcast `feedback` ПОДДЕРЖИВАЕТСЯ, см.
+    /// `GpuRuleTable::needs_feedback`). Причина: перенос persistent-счётчика
+    /// на новую позицию (см. её doc-комментарий) читает КОНКРЕТНУЮ клетку
+    /// `matches[m].cells[1]` как "новую позицию головки" — верно для
+    /// обычного сдвига (ровно 2 записи: source-clear + цель), но
+    /// broadcast-сдвиг пишет ВЕСЬ путь (см. `MAX_BROADCAST_REACH`'s
+    /// doc-комментарий), так что "куда физически переместился маркер" —
+    /// это ПОСЛЕДНЯЯ клетка пути, а не `cells[1]` — нужна отдельная,
+    /// не сделанная здесь логика поиска конца пути.
+    FeedbackBroadcastUnsupported { head: u8, rule_idx: usize },
+    /// `RecursionSpec::max_depth` больше [`MAX_RECURSION_DEPTH`] — вне
+    /// подмножества, тот же приём, что и `BroadcastPathTooLong`. Каскад в
+    /// пределах потолка ПОДДЕРЖИВАЕТСЯ (см. [`MAX_RECURSION_DEPTH`]'s
+    /// doc-комментарий про то, почему это чисто локальное однопоточное
+    /// вычисление, а не блэнкет-отказ, как считалось раньше).
+    RecursionDepthTooLarge { head: u8, rule_idx: usize, max_depth: u8 },
+    /// `cam` + `recursion` ВМЕСТЕ — вне GPU-подмножества (в отличие от CPU,
+    /// где эта комбинация поддерживается, см. `applicator::apply_cam_buffered`'s
+    /// doc-комментарий): CAM-каскад нуждается в РАНТАЙМ-поиске (`cam_search`)
+    /// на КАЖДОМ уровне, а не в статически известном офсете `k × direction`,
+    /// как обычная (не-cam) рекурсия — это другой, ещё не реализованный
+    /// путь, не покрываемый нынешним локальным-каскадным расширением.
+    CamRecursionUnsupported { head: u8, rule_idx: usize },
+    /// `MemorySpec::window` больше [`MAX_MEMORY_WINDOW`] — тот же приём,
+    /// что `RecursionDepthTooLarge`/`BroadcastPathTooLong`. Окна в пределах
+    /// потолка ПОДДЕРЖИВАЮТСЯ (см. `GpuRuleTable::needs_memory`'s
+    /// doc-комментарий) — раньше `Rule::memory` отвергался целиком, теперь
+    /// (как и `starvation_after`/`feedback` до него) персистентный
+    /// storage-буфер снял главное препятствие "GPU не хранит состояние
+    /// между тиками".
+    MemoryWindowTooLarge { head: u8, rule_idx: usize, window: usize },
+    /// `Rule::memory` + `Rule::recursion` ВМЕСТЕ — вне GPU-подмножества
+    /// (в отличие от CPU, где `NeighborType`+`recursion` поддерживается,
+    /// см. `applicator.rs`'s каскадный гейт). Причина: гейт каждого уровня
+    /// каскада требует своего собственного per-level буфера/наблюдения
+    /// (`applicator.rs`'s Фаза 3 проверяет гейт заново на каждом `k`) —
+    /// отдельная, не реализованная здесь логика, тот же класс границы, что
+    /// и `CamRecursionUnsupported`.
+    MemoryRecursionUnsupported { head: u8, rule_idx: usize },
+    /// `Rule::memory` + `Rule::cam` ВМЕСТЕ — вне GPU-подмножества. CPU не
+    /// запрещает эту комбинацию явно, но `detect_pass`'s CAM-ветка — отдельный,
+    /// более ранний код-путь (возвращается до того места, где включается
+    /// гейт-проверка памяти) — не подключена сюда, тот же нереализованный
+    /// класс, что и `MemoryRecursionUnsupported`.
+    MemoryCamUnsupported { head: u8, rule_idx: usize },
+    /// `Rule::memory` + `ShiftSpec::broadcast` ВМЕСТЕ — вне GPU-подмножества,
+    /// ТА ЖЕ причина, что и `FeedbackBroadcastUnsupported`: перенос буфера
+    /// на новую позицию читает `matches[m].cells[1]` как "новую позицию
+    /// маркера" — верно только для обычного (не-broadcast) сдвига.
+    MemoryBroadcastUnsupported { head: u8, rule_idx: usize },
+    /// `Rule::feedback` + `changes` на ТОМ ЖЕ относительном смещении, что и
+    /// (эффективный) сдвиг — вне GPU-подмножества. Причина: `apply_pass`
+    /// зеркалит CPU-семантику "changes ПОБЕЖДАЮТ shifts при конфликте
+    /// клетки" (см. `applicator.rs`'s "Фаза 1/Фаза 2"), значит РЕАЛЬНО
+    /// записанное на новой позиции значение может оказаться НЕ `me.value`
+    /// (собственный тип головы маркера), а литерал `changes`. Перенос
+    /// счётчика (`update_feedback_relocate_pass`) вычисляет `new_m` через
+    /// `slot_in_cell`, ПРЕДПОЛАГАЯ, что тип на новой позиции — снова
+    /// `me.value` (та же голова, тот же список правил, тот же слот) — если
+    /// это предположение нарушено, счётчик уезжает в слот, который либо
+    /// никогда не читается (безвредная, но некорректная утечка), либо (в
+    /// худшем случае) СОВПАДАЕТ со слотом СОВЕРШЕННО ДРУГОГО правила у
+    /// новой головы, чей persistent-счётчик был бы тихо испорчен чужим
+    /// значением. CPU-сторона свободна от этого риска: её ключ переноса —
+    /// `(x, y, rule_idx)`, полностью самоописывающийся независимо от
+    /// фактического типа клетки на новой позиции (см. `applicator.rs`'s
+    /// `apply_shift_buffered`). Проверяется по ОБОИМ возможным эффективным
+    /// смещениям (`shift_dx0/dy0` и `feedback_alt_dx/dy`), так как
+    /// `feedback` переключается между ними в рантайме одного и того же
+    /// правила.
+    FeedbackChangeCollidesWithShiftTarget { head: u8, rule_idx: usize },
+    /// `Rule::memory` + `changes` на ТОМ ЖЕ относительном смещении, что и
+    /// сдвиг — вне GPU-подмножества. ТА ЖЕ причина и то же решение, что и
+    /// `FeedbackChangeCollidesWithShiftTarget`, только без "альтернативного"
+    /// направления (у `memory` его просто нет).
+    MemoryChangeCollidesWithShiftTarget { head: u8, rule_idx: usize },
 }
 
 /// Собрать `effective_pattern` ровно так же, как `matcher::build_group_data`
@@ -383,6 +657,32 @@ fn shift_delta(shift: &crate::types::ShiftSpec) -> (i32, i32) {
     }
 }
 
+/// Кодировка ОДНОГО `RecordedValue` в `u32` — см. `GpuRule::memory_pattern0..3`'s
+/// doc-комментарий. Общая функция для CPU-стороны (кодирование
+/// `MemorySpec::match_pattern` в `GpuRule`) и рантайм-записи буфера в
+/// `shader.wgsl` (`update_memory_push_pass`) — ОБЯЗАНЫ использовать
+/// идентичную кодировку, иначе гейт-сравнение в `detect_pass` никогда не
+/// совпадёт ни с одним реально записанным значением.
+fn encode_recorded_value(value: RecordedValue) -> u32 {
+    match value {
+        RecordedValue::Type(ct) => ct.0 as u32,
+        RecordedValue::Applied => 256,
+        RecordedValue::Missed => 257,
+    }
+}
+
+/// Единичный шаг `RecursionSpec::direction` — зеркалит
+/// `conflict_analyzer::direction_unit_delta`/`applicator`'s инлайн-match в
+/// каскаде `Rule::recursion`.
+fn recursion_direction_delta(direction: Direction) -> (i32, i32) {
+    match direction {
+        Direction::Up => (0, -1),
+        Direction::Down => (0, 1),
+        Direction::Left => (-1, 0),
+        Direction::Right => (1, 0),
+    }
+}
+
 /// Построить GPU-таблицу правил из того же `rule_index`, что использует
 /// `Engine`/`detect_matches`. `Err`, если хотя бы одно правило выходит за
 /// поддерживаемое подмножество — см. doc-комментарий модуля про то, почему
@@ -395,6 +695,9 @@ pub fn build_gpu_rule_table(
     let mut pattern_offsets: Vec<GpuPatternOffset> = Vec::new();
     let mut head_offsets: Vec<GpuOffset> = Vec::new();
     let mut needs_arbitration = false;
+    let mut needs_starvation = false;
+    let mut needs_feedback = false;
+    let mut needs_memory = false;
     let mut margin: i32 = 0;
     let mut pattern_reach: i32 = 0;
 
@@ -413,25 +716,100 @@ pub fn build_gpu_rule_table(
         let mut union_seen: FxHashSet<(i8, i8)> = FxHashSet::default();
 
         for (rule_idx, rule) in group.iter().enumerate() {
-            // `broadcast` — вне подмножества: шейдер сейчас пишет только
-            // финальную точку пути (см. `push_write_cell`/`detect_pass`),
-            // молча посчитать broadcast-сдвиг как обычный означало бы
-            // потерять все промежуточные клетки — неверный результат
-            // вместо явного отказа (см. doc-комментарий модуля про то же
-            // обязательство для `ChangeValue::Ref`/`cam`).
-            if rule.shifts.iter().flatten().any(|s| s.broadcast) {
-                return Err(GpuUnsupportedReason::BroadcastShiftUnsupported { head: head.0, rule_idx });
+            if rule.shifts.iter().flatten().any(|s| s.keep_source) {
+                return Err(GpuUnsupportedReason::KeepSourceUnsupported { head: head.0, rule_idx });
             }
-            if rule.starvation_after.is_some() {
-                return Err(GpuUnsupportedReason::StarvationGuardUnsupported { head: head.0, rule_idx });
+            if let Some(spec) = rule.recursion {
+                if rule.cam.is_some() {
+                    return Err(GpuUnsupportedReason::CamRecursionUnsupported { head: head.0, rule_idx });
+                }
+                if spec.max_depth > MAX_RECURSION_DEPTH {
+                    return Err(GpuUnsupportedReason::RecursionDepthTooLarge { head: head.0, rule_idx, max_depth: spec.max_depth });
+                }
             }
+            if let Some(spec) = &rule.memory {
+                if rule.recursion.is_some() {
+                    return Err(GpuUnsupportedReason::MemoryRecursionUnsupported { head: head.0, rule_idx });
+                }
+                if rule.cam.is_some() {
+                    return Err(GpuUnsupportedReason::MemoryCamUnsupported { head: head.0, rule_idx });
+                }
+                if spec.window > MAX_MEMORY_WINDOW {
+                    return Err(GpuUnsupportedReason::MemoryWindowTooLarge { head: head.0, rule_idx, window: spec.window });
+                }
+            }
+            // Флаг `broadcast` КАЖДОГО сдвига, в том же порядке/индексации,
+            // что `shift_deltas` — используется ниже и при заполнении
+            // `GpuRule::shift_broadcast0/1`.
+            let shift_broadcasts: Vec<bool> = rule.shifts.iter().flatten().map(|s| s.broadcast).collect();
             let shift_deltas: Vec<(i32, i32)> = rule.shifts.iter().flatten().map(shift_delta).collect();
             if shift_deltas.len() > MAX_SHIFTS {
                 return Err(GpuUnsupportedReason::TooManyShifts { head: head.0, rule_idx, len: shift_deltas.len() });
             }
+            if rule.feedback.is_some() {
+                // `config::load_config` уже требует РОВНО один сдвиг для
+                // `feedback` — здесь та же проверка защитно (см. её же
+                // паттерн у `cam`'s `id_len == 1` выше): правило, пришедшее
+                // мимо YAML-пути (напрямую через Rust API), не должно
+                // тихо ломать `GpuRule::feedback_alt_dx/dy`'s единственное
+                // предположение "ровно один сдвиг".
+                if shift_deltas.len() != 1 {
+                    return Err(GpuUnsupportedReason::TooManyShifts { head: head.0, rule_idx, len: shift_deltas.len() });
+                }
+                if shift_broadcasts[0] {
+                    return Err(GpuUnsupportedReason::FeedbackBroadcastUnsupported { head: head.0, rule_idx });
+                }
+                // Перенос счётчика (см. `FeedbackChangeCollidesWithShiftTarget`'s
+                // doc-комментарий) предполагает, что тип клетки на новой
+                // позиции останется `me.value` — ложно, если `changes`
+                // ЗАПИСЫВАЕТ туда что-то другое (CPU-семантика "changes
+                // побеждают shifts при конфликте клетки"). Проверяем ОБА
+                // возможных эффективных смещения — декларированное и
+                // альтернативное (`new_direction`), поскольку `feedback`
+                // переключается между ними в рантайме одного и того же
+                // правила, а эта проверка статическая (на этапе сборки
+                // таблицы).
+                if let Some(spec) = rule.feedback {
+                    let alt = recursion_direction_delta(spec.new_direction);
+                    if rule.changes.iter().any(|&(dx, dy, _)| (dx, dy) == shift_deltas[0] || (dx, dy) == alt) {
+                        return Err(GpuUnsupportedReason::FeedbackChangeCollidesWithShiftTarget { head: head.0, rule_idx });
+                    }
+                }
+            }
+            if rule.memory.is_some() {
+                // `config::load_config` уже требует 0 или 1 сдвиг для
+                // `memory` — та же защитная re-проверка, что и у `feedback`
+                // выше, на случай конфига, собранного мимо YAML-пути.
+                if shift_deltas.len() > 1 {
+                    return Err(GpuUnsupportedReason::TooManyShifts { head: head.0, rule_idx, len: shift_deltas.len() });
+                }
+                if shift_deltas.len() == 1 && shift_broadcasts[0] {
+                    return Err(GpuUnsupportedReason::MemoryBroadcastUnsupported { head: head.0, rule_idx });
+                }
+                // Та же причина, что и `FeedbackChangeCollidesWithShiftTarget`
+                // выше — `memory` без "альтернативного" направления, только
+                // одно возможное эффективное смещение.
+                if shift_deltas.len() == 1 && rule.changes.iter().any(|&(dx, dy, _)| (dx, dy) == shift_deltas[0]) {
+                    return Err(GpuUnsupportedReason::MemoryChangeCollidesWithShiftTarget { head: head.0, rule_idx });
+                }
+            }
             for &(dx, dy) in &shift_deltas {
                 if dx.abs() > MAX_SHIFT_REACH || dy.abs() > MAX_SHIFT_REACH {
                     return Err(GpuUnsupportedReason::ShiftTooFar { head: head.0, rule_idx, dx, dy });
+                }
+            }
+            // Broadcast — ПОДДЕРЖИВАЕТСЯ (см. `push_write_cell`-цикл в
+            // `detect_pass`, который теперь пишет ВЕСЬ путь, не только
+            // финальную точку), но `steps` ограничен отдельным, более узким
+            // потолком [`MAX_BROADCAST_REACH`] — см. её doc-комментарий про
+            // то, почему это НЕ то же самое, что [`MAX_SHIFT_REACH`] обычных
+            // сдвигов (число ячеек записи растёт с `steps`, не константно).
+            for (&(dx, dy), &is_broadcast) in shift_deltas.iter().zip(shift_broadcasts.iter()) {
+                if is_broadcast {
+                    let steps = dx.abs().max(dy.abs());
+                    if steps > MAX_BROADCAST_REACH {
+                        return Err(GpuUnsupportedReason::BroadcastPathTooLong { head: head.0, rule_idx, steps });
+                    }
                 }
             }
             if rule.changes.len() > MAX_CHANGES {
@@ -465,7 +843,13 @@ pub fn build_gpu_rule_table(
             let shift_reach = shift_deltas.iter().map(|&(dx, dy)| dx.abs().max(dy.abs())).max().unwrap_or(0);
             let change_reach = rule.changes.iter().map(|&(dx, dy, _)| dx.abs().max(dy.abs())).max().unwrap_or(0);
             let cam_reach = rule.cam.map_or(0, |c| c.radius as i32);
-            let rule_margin = if shift_deltas.is_empty() { change_reach } else { shift_reach + change_reach }.max(cam_reach);
+            // Каскад `recursion`: самый дальний уровень `max_depth` сам
+            // отстоит на `max_depth` клеток от исходного матча, а его
+            // собственные `changes` расширяют охват ещё на `change_reach` —
+            // та же логика, что у `shift_reach + change_reach` для обычных
+            // сдвигов, только смещение даёт каскад, а не сам сдвиг.
+            let recursion_reach = rule.recursion.map_or(0, |spec| spec.max_depth as i32) + change_reach;
+            let rule_margin = if shift_deltas.is_empty() { change_reach } else { shift_reach + change_reach }.max(cam_reach).max(recursion_reach);
             margin = margin.max(rule_margin);
 
             if !shift_deltas.is_empty()
@@ -475,6 +859,45 @@ pub fn build_gpu_rule_table(
             }
             if !shift_deltas.is_empty() || rule.changes.iter().any(|&(dx, dy, _)| (dx, dy) != (0, 0)) {
                 needs_arbitration = true;
+            }
+            // `recursion`: ДАЖЕ если объявленные `changes` целиком
+            // self-referential ((0,0) относительно исходного матча —
+            // единственный случай, не пойманный проверкой выше), каскад
+            // `k = 1..=max_depth` пишет их же СМЕЩЁННЫМИ на `k × direction`
+            // от исходной позиции — то есть в НЕ-self клетки, независимо от
+            // того, что было объявлено. Без этой отдельной проверки
+            // rule-с-только-self-changes-но-с-recursion молча получил бы
+            // Simple (не арбитражный) пайплайн, хотя реально пишет вне
+            // своей клетки, стоит max_depth > 0.
+            if rule.recursion.is_some_and(|spec| spec.max_depth > 0) {
+                needs_arbitration = true;
+            }
+            // `starvation_after`: осмысленно только под реальной
+            // конкуренцией за клетку — форсируем Arbitrated-пайплайн
+            // безусловно, даже если это единственная причина у ИНАЧЕ
+            // self-write-only конфига (та же логика, что и у recursion
+            // выше: свойство самого правила, не то, что можно вывести из
+            // формы `changes`/`shifts`).
+            if rule.starvation_after.is_some() {
+                needs_arbitration = true;
+                needs_starvation = true;
+            }
+            // `feedback` уже гарантированно требует ровно один сдвиг —
+            // needs_arbitration уже станет true через обычную проверку
+            // "есть сдвиг" ниже, форсировать здесь незачем; но
+            // needs_feedback нужно отметить явно.
+            if rule.feedback.is_some() {
+                needs_feedback = true;
+            }
+            // `memory`: в отличие от `starvation_after`/`recursion` выше,
+            // форсируем `needs_arbitration` БЕЗУСЛОВНО, даже для правила,
+            // которое иначе (без `memory`) было бы чистым self-write —
+            // персистентные буферы гейта существуют только в инфраструктуре
+            // Arbitrated-пайплайна (см. `GpuRuleTable::needs_memory`'s
+            // doc-комментарий), Simple-пайплайн их не заводит вовсе.
+            if rule.memory.is_some() {
+                needs_arbitration = true;
+                needs_memory = true;
             }
 
             let mut change_fields = [(0i32, 0i32, 0u32); MAX_CHANGES];
@@ -528,6 +951,10 @@ pub fn build_gpu_rule_table(
             for (i, &(dx, dy)) in shift_deltas.iter().enumerate() {
                 shift_fields[i] = (dx, dy);
             }
+            let mut shift_broadcast_fields = [false; MAX_SHIFTS];
+            for (i, &b) in shift_broadcasts.iter().enumerate() {
+                shift_broadcast_fields[i] = b;
+            }
 
             rules.push(GpuRule {
                 pattern_start,
@@ -550,6 +977,8 @@ pub fn build_gpu_rule_table(
                 shift_dy0: shift_fields[0].1,
                 shift_dx1: shift_fields[1].0,
                 shift_dy1: shift_fields[1].1,
+                shift_broadcast0: shift_broadcast_fields[0] as u32,
+                shift_broadcast1: shift_broadcast_fields[1] as u32,
                 change_count: rule.changes.len() as u32,
                 change_dx0: change_fields[0].0,
                 change_dy0: change_fields[0].1,
@@ -566,6 +995,34 @@ pub fn build_gpu_rule_table(
                 cam_radius: rule.cam.map_or(0, |c| c.radius as u32),
                 cam_target_type: rule.cam.map_or(0, |c| c.target_type.0 as u32),
                 tie_break: rule.tie_break,
+                recursion_max_depth: rule.recursion.map_or(0, |spec| spec.max_depth as u32),
+                recursion_dx: rule.recursion.map_or(0, |spec| recursion_direction_delta(spec.direction).0),
+                recursion_dy: rule.recursion.map_or(0, |spec| recursion_direction_delta(spec.direction).1),
+                has_starvation: rule.starvation_after.is_some() as u32,
+                starvation_threshold: rule.starvation_after.unwrap_or(0),
+                has_feedback: rule.feedback.is_some() as u32,
+                feedback_timeout: rule.feedback.map_or(0, |spec| spec.timeout.min(u32::MAX as u64) as u32),
+                feedback_alt_dx: rule.feedback.map_or(0, |spec| recursion_direction_delta(spec.new_direction).0),
+                feedback_alt_dy: rule.feedback.map_or(0, |spec| recursion_direction_delta(spec.new_direction).1),
+                has_memory: rule.memory.is_some() as u32,
+                memory_window: rule.memory.as_ref().map_or(0, |spec| spec.window as u32),
+                memory_trigger: rule.memory.as_ref().map_or(0, |spec| match spec.record_trigger {
+                    RecordTrigger::NeighborType(_) => 0,
+                    RecordTrigger::RuleOutcome => 1,
+                }),
+                memory_dx: rule.memory.as_ref().map_or(0, |spec| match spec.record_trigger {
+                    RecordTrigger::NeighborType(dir) => recursion_direction_delta(dir).0,
+                    RecordTrigger::RuleOutcome => 0,
+                }),
+                memory_dy: rule.memory.as_ref().map_or(0, |spec| match spec.record_trigger {
+                    RecordTrigger::NeighborType(dir) => recursion_direction_delta(dir).1,
+                    RecordTrigger::RuleOutcome => 0,
+                }),
+                memory_has_shift: rule.memory.is_some() as u32 * (shift_deltas.len() == 1) as u32,
+                memory_pattern0: rule.memory.as_ref().and_then(|spec| spec.match_pattern.first()).map_or(0, |&v| encode_recorded_value(v)),
+                memory_pattern1: rule.memory.as_ref().and_then(|spec| spec.match_pattern.get(1)).map_or(0, |&v| encode_recorded_value(v)),
+                memory_pattern2: rule.memory.as_ref().and_then(|spec| spec.match_pattern.get(2)).map_or(0, |&v| encode_recorded_value(v)),
+                memory_pattern3: rule.memory.as_ref().and_then(|spec| spec.match_pattern.get(3)).map_or(0, |&v| encode_recorded_value(v)),
             });
         }
 
@@ -607,6 +1064,9 @@ pub fn build_gpu_rule_table(
         margin,
         max_matches_per_cell,
         pattern_reach,
+        needs_starvation,
+        needs_feedback,
+        needs_memory,
     })
 }
 

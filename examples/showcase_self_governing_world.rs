@@ -72,14 +72,14 @@ fn act1_rule_index() -> HashMap<CellType, Vec<Rule>> {
     idx.insert(CellType(RAD), vec![Rule {
         id: vec![CellType(RAD)], pattern: vec![], shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(MID))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
     }]);
 
     // Импульс, считающий счётчик (та же конструкция, что в
     // strength_self_modification_computed.rs).
     idx.insert(CellType(PULSE), vec![Rule {
         id: vec![CellType(PULSE)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
     }]);
     for k in 0..MAX_COUNT {
         let counter_id = CellType(COUNTER_BASE + k);
@@ -89,13 +89,13 @@ fn act1_rule_index() -> HashMap<CellType, Vec<Rule>> {
             pattern: vec![(0, 0, counter_id), (1, 0, CellType(PULSE))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(COUNTER_BASE + k + 1)), (1, 0, ChangeValue::Literal(0))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         });
         if k > 0 {
             rules.push(Rule {
                 id: vec![counter_id], pattern: vec![(0, 0, counter_id)], shifts: vec![],
                 changes: vec![(0, 0, ChangeValue::Literal(k))],
-                active_only: false, priority: 10, min_age: QUIET_THRESHOLD, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+                active_only: false, priority: 10, min_age: QUIET_THRESHOLD, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
             });
         }
         idx.insert(counter_id, rules);
@@ -107,7 +107,7 @@ fn act1_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: cellaria::types::OverflowAction::Write(0),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         }]);
     }
     for (i, &(_, byte)) in PACKET_FIXED.iter().enumerate() {
@@ -117,7 +117,7 @@ fn act1_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: cellaria::types::OverflowAction::Write(byte),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         }]);
     }
     idx
@@ -253,13 +253,13 @@ fn act2_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 pattern: vec![(0, 0, CellType(ACC_BASE2 + acc)), (0, -1, CellType(d))],
                 shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
                 changes: vec![(0, 0, ChangeValue::Literal(ACC_BASE2 + next))],
-                active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+                active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
             });
         }
         rules.push(Rule {
             id: vec![CellType(ACC_BASE2 + acc)], pattern: vec![(0, 0, CellType(ACC_BASE2 + acc))], shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(FINAL_BASE2 + acc))],
-            active_only: false, priority: 10, min_age: QUIET2, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: QUIET2, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         });
         idx.insert(CellType(ACC_BASE2 + acc), rules);
         idx.insert(CellType(FINAL_BASE2 + acc), vec![Rule {
@@ -268,7 +268,7 @@ fn act2_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: cellaria::types::OverflowAction::Write(0),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         }]);
     }
     idx
@@ -327,13 +327,13 @@ fn act3_rules(forward: bool) -> HashMap<CellType, Vec<Rule>> {
         idx.insert(CellType(CYCLE_BASE + s), vec![Rule {
             id: vec![CellType(CYCLE_BASE + s)], pattern: vec![], shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(CYCLE_BASE + next))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         }]);
     }
     let dir = if forward { Direction::Right } else { Direction::Left };
     idx.insert(CellType(TOKEN), vec![Rule {
         id: vec![CellType(TOKEN)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(dir, 1)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
     }]);
     idx
 }

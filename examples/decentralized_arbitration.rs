@@ -39,12 +39,12 @@ fn build_rules() -> Vec<Rule> {
         Rule {
             id: vec![CellType(R_MOVER)], pattern: vec![],
             shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]], changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
         Rule {
             id: vec![CellType(L_MOVER)], pattern: vec![],
             shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]], changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
     ]
 }

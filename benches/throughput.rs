@@ -73,7 +73,7 @@ fn setup_no_shift(n: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) 
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     };
     let backward = Rule {
         id: vec![CellType(3), CellType(4)],
@@ -89,7 +89,7 @@ fn setup_no_shift(n: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) 
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     };
 
     (grid, helpers::make_rule_index(vec![forward, backward]))
@@ -128,7 +128,7 @@ fn setup_with_shift(n: usize) -> (Grid<ChunkStorage>, HashMap<CellType, Vec<Rule
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         })
         .collect();
 
@@ -170,7 +170,7 @@ fn setup_single_cell() -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     };
     let rule_2_to_1 = Rule {
         id: vec![CellType(2)],
@@ -183,7 +183,7 @@ fn setup_single_cell() -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     };
     (grid, helpers::make_rule_index(vec![rule_1_to_2, rule_2_to_1]))
 }

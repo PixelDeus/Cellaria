@@ -87,7 +87,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         });
     }
 
@@ -109,7 +109,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             },
             Rule {
                 id: vec![CellType(SELECTOR_TYPE)],
@@ -122,7 +122,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             },
         ],
     );
@@ -142,7 +142,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(2),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         }],
     );
     idx.insert(
@@ -158,7 +158,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(3),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         }],
     );
 
@@ -178,7 +178,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             }],
         );
     }

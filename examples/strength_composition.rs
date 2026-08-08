@@ -57,14 +57,14 @@ fn module_decay() -> Vec<Rule> {
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(MID))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
         Rule {
             id: vec![CellType(MID)],
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(STABLE))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
     ]
 }
@@ -86,21 +86,21 @@ fn module_wire() -> Vec<Rule> {
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(TAIL))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
         Rule {
             id: vec![CellType(TAIL)],
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(WIRE))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
         Rule {
             id: vec![CellType(WIRE)],
             pattern: vec![(0, 0, CellType(WIRE)), (-1, 0, CellType(HEAD))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(HEAD))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
     ]
 }
@@ -118,7 +118,7 @@ fn module_bad() -> Vec<Rule> {
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(99))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
     }]
 }
 

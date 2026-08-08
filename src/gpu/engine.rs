@@ -74,7 +74,7 @@ use crate::types::{Cell, CellType, Rule, DEFAULT_CELL_VALUE};
 
 use super::rule_table::{
     build_gpu_rule_table, GpuHeadSlot, GpuMatchLayout, GpuOffset, GpuPatternOffset, GpuRule, GpuRuleTable,
-    GpuUnsupportedReason, MAX_WRITE_CELLS,
+    GpuUnsupportedReason, MAX_MEMORY_WINDOW, MAX_WRITE_CELLS,
 };
 
 /// См. doc-комментарий модуля — запас (>2×) над худшим случаем, измеренным
@@ -176,6 +176,59 @@ struct ArbitratedPipeline {
     p_claim: wgpu::ComputePipeline,
     p_resolve: wgpu::ComputePipeline,
     p_apply: wgpu::ComputePipeline,
+    /// Дispatch'ится ОТДЕЛЬНЫМ submission'ом ПОСЛЕ `p_apply` И после (если
+    /// понадобился) `GpuEngine::cpu_fallback_resolve` (см. `dispatch_tick`),
+    /// поскольку ему нужен УЖЕ финальный `match_state`, который CPU-fallback
+    /// дописывает только на CPU-стороне, между двумя submission'ами. Пайплайн
+    /// создаётся ВСЕГДА (дёшево), но дispatch'ится (`GpuEngine::dispatch_tick`)
+    /// только если `needs_starvation` — та же экономия, что и у CPU-side
+    /// `ExtensionFlags`: нулевые накладные расходы (ни одного лишнего
+    /// submission'а) для конфигов, которым это не нужно.
+    p_update_starvation: wgpu::ComputePipeline,
+    /// Persistent МЕЖДУ ТИКАМИ storage-буфер счётчиков голодания — см.
+    /// `shader.wgsl`'s binding 12 doc-комментарий. Аллоцируется ЗДЕСЬ ОДИН
+    /// РАЗ (не в `dispatch_tick`) даже для конфигов без `starvation_after`
+    /// (минимальный размер, как `counters_buf`) — bind group layout требует
+    /// присутствия ВСЕХ привязок независимо от того, реально ли они
+    /// используются этим конкретным конфигом. Поле нигде явно не читается
+    /// ПОСЛЕ конструктора (в отличие от `matches_buf`/`match_state_buf`/
+    /// `locked_buf`, к которым `cpu_fallback_resolve` обращается по имени) —
+    /// хранится здесь ТОЛЬКО ради времени жизни (RAII): bind group держит
+    /// свою ссылку на GPU-стороне, но Rust-владение буфером обязано
+    /// пережить саму структуру `ArbitratedPipeline`, иначе wgpu уничтожит
+    /// буфер, пока bind group всё ещё на него ссылается.
+    #[allow(dead_code)]
+    starvation_counters_buf: wgpu::Buffer,
+    /// `Rule::feedback` — ДВА раздельных пайплайна (не один, как у
+    /// `p_update_starvation`), дispatch'ятся СТРОГО ПОСЛЕДОВАТЕЛЬНО внутри
+    /// ОДНОГО compute pass'а (латч → перенос) — см. `update_feedback_latch_pass`/
+    /// `update_feedback_relocate_pass`'s doc-комментарий в `shader.wgsl` про
+    /// то, почему раздельность ОБЯЗАТЕЛЬНА (гонка между переносом счётчика в
+    /// чужой слот и осиротевшим сбросом того же слота его собственным
+    /// потоком). Как и `p_update_starvation`, создаются всегда, дispatch'ятся
+    /// только при `needs_feedback`.
+    p_update_feedback_latch: wgpu::ComputePipeline,
+    p_update_feedback_relocate: wgpu::ComputePipeline,
+    /// Persistent МЕЖДУ ТИКАМИ storage-буфер защёлок feedback — см.
+    /// `shader.wgsl`'s binding 13 doc-комментарий. Та же логика хранения
+    /// "только ради времени жизни", что и `starvation_counters_buf` выше.
+    #[allow(dead_code)]
+    feedback_counters_buf: wgpu::Buffer,
+    /// `Rule::memory` — ТОЖЕ два раздельных пайплайна (push → relocate),
+    /// та же причина (гонка перенос/осиротевший-сброс), что и у
+    /// `p_update_feedback_latch`/`p_update_feedback_relocate` выше — см.
+    /// `update_memory_push_pass`/`update_memory_relocate_pass`'s
+    /// doc-комментарий в `shader.wgsl`.
+    p_update_memory_push: wgpu::ComputePipeline,
+    p_update_memory_relocate: wgpu::ComputePipeline,
+    /// Persistent FIFO-буфер памяти (binding 14) — размер `n_matches *
+    /// MAX_MEMORY_WINDOW`, см. её doc-комментарий в `shader.wgsl`.
+    #[allow(dead_code)]
+    memory_buffers_buf: wgpu::Buffer,
+    /// Persistent счётчик заполненности (binding 15) — размер `n_matches`,
+    /// та же индексация, что `starvation_counters_buf`/`feedback_counters_buf`.
+    #[allow(dead_code)]
+    memory_len_buf: wgpu::Buffer,
     bg_a_to_b: wgpu::BindGroup,
     bg_b_to_a: wgpu::BindGroup,
     /// Читается после [`ROUNDS`] раундов, чтобы узнать, сколько матчей
@@ -209,6 +262,41 @@ enum Pipeline {
 /// GPU-двигатель (см. doc-комментарий модуля). `GpuEngine::new` возвращает
 /// `Err`, если хотя бы одно правило набора вне поддерживаемого подмножества
 /// — см. [`GpuUnsupportedReason`].
+///
+/// GPU не бесплатен на маленьких решётках — есть реальный, измеренный (не
+/// предполагаемый) порог окупаемости, причём РАЗНЫЙ для двух пайплайнов
+/// (см. `Pipeline`/`GpuRuleTable::needs_arbitration`):
+///
+/// - **Simple** (self-write-only, `examples/flagship_gol.rs`, N — сторона
+///   решётки): GPU обгоняет CPU `Engine` уже при N≈50 (≈5×), дальше растёт
+///   (N=200: ≈37×). Один compute pass почти без синхронизации — overhead
+///   запуска минимален.
+/// - **Arbitrated** (сдвиги/запись в соседа, `examples/flagship_shifts.rs`):
+///   ГОРАЗДО дороже начать — при N=20 GPU МЕДЛЕННЕЕ CPU (≈0.1×): фиксовая
+///   цена [`ROUNDS`] раундов claim/resolve на почти пустую задачу не
+///   окупается. Точка перелома — между N=50 (≈0.6×, ещё проигрыш) и N=100
+///   (≈5×, уже выигрыш); дальше растёт быстро (N=400: ≈40×).
+///
+/// Вывод: для малых решёток (десятки-низкие сотни клеток на сторону) с
+/// реальным арбитражем (не self-write-only) CPU `Engine` — не запасной, а
+/// ПРАВИЛЬНЫЙ выбор по чистой скорости, GPU не компенсирует свой fixed
+/// overhead запуска. `GpuEngine` не выбирает бэкенд автоматически — выбор
+/// между CPU/GPU остаётся за вызывающим кодом (нет универсального порога:
+/// зависит от пайплайна и конкретного железа).
+///
+/// Важная оговорка (найдена при попытке переизмерить порог с batched
+/// `run_ticks`, БЕЗ readback на каждом тике): точка перелома зависит не
+/// ТОЛЬКО от N решётки, а от РЕАЛЬНОГО числа совпадений за тик. На
+/// затухающей нагрузке (частицы + `OverflowAction::Discard`, как в
+/// `flagship_shifts.rs`) популяция монотонно падает — за 20 тиков N=20
+/// теряет ~99% (138→1 живая клетка), N=400 теряет ~80% (47873→9484). Долгий
+/// прогон такого сценария не измеряет "устойчивый" throughput ни для CPU,
+/// ни для GPU — оба меряют смесь плотного начала и разрежённого конца, в
+/// разных пропорциях в зависимости от длины прогона. Число выше (таблица
+/// из `flagship_gol`/`flagship_shifts`) — ориентир для конкретных сценариев
+/// этих примеров, не универсальная формула "GPU выгоден начиная с N=X" — в
+/// сценарии, который НЕ теряет плотность (например, отражение от границ
+/// вместо `Discard`), порог может быть другим.
 pub struct GpuEngine {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -242,6 +330,22 @@ pub struct GpuEngine {
     /// её doc-комментарий) — измеримо дорого пересоздавать буфер той же
     /// формы каждый раз, когда форма и так известна заранее.
     grid_readback_buf: wgpu::Buffer,
+    /// `GpuRuleTable::needs_starvation` — `false` для Simple-пайплайна и для
+    /// Arbitrated-конфигов без `starvation_after`. `dispatch_tick`
+    /// пропускает `p_update_starvation`'s submission целиком, когда `false`
+    /// — нулевые накладные расходы (ни одного лишнего submission'а/sync)
+    /// для конфигов, которым это не нужно.
+    needs_starvation: bool,
+    /// `GpuRuleTable::needs_feedback` — то же "нулевые накладные расходы,
+    /// если не просили", что и `needs_starvation` выше, но пропускает ДВА
+    /// dispatch'а (латч + перенос) вместо одного — см.
+    /// `ArbitratedPipeline::p_update_feedback_latch`'s doc-комментарий.
+    needs_feedback: bool,
+    /// `GpuRuleTable::needs_memory` — та же "нулевые накладные расходы,
+    /// если не просили" экономия, но пропускает ДВА dispatch'а (push +
+    /// relocate), см. `ArbitratedPipeline::p_update_memory_push`'s
+    /// doc-комментарий.
+    needs_memory: bool,
 }
 
 impl GpuEngine {
@@ -369,6 +473,9 @@ impl GpuEngine {
             generation: 0,
             current_is_a: true,
             grid_readback_buf,
+            needs_starvation: table.needs_starvation,
+            needs_feedback: table.needs_feedback,
+            needs_memory: table.needs_memory,
         }
     }
 
@@ -477,7 +584,36 @@ impl GpuEngine {
         let match_state_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: (n_matches * 4).max(4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            // COPY_DST добавлен для `GpuEngine::cpu_fallback_resolve`,
+            // которая теперь дописывает финальный ACCEPTED/REJECTED для
+            // матчей, доигранных на CPU, обратно сюда (`queue.write_buffer`)
+            // — иначе `update_starvation_pass` видел бы их навсегда
+            // застрявшими в PENDING(0).
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let starvation_counters_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (n_matches * 4).max(4) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let feedback_counters_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (n_matches * 4).max(4) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let memory_buffers_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (n_matches * MAX_MEMORY_WINDOW * 4).max(4) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let memory_len_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (n_matches * 4).max(4) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
         // `claims`/`locked` живут в ДОПОЛНЕННОЙ координатной сетке (см.
@@ -562,6 +698,10 @@ impl GpuEngine {
                 storage_entry(9, false),
                 storage_entry(10, false),
                 storage_entry(11, false),
+                storage_entry(12, false),
+                storage_entry(13, false),
+                storage_entry(14, false),
+                storage_entry(15, false),
             ],
         });
 
@@ -582,6 +722,10 @@ impl GpuEngine {
                     wgpu::BindGroupEntry { binding: 9, resource: claims_buf.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 10, resource: locked_buf.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 11, resource: counters_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 12, resource: starvation_counters_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 13, resource: feedback_counters_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 14, resource: memory_buffers_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 15, resource: memory_len_buf.as_entire_binding() },
                 ],
             })
         };
@@ -611,6 +755,11 @@ impl GpuEngine {
             p_claim: mk_pipeline("claim_pass"),
             p_resolve: mk_pipeline("resolve_pass"),
             p_apply: mk_pipeline("apply_pass"),
+            p_update_starvation: mk_pipeline("update_starvation_pass"),
+            p_update_feedback_latch: mk_pipeline("update_feedback_latch_pass"),
+            p_update_feedback_relocate: mk_pipeline("update_feedback_relocate_pass"),
+            p_update_memory_push: mk_pipeline("update_memory_push_pass"),
+            p_update_memory_relocate: mk_pipeline("update_memory_relocate_pass"),
             bg_a_to_b: mk_bg(buf_a, buf_b),
             bg_b_to_a: mk_bg(buf_b, buf_a),
             counters_buf,
@@ -621,6 +770,10 @@ impl GpuEngine {
             matches_readback_buf,
             state_readback_buf,
             locked_readback_buf,
+            starvation_counters_buf,
+            feedback_counters_buf,
+            memory_buffers_buf,
+            memory_len_buf,
         }
     }
 
@@ -760,6 +913,69 @@ impl GpuEngine {
                         target_buf, self.width, self.height, self.margin, self.generation + 1,
                     );
                 }
+
+                // `update_starvation_pass` — см. её doc-комментарий в
+                // `shader.wgsl` про то, почему ОБЯЗАНА идти ПОСЛЕ (не внутри)
+                // предыдущего submission'а: ей нужен УЖЕ финальный
+                // `match_state`, который `cpu_fallback_resolve` выше могла
+                // только что дописать (редкий путь). Пропускается целиком,
+                // если конфиг не использует `starvation_after` вовсе — то же
+                // "нулевые накладные расходы, если не просили" (см.
+                // `GpuRuleTable::needs_starvation`'s doc-комментарий), что
+                // уже применено к CPU-side `ExtensionFlags`.
+                if self.needs_starvation {
+                    let mut encoder2 = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                    {
+                        let mut pass2 = encoder2.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                        pass2.set_bind_group(0, bg, &[]);
+                        pass2.set_pipeline(&p.p_update_starvation);
+                        pass2.dispatch_workgroups(wg_matches, 1, 1);
+                    }
+                    self.queue.submit(Some(encoder2.finish()));
+                }
+
+                // `update_feedback_{latch,relocate}_pass` — та же причина
+                // (нужен финальный `match_state`) идти ПОСЛЕ CPU-fallback,
+                // что и у `update_starvation_pass` выше; независима от неё
+                // (разные буферы), порядок между ними друг на друга не
+                // влияет. Латч и перенос — ДВА dispatch'а В ОДНОМ pass'е
+                // (не отдельные submission'ы) специально: ordering между
+                // dispatch_workgroups внутри одного compute pass'а —
+                // ГАРАНТИЯ WebGPU, на которой уже держится весь
+                // раундовый claim/resolve выше, и она же убирает гонку
+                // между переносом и осиротевшим сбросом (см. doc-комментарий
+                // `update_feedback_relocate_pass` в `shader.wgsl`).
+                if self.needs_feedback {
+                    let mut encoder3 = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                    {
+                        let mut pass3 = encoder3.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                        pass3.set_bind_group(0, bg, &[]);
+                        pass3.set_pipeline(&p.p_update_feedback_latch);
+                        pass3.dispatch_workgroups(wg_matches, 1, 1);
+                        pass3.set_pipeline(&p.p_update_feedback_relocate);
+                        pass3.dispatch_workgroups(wg_matches, 1, 1);
+                    }
+                    self.queue.submit(Some(encoder3.finish()));
+                }
+
+                // `update_memory_{push,relocate}_pass` — та же причина
+                // (финальный `match_state`) идти после CPU-fallback, и та
+                // же "два dispatch'а в одном pass'е" ordering-гарантия
+                // (push → relocate), что и у `update_feedback_*` выше —
+                // независима от неё (разные буферы), порядок между блоками
+                // друг на друга не влияет.
+                if self.needs_memory {
+                    let mut encoder4 = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                    {
+                        let mut pass4 = encoder4.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                        pass4.set_bind_group(0, bg, &[]);
+                        pass4.set_pipeline(&p.p_update_memory_push);
+                        pass4.dispatch_workgroups(wg_matches, 1, 1);
+                        pass4.set_pipeline(&p.p_update_memory_relocate);
+                        pass4.dispatch_workgroups(wg_matches, 1, 1);
+                    }
+                    self.queue.submit(Some(encoder4.finish()));
+                }
             }
         }
 
@@ -888,17 +1104,28 @@ impl GpuEngine {
 
         let padded_width = width + 2 * margin;
         let mut writes: Vec<(u64, GpuCell)> = Vec::new();
+        // Финальный ACCEPTED(1)/REJECTED(2) для КАЖДОГО матча, доигранного
+        // здесь — раньше эта функция писала только клетки решётки
+        // (`writes`), оставляя `match_state_buf` навсегда PENDING(0) для
+        // этих матчей. Теперь пишет и то, и другое: `update_starvation_pass`
+        // (см. `shader.wgsl`) — первый и единственный потребитель, которому
+        // это действительно нужно (см. её doc-комментарий про то, почему
+        // `starvation_after` вообще стал портируемым).
+        let mut state_writes: Vec<(u64, u32)> = Vec::new();
 
         for &m in &pending {
             let mat = &matches[m];
             let cell_count = (mat.cell_count as usize).min(MAX_WRITE_CELLS);
             let cells = &mat.cells[..cell_count];
+            let state_offset = (m * 4) as u64;
             if cells.iter().any(|&c| locked[c as usize] == 1) {
-                continue; // конфликт с уже принятым (GPU или CPU-fallback) матчем
+                state_writes.push((state_offset, 2)); // REJECTED — конфликт с уже принятым матчем
+                continue;
             }
             for &c in cells {
                 locked[c as usize] = 1;
             }
+            state_writes.push((state_offset, 1)); // ACCEPTED
             for k in 0..cell_count {
                 let c = mat.cells[k] as i64;
                 let py = c / padded_width as i64;
@@ -933,6 +1160,9 @@ impl GpuEngine {
         // цикл "без break" в шейдере.
         for (offset, cell) in writes {
             queue.write_buffer(target_buf, offset, bytemuck::bytes_of(&cell));
+        }
+        for (offset, state) in state_writes {
+            queue.write_buffer(match_state_buf, offset, bytemuck::bytes_of(&state));
         }
     }
 

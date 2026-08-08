@@ -32,7 +32,7 @@ fn make_rule(
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     }
 }
 
@@ -444,4 +444,64 @@ fn test_composition_tm_cleanup() {
     } else {
         println!("test_composition_tm_cleanup: R₁∪R₂ Unsafe с парами {:?}", verdict);
     }
+}
+
+// ========================================================================
+// Лемма 4 (`paper/paper4.md` §8, Corollary C): `Rule::feedback` обязан
+// участвовать в графе конфликтов через UNION нормального и альтернативного
+// направления, а не только нормального — иначе конфликт, который может
+// произойти ТОЛЬКО после срабатывания обратной связи, был бы пропущен.
+// ========================================================================
+
+#[test]
+fn test_feedback_conflict_only_visible_via_alternate_direction_union() {
+    use crate::types::FeedbackSpec;
+
+    // Правило A: сдвиг Right (нормально), feedback переключает на Down.
+    // Нормальные write cells (относительно A): (0,0) [очистка], (1,0) [цель].
+    // Альтернативные (Down) write cells: (0,0), (0,1).
+    let rule_a = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![(0, 0, CellType(1))],
+        shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+        changes: vec![],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+        feedback: Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down }),
+        recursion: None,
+        memory: None,
+    };
+    // Правило B: статичное self-change, без сдвигов — пишет только в (0,0)
+    // ОТНОСИТЕЛЬНО СЕБЯ. Размещено (в терминах относительного офсета,
+    // который перебирает `ConflictGraph::build`) так, что B попадает РОВНО
+    // в (0,1) от A — это ЕСТЬ в альтернативном (Down) наборе A, но ЕГО НЕТ
+    // в нормальном (Right) наборе A.
+    let rule_b = Rule {
+        id: vec![CellType(2)],
+        pattern: vec![(0, 0, CellType(2))],
+        shifts: vec![],
+        changes: vec![(0, 0, crate::types::ChangeValue::Literal(9))],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+        feedback: None, recursion: None, memory: None,
+    };
+
+    let graph = ConflictGraph::build(&[rule_a, rule_b]);
+    assert!(
+        graph.edges.contains(&(0, 1)),
+        "граф ОБЯЗАН найти ребро между A и B: A's feedback-альтернатива (Down) пишет в ту же \
+относительную клетку, где сидит B, хотя нормальное (Right) направление A её не задевает вовсе. \
+Рёбра: {:?}",
+        graph.edges
+    );
 }

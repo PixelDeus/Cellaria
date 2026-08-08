@@ -62,7 +62,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             }],
         );
         idx.insert(
@@ -78,7 +78,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             }],
         );
     }
@@ -100,7 +100,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         });
     }
     comparator_rules.push(Rule {
@@ -114,7 +114,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     });
     idx.insert(CellType(COMPARATOR), comparator_rules);
     // Для ALARM правил нет — защёлка: обнаруженный сбой навсегда виден,

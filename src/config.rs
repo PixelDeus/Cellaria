@@ -6,8 +6,8 @@ use crate::error::CellariaError;
 use crate::grid::Grid;
 use crate::storage::VecStorage;
 use crate::types::{
-    BoundaryBuffer, Cell, CamSearch, CellType, CellValue, ChangeValue, Direction, OverflowAction,
-    Rule, ShiftSpec,
+    BoundaryBuffer, Cell, CamSearch, CellType, CellValue, ChangeValue, Direction, FeedbackSpec,
+    MemorySpec, OverflowAction, RecordTrigger, RecordedValue, RecursionSpec, Rule, ShiftSpec,
 };
 
 // === Вспомогательный тип — входной шаблон конфига ===
@@ -20,6 +20,9 @@ struct YamlShift {
     /// См. `types::ShiftSpec::broadcast`.
     #[serde(default)]
     broadcast: bool,
+    /// См. `types::ShiftSpec::keep_source` ("излучение" при `broadcast: true`).
+    #[serde(default)]
+    keep_source: bool,
 }
 
 /// YAML-формат группы сдвигов приоритета.
@@ -50,6 +53,36 @@ struct YamlPatternEntry {
 struct YamlCam {
     radius: u8,
     target_type: u8,
+}
+
+/// YAML-формат обратной связи по результату — см. `types::FeedbackSpec`.
+#[derive(Debug, Deserialize)]
+struct YamlFeedback {
+    timeout: u64,
+    new_direction: String,
+}
+
+/// YAML-формат ограниченной рекурсии — см. `types::RecursionSpec`.
+#[derive(Debug, Deserialize)]
+struct YamlRecursion {
+    max_depth: u8,
+    direction: String,
+}
+
+/// YAML-формат памяти по последовательности — см. `types::MemorySpec`.
+///
+/// `trigger`: `"neighbor_type"` (требует `neighbor_direction`) или
+/// `"rule_outcome"` (не должен задавать `neighbor_direction`).
+/// `match_pattern`: список чисел (тип клетки, для `neighbor_type`) или
+/// строк `"applied"`/`"missed"` (для `rule_outcome`) — какой вариант,
+/// определяется значением `trigger`, см. `parse_recorded_value`.
+#[derive(Debug, Deserialize)]
+struct YamlMemory {
+    window: usize,
+    trigger: String,
+    #[serde(default)]
+    neighbor_direction: Option<String>,
+    match_pattern: Vec<serde_yaml::Value>,
 }
 
 /// YAML-формат одного правила.
@@ -86,6 +119,15 @@ struct YamlRule {
     /// Защита от голодания при разном приоритете — см. `Rule::starvation_after`.
     #[serde(default)]
     starvation_after: Option<u32>,
+    /// Обратная связь по результату — см. `Rule::feedback`.
+    #[serde(default)]
+    feedback: Option<YamlFeedback>,
+    /// Ограниченная рекурсия в пределах одного тика — см. `Rule::recursion`.
+    #[serde(default)]
+    recursion: Option<YamlRecursion>,
+    /// Память по последовательности прошлых наблюдений — см. `Rule::memory`.
+    #[serde(default)]
+    memory: Option<YamlMemory>,
 }
 
 /// YAML-формат начальной ячейки.
@@ -171,6 +213,106 @@ fn parse_change_value(value: &serde_yaml::Value) -> Result<ChangeValue, Cellaria
             other
         ))),
     }
+}
+
+/// Преобразовать serde_yaml::Value в RecordedValue — число → тип клетки
+/// (для `NeighborType`), строка `"applied"`/`"missed"` → исход арбитража
+/// (для `RuleOutcome`). См. `types::RecordedValue`.
+fn parse_recorded_value(value: &serde_yaml::Value) -> Result<RecordedValue, CellariaError> {
+    match value {
+        serde_yaml::Value::Number(n) => {
+            let v = n.as_u64().ok_or_else(|| {
+                CellariaError::Config("Invalid number in memory match_pattern".to_string())
+            })?;
+            if v > 255 {
+                return Err(CellariaError::Config(format!(
+                    "memory match_pattern cell type {} exceeds 255",
+                    v
+                )));
+            }
+            Ok(RecordedValue::Type(CellType::new(v as u8)))
+        }
+        serde_yaml::Value::String(s) => match s.to_lowercase().as_str() {
+            "applied" => Ok(RecordedValue::Applied),
+            "missed" => Ok(RecordedValue::Missed),
+            other => Err(CellariaError::Config(format!(
+                "Invalid memory match_pattern string: {} (expected \"applied\" or \"missed\")",
+                other
+            ))),
+        },
+        other => Err(CellariaError::Config(format!(
+            "Invalid memory match_pattern entry: {:?}",
+            other
+        ))),
+    }
+}
+
+/// Собрать `MemorySpec` из YAML-формата — разбирает `trigger`, проверяет
+/// его согласованность с `neighbor_direction`, разбирает `match_pattern`
+/// и проверяет, что его длина равна `window` (см. `types::MemorySpec`'s
+/// doc-комментарий про гейт-семантику "буфер полон и совпадает целиком").
+fn build_memory_spec(m: YamlMemory) -> Result<MemorySpec, CellariaError> {
+    let record_trigger = match m.trigger.to_lowercase().as_str() {
+        "neighbor_type" => {
+            let dir_str = m.neighbor_direction.as_ref().ok_or_else(|| {
+                CellariaError::RuleValidation(
+                    "Rule with `memory` trigger `neighbor_type` requires `neighbor_direction`"
+                        .to_string(),
+                )
+            })?;
+            RecordTrigger::NeighborType(parse_direction(dir_str)?)
+        }
+        "rule_outcome" => {
+            if m.neighbor_direction.is_some() {
+                return Err(CellariaError::RuleValidation(
+                    "Rule with `memory` trigger `rule_outcome` must not set `neighbor_direction`"
+                        .to_string(),
+                ));
+            }
+            RecordTrigger::RuleOutcome
+        }
+        other => {
+            return Err(CellariaError::RuleValidation(format!(
+                "Invalid memory trigger: {} (expected \"neighbor_type\" or \"rule_outcome\")",
+                other
+            )))
+        }
+    };
+    let match_pattern: Vec<RecordedValue> = m
+        .match_pattern
+        .iter()
+        .map(parse_recorded_value)
+        .collect::<Result<_, _>>()?;
+    if match_pattern.len() != m.window {
+        return Err(CellariaError::RuleValidation(format!(
+            "Rule with `memory` must have match_pattern.len() == window, found {} vs {}",
+            match_pattern.len(),
+            m.window
+        )));
+    }
+    // Валидация: `match_pattern`'s варианты обязаны соответствовать
+    // `record_trigger` — найдено при аудите: `NeighborType` кладёт в буфер
+    // ТОЛЬКО `RecordedValue::Type(_)` (см. `engine/mod.rs`'s push-логику,
+    // `RecordTrigger::NeighborType(dir) => ... RecordedValue::Type(cell_type)`),
+    // `RuleOutcome` кладёт ТОЛЬКО `Applied`/`Missed` — никогда наоборот, ни
+    // при каких обстоятельствах. Без этой проверки `trigger: neighbor_type`
+    // с `match_pattern: [applied, missed]` (или наоборот) молча грузился бы
+    // как валидный конфиг, но гейт НИКОГДА не открылся бы: буфер и паттерн
+    // сравниваются поэлементно (`PartialEq` на `RecordedValue`), а разные
+    // варианты enum никогда не равны — правило с `memory` тихо превращалось
+    // бы в мёртвый код, без единой ошибки ни при загрузке, ни во время
+    // выполнения.
+    let shape_ok = match record_trigger {
+        RecordTrigger::NeighborType(_) => match_pattern.iter().all(|v| matches!(v, RecordedValue::Type(_))),
+        RecordTrigger::RuleOutcome => match_pattern.iter().all(|v| matches!(v, RecordedValue::Applied | RecordedValue::Missed)),
+    };
+    if !shape_ok {
+        return Err(CellariaError::RuleValidation(format!(
+            "Rule with `memory` trigger {:?} has a match_pattern entry of the wrong shape -- `neighbor_type` only ever records cell types, `rule_outcome` only ever records applied/missed, so a mismatched entry could never match and the gate would stay closed forever",
+            record_trigger
+        )));
+    }
+    Ok(MemorySpec { window: m.window, record_trigger, match_pattern })
 }
 
 /// Результат загрузки конфига: решётка + индекс правил по типу центра.
@@ -292,6 +434,81 @@ pub fn load_config(path: &str) -> ConfigResult {
                 "Rule with `cam` must not have an explicit `pattern` (only the head cell type is checked)".to_string(),
             ));
         }
+        // Валидация: feedback осмыслен только для правила РОВНО с одним
+        // сдвигом — `new_direction` заменяет его целиком (см.
+        // `types::FeedbackSpec`'s doc-комментарий про ограничение).
+        if yr.feedback.is_some() {
+            let shift_count: usize = yr.shifts.iter().map(|g| g.group.len()).sum();
+            if shift_count != 1 {
+                return Err(CellariaError::RuleValidation(format!(
+                    "Rule with `feedback` must have exactly one shift, found {shift_count}"
+                )));
+            }
+        }
+        // Валидация: recursion осмыслена только для правил БЕЗ сдвигов —
+        // рекурсия расширяет `changes` вдоль направления, а не двигает
+        // голову (см. `types::RecursionSpec`'s doc-комментарий).
+        if yr.recursion.is_some() {
+            let shift_count: usize = yr.shifts.iter().map(|g| g.group.len()).sum();
+            if shift_count != 0 {
+                return Err(CellariaError::RuleValidation(format!(
+                    "Rule with `recursion` must have no shifts, found {shift_count}"
+                )));
+            }
+        }
+        // `cam` + `recursion` ВМЕСТЕ РАЗРЕШЕНЫ (реализовано, не запрещено):
+        // `apply_cam_buffered` теперь после притяжения уровня 0 продолжает
+        // каскад НЕЗАВИСИМЫХ магнитов вдоль `recursion.direction`
+        // (`k = 1..=max_depth`, каждый со своим собственным диском поиска
+        // радиуса `cam.radius`), а `conflict_analyzer::compute_rule_data`
+        // строит статическую границу как union этих дисков (центр и радиус
+        // каждого — чисто статические величины, известные на этапе
+        // определения правила — только КОНКРЕТНАЯ найденная клетка внутри
+        // диска рантайм-зависима, ровно как и у обычного одиночного CAM) —
+        // см. doc-комментарии обеих функций и `paper/paper4.md` §8/§9.
+        //
+        // recursion + min_age > 0 РАЗРЕШЕНЫ (в отличие от recursion+memory
+        // ниже): `applicator::pattern_matches_effective`
+        // теперь проверяет `min_age` на каждом уровне каскада, а не только у
+        // исходного матча — см. `read_age_effective`'s doc-комментарий про
+        // то, почему клетка, записанная РАНЕЕ в этом же каскаде/тике,
+        // корректно имеет эффективный возраст 0 (та же семантика, что и у
+        // любой другой свежезаписанной клетки до конца тика).
+        // Валидация: memory осмыслена только для правил с 0 или 1 сдвигом —
+        // при БОЛЬШЕ ЧЕМ одном сдвиге неоднозначно, какую из нескольких
+        // целей считать "новой позицией" того же маркера для переноса
+        // записи буфера (см. `types::MemorySpec`'s doc-комментарий, тот же
+        // выбор, что уже сделан для `feedback`).
+        if yr.memory.is_some() {
+            let shift_count: usize = yr.shifts.iter().map(|g| g.group.len()).sum();
+            if shift_count > 1 {
+                return Err(CellariaError::RuleValidation(format!(
+                    "Rule with `memory` must have zero or one shift, found {shift_count}"
+                )));
+            }
+        }
+        // `memory` (`NeighborType`) + `recursion` ВМЕСТЕ РАЗРЕШЕНЫ (тот же
+        // приём, что уже применён к `cam`+`recursion` и `recursion`+`min_age`
+        // — найти обход, а не оставить блэнкет-запрет): `applicator`'s
+        // "Фаза 3" каскада теперь ДОПОЛНИТЕЛЬНО проверяет (и обновляет)
+        // собственный буфер уровня — ключ `(ox, oy, rule_idx)`, та же
+        // самостоятельная позиция, что и у обычного top-level матча (см.
+        // doc-комментарий цикла каскада в `applicator.rs`).
+        //
+        // `RuleOutcome` — ПО-ПРЕЖНЕМУ запрещён с `recursion`: у уровня
+        // каскада НЕТ отдельного арбитража (весь каскад — часть уже
+        // выигравшего top-level матча, применяется безусловно, если
+        // pattern+gate совпали), так что "Applied vs Missed" для него
+        // структурно не определено — не то же самое, что "сложнее
+        // реализовать", а действительно бессмысленный вопрос для этой
+        // конкретной комбинации.
+        if let Some(mem) = &yr.memory {
+            if yr.recursion.is_some() && mem.trigger.to_lowercase() == "rule_outcome" {
+                return Err(CellariaError::RuleValidation(
+                    "Rule with `memory` trigger `rule_outcome` must not also have `recursion` (cascade levels have no separate arbitration outcome to record — see applicator.rs's cascade loop doc-comment)".to_string(),
+                ));
+            }
+        }
 
         // Преобразуем сдвиги
         let mut shifts: Vec<Vec<ShiftSpec>> = Vec::new();
@@ -303,6 +520,7 @@ pub fn load_config(path: &str) -> ConfigResult {
                     direction,
                     steps: yshift.steps,
                     broadcast: yshift.broadcast,
+                    keep_source: yshift.keep_source,
                 });
             }
             if !group_shifts.is_empty() {
@@ -349,6 +567,15 @@ pub fn load_config(path: &str) -> ConfigResult {
             cam: yr.cam.map(|c| CamSearch { radius: c.radius, target_type: CellType::new(c.target_type) }),
             tie_break: yr.tie_break,
             starvation_after: yr.starvation_after,
+            feedback: match yr.feedback {
+                Some(f) => Some(FeedbackSpec { timeout: f.timeout, new_direction: parse_direction(&f.new_direction)? }),
+                None => None,
+            },
+            recursion: match yr.recursion {
+                Some(r) => Some(RecursionSpec { max_depth: r.max_depth, direction: parse_direction(&r.direction)? }),
+                None => None,
+            },
+            memory: yr.memory.map(build_memory_spec).transpose()?,
         });
     }
 
@@ -431,5 +658,135 @@ mod tests {
     fn test_parse_change_value_overflow() {
         let v = serde_yaml::Value::Number(serde_yaml::Number::from(300u64));
         assert!(parse_change_value(&v).is_err());
+    }
+
+    #[test]
+    fn test_parse_recorded_value_type() {
+        let v = serde_yaml::Value::Number(serde_yaml::Number::from(7));
+        assert_eq!(parse_recorded_value(&v).unwrap(), RecordedValue::Type(CellType::new(7)));
+    }
+
+    #[test]
+    fn test_parse_recorded_value_outcome_strings() {
+        assert_eq!(
+            parse_recorded_value(&serde_yaml::Value::String("applied".to_string())).unwrap(),
+            RecordedValue::Applied
+        );
+        assert_eq!(
+            parse_recorded_value(&serde_yaml::Value::String("MISSED".to_string())).unwrap(),
+            RecordedValue::Missed
+        );
+    }
+
+    #[test]
+    fn test_parse_recorded_value_invalid_string() {
+        let v = serde_yaml::Value::String("foo".to_string());
+        assert!(parse_recorded_value(&v).is_err());
+    }
+
+    #[test]
+    fn test_build_memory_spec_requires_match_pattern_len_equals_window() {
+        let m = YamlMemory {
+            window: 2,
+            trigger: "rule_outcome".to_string(),
+            neighbor_direction: None,
+            match_pattern: vec![serde_yaml::Value::String("applied".to_string())],
+        };
+        assert!(build_memory_spec(m).is_err(), "window=2 but match_pattern has 1 entry -- must be rejected");
+    }
+
+    #[test]
+    fn test_build_memory_spec_neighbor_type_requires_direction() {
+        let m = YamlMemory {
+            window: 1,
+            trigger: "neighbor_type".to_string(),
+            neighbor_direction: None,
+            match_pattern: vec![serde_yaml::Value::Number(serde_yaml::Number::from(1))],
+        };
+        assert!(build_memory_spec(m).is_err(), "neighbor_type trigger without neighbor_direction must be rejected");
+    }
+
+    #[test]
+    fn test_build_memory_spec_rule_outcome_rejects_neighbor_direction() {
+        let m = YamlMemory {
+            window: 1,
+            trigger: "rule_outcome".to_string(),
+            neighbor_direction: Some("east".to_string()),
+            match_pattern: vec![serde_yaml::Value::String("missed".to_string())],
+        };
+        assert!(build_memory_spec(m).is_err(), "rule_outcome trigger must not accept a neighbor_direction");
+    }
+
+    #[test]
+    fn test_build_memory_spec_valid_neighbor_type() {
+        let m = YamlMemory {
+            window: 2,
+            trigger: "neighbor_type".to_string(),
+            neighbor_direction: Some("east".to_string()),
+            match_pattern: vec![
+                serde_yaml::Value::Number(serde_yaml::Number::from(3)),
+                serde_yaml::Value::Number(serde_yaml::Number::from(4)),
+            ],
+        };
+        let spec = build_memory_spec(m).unwrap();
+        assert_eq!(spec.window, 2);
+        assert_eq!(spec.record_trigger, RecordTrigger::NeighborType(Direction::Right));
+        assert_eq!(spec.match_pattern, vec![RecordedValue::Type(CellType::new(3)), RecordedValue::Type(CellType::new(4))]);
+    }
+
+    #[test]
+    fn test_build_memory_spec_valid_rule_outcome() {
+        let m = YamlMemory {
+            window: 2,
+            trigger: "rule_outcome".to_string(),
+            neighbor_direction: None,
+            match_pattern: vec![
+                serde_yaml::Value::String("missed".to_string()),
+                serde_yaml::Value::String("applied".to_string()),
+            ],
+        };
+        let spec = build_memory_spec(m).unwrap();
+        assert_eq!(spec.match_pattern, vec![RecordedValue::Missed, RecordedValue::Applied]);
+    }
+
+    /// Регрессионный тест на реальный, найденный при аудите валидационный
+    /// пробел: `neighbor_type` кладёт в буфер ТОЛЬКО `RecordedValue::Type(_)`
+    /// (см. `engine/mod.rs`'s push-логику), никогда `Applied`/`Missed` — так
+    /// что `match_pattern`, состоящий из "applied"/"missed" строк при
+    /// `trigger: neighbor_type`, СТРУКТУРНО никогда не сможет совпасть
+    /// (`PartialEq` на разных вариантах enum всегда `false`) — гейт был бы
+    /// НАВСЕГДА закрыт, без единой ошибки ни при загрузке, ни в рантайме.
+    /// Раньше `build_memory_spec` этого не проверяла вообще.
+    #[test]
+    fn test_build_memory_spec_rejects_rule_outcome_shaped_pattern_with_neighbor_type_trigger() {
+        let m = YamlMemory {
+            window: 2,
+            trigger: "neighbor_type".to_string(),
+            neighbor_direction: Some("east".to_string()),
+            match_pattern: vec![
+                serde_yaml::Value::String("applied".to_string()),
+                serde_yaml::Value::String("missed".to_string()),
+            ],
+        };
+        assert!(
+            build_memory_spec(m).is_err(),
+            "neighbor_type trigger with an applied/missed-shaped match_pattern must be rejected -- the gate could never open"
+        );
+    }
+
+    /// Симметричный случай: `rule_outcome` с числовым (тип-клетки-shaped)
+    /// `match_pattern` — тот же класс структурно-мёртвого гейта, зеркально.
+    #[test]
+    fn test_build_memory_spec_rejects_neighbor_type_shaped_pattern_with_rule_outcome_trigger() {
+        let m = YamlMemory {
+            window: 1,
+            trigger: "rule_outcome".to_string(),
+            neighbor_direction: None,
+            match_pattern: vec![serde_yaml::Value::Number(serde_yaml::Number::from(3))],
+        };
+        assert!(
+            build_memory_spec(m).is_err(),
+            "rule_outcome trigger with a cell-type-shaped match_pattern must be rejected -- the gate could never open"
+        );
     }
 }

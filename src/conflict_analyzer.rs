@@ -319,6 +319,22 @@ pub struct RuleData {
     /// применяется атомарно после арбитража — см. `apply_matches`), конфликт
     /// возможен только когда ДВЕ записи целятся в одну клетку.
     pub write_cells: Vec<(i32, i32)>,
+    /// Только для `Rule::feedback`: РЕАЛЬНЫЕ (не union) ячейки записи, если
+    /// бы сдвиг применялся в `FeedbackSpec::new_direction`, а не в
+    /// декларированном направлении — используется `arbitrator::get_match_affected_cells`
+    /// для ТОЧНОГО (не консервативного) набора ячеек КОНКРЕТНОГО матча,
+    /// когда счётчик обратной связи для него уже защёлкнут. `write_cells`
+    /// выше — union ОБОИХ направлений, годится только для статического
+    /// графа конфликтов (см. doc-комментарий `compute_rule_data`), не для
+    /// точного per-tick арбитража — ровно та же причина, что у `cam` и
+    /// `arbitrator::CamPositions`. Пусто, если у правила нет `feedback`.
+    pub feedback_alt_write_cells: Vec<(i32, i32)>,
+    /// Только для `Rule::feedback`: РЕАЛЬНЫЕ (не union) ячейки записи для
+    /// ДЕКЛАРИРОВАННОГО (не альтернативного) направления — нужны отдельно
+    /// от `write_cells` (тот уже union, непригоден для точного per-tick
+    /// пути) для случая "счётчик обратной связи ЕЩЁ не защёлкнут". Пусто,
+    /// если у правила нет `feedback`.
+    pub feedback_normal_write_cells: Vec<(i32, i32)>,
 }
 
 /// Вычислить все данные для правила.
@@ -334,11 +350,33 @@ pub struct RuleData {
 /// на КОНКРЕТНОМ тике вычисляет `arbitrator::get_match_affected_cells`
 /// отдельно, из найденной позиции, не из этого `RuleData` — см. её
 /// doc-комментарий и `types::CamSearch`.
+///
+/// `cam` + `recursion` вместе (см. `apply_cam_buffered`'s каскад и Corollary
+/// D в `paper/paper4.md` §8): реализованная семантика — цепочка НЕЗАВИСИМЫХ
+/// магнитов вдоль `recursion.direction`, каждый со своим собственным
+/// диском поиска радиуса `cam.radius`, центр k-го диска — на ФИКСИРОВАННОМ
+/// (статически известном) смещении `k × direction` от исходного матча, для
+/// `k = 0..=max_depth`. Хотя КАКАЯ ИМЕННО клетка внутри k-го диска будет
+/// найдена — известно только в рантайме (как и для обычного CAM), ЦЕНТР и
+/// РАДИУС каждого диска — чисто статические величины (никакой рантайм-
+/// информации не требуется для их вычисления), поэтому union этих дисков —
+/// корректная консервативная граница — ровно тот же приём, что и в ветке
+/// `rule.recursion` ниже (union pattern/write cells по k), только
+/// "pattern/write cells" здесь — "весь диск", а не фиксированные офсеты.
 pub fn compute_rule_data(rule: &Rule) -> RuleData {
     if let Some(cam) = rule.cam {
-        let disc = cam_disc_cells(cam.radius);
-        let bbox = compute_bbox(&disc);
         let pattern_cells: Vec<(i32, i32)> = effective_pattern(rule).iter().map(|&(dx, dy, _)| (dx, dy)).collect();
+        let base_disc = cam_disc_cells(cam.radius);
+        let mut disc = base_disc.clone();
+        if let Some(spec) = rule.recursion {
+            let (ddx, ddy) = direction_unit_delta(spec.direction);
+            for k in 1..=spec.max_depth as i32 {
+                disc.extend(base_disc.iter().map(|&(dx, dy)| (dx + ddx * k, dy + ddy * k)));
+            }
+            disc.sort();
+            disc.dedup();
+        }
+        let bbox = compute_bbox(&disc);
         return RuleData {
             affected_cells: disc.clone(),
             bbox,
@@ -346,15 +384,66 @@ pub fn compute_rule_data(rule: &Rule) -> RuleData {
             total_shift: (0, 0),
             shift_targets: Vec::new(),
             write_cells: disc,
+            feedback_alt_write_cells: Vec::new(),
+            feedback_normal_write_cells: Vec::new(),
         };
     }
 
-    let affected_cells = compute_affected_cells(rule);
-    let bbox = compute_bbox(&affected_cells);
+    let mut affected_cells = compute_affected_cells(rule);
     let pattern_cells: Vec<(i32, i32)> = effective_pattern(rule).iter().map(|&(dx, dy, _)| (dx, dy)).collect();
     let shift_targets = compute_shift_targets(rule);
     let total_shift = shift_targets.iter().fold((0, 0), |(ax, ay), &(dx, dy)| (ax + dx, ay + dy));
-    let write_cells = compute_write_cells(rule, &shift_targets);
+    let mut write_cells = compute_write_cells(rule, &shift_targets);
+
+    // `Rule::feedback` (см. Лемму 4, `paper/paper4.md` §8, Corollary C):
+    // реальное направление сдвига на apply-время — одно из ДВУХ вариантов
+    // (декларированное или `new_direction`), выбираемое динамически
+    // (`Engine::feedback_counters`). Для СТАТИЧЕСКОГО графа конфликтов
+    // нужна консервативная граница — union affected/write cells ОБОИХ
+    // вариантов, а не только декларированного. `feedback_normal_write_cells`/
+    // `feedback_alt_write_cells` хранят РЕАЛЬНЫЕ (не union) ячейки каждого
+    // варианта отдельно — для точного per-tick арбитража конкретного матча
+    // (см. их doc-комментарий в `RuleData`), тот же приём, что
+    // `cam_positions` для CAM.
+    let mut feedback_alt_write_cells = Vec::new();
+    let mut feedback_normal_write_cells = Vec::new();
+    if rule.feedback.is_some() {
+        feedback_normal_write_cells = write_cells.clone();
+        let alt = feedback_alternate_rule(rule);
+        let alt_shift_targets = compute_shift_targets(&alt);
+        feedback_alt_write_cells = compute_write_cells(&alt, &alt_shift_targets);
+        affected_cells.extend(compute_affected_cells(&alt));
+        write_cells.extend(feedback_alt_write_cells.iter().copied());
+        affected_cells.sort();
+        affected_cells.dedup();
+        write_cells.sort();
+        write_cells.dedup();
+    }
+
+    // `Rule::recursion` (Лемма 4, `paper/paper4.md` §8, Corollary B): реальная
+    // глубина каскада на apply-время — от 0 до `max_depth`, выбирается
+    // динамически (сколько уровней подряд паттерн реально совпал). Для
+    // СТАТИЧЕСКОГО графа конфликтов нужна консервативная граница — union
+    // pattern/write cells для ВСЕХ k=0..=max_depth вдоль `direction`, а не
+    // только k=0 (правило само по себе, без каскада). Взаимоисключимо с
+    // `feedback` по конструкции — recursion требует ПУСТЫЕ shifts, feedback
+    // требует РОВНО один, так что обе ветви никогда не активны одновременно
+    // для одного правила.
+    if let Some(spec) = rule.recursion {
+        let (ddx, ddy) = direction_unit_delta(spec.direction);
+        let base_pattern = pattern_cells.clone();
+        let base_write = write_cells.clone();
+        for k in 1..=spec.max_depth as i32 {
+            affected_cells.extend(base_pattern.iter().map(|&(dx, dy)| (dx + ddx * k, dy + ddy * k)));
+            write_cells.extend(base_write.iter().map(|&(dx, dy)| (dx + ddx * k, dy + ddy * k)));
+        }
+        affected_cells.sort();
+        affected_cells.dedup();
+        write_cells.sort();
+        write_cells.dedup();
+    }
+
+    let bbox = compute_bbox(&affected_cells);
 
     RuleData {
         affected_cells,
@@ -363,7 +452,25 @@ pub fn compute_rule_data(rule: &Rule) -> RuleData {
         total_shift,
         shift_targets,
         write_cells,
+        feedback_alt_write_cells,
+        feedback_normal_write_cells,
     }
+}
+
+/// Копия правила с ЕДИНСТВЕННЫМ (гарантировано валидацией в
+/// `config::load_config`) сдвигом, направление которого заменено на
+/// `FeedbackSpec::new_direction` — используется ТОЛЬКО для расчёта
+/// консервативной union-границы выше, никогда не попадает в `rule_index`.
+fn feedback_alternate_rule(rule: &Rule) -> Rule {
+    let mut alt = rule.clone();
+    if let Some(spec) = rule.feedback {
+        for group in &mut alt.shifts {
+            for shift in group {
+                shift.direction = spec.new_direction;
+            }
+        }
+    }
+    alt
 }
 
 /// Все (dx, dy) с Chebyshev-расстоянием ≤ radius от (0,0) — консервативная
@@ -420,7 +527,15 @@ fn compute_write_cells(rule: &Rule, shift_targets: &[(i32, i32)]) -> Vec<(i32, i
             cells.push((dx, dy));
         }
     } else {
-        cells.push((0, 0)); // очищается apply_shift_buffered при каждом сдвиге
+        // Безусловно, даже если у правила ЕСТЬ сдвиг с `keep_source: true`
+        // ("излучение") и источник на самом деле не очищается — это остаётся
+        // ЗДРАВОЙ (over-approximation, не under) консервативной границей для
+        // статического графа конфликтов, просто иногда чуть шире
+        // необходимого. Тот же приём, что и у CAM/`feedback`/`recursion`:
+        // точная (не union) картина — забота `applicator.rs`/арбитража на
+        // конкретном тике, не построения графа один раз (см.
+        // `types::ShiftSpec::keep_source`'s doc-комментарий).
+        cells.push((0, 0));
         for &(sdx, sdy) in shift_targets {
             cells.push((sdx, sdy));
             for &(dx, dy, _value) in &rule.changes {
@@ -439,7 +554,11 @@ fn compute_write_cells(rule: &Rule, shift_targets: &[(i32, i32)]) -> Vec<(i32, i
 ///
 /// Affected cells включают:
 /// 1. Ячейки паттерна (pattern) — читаются при сопоставлении.
-/// 2. Начальная позиция головки (0,0) — очищается.
+/// 2. Начальная позиция головки (0,0) — включена как консервативная
+///    граница для ЛЮБОГО сдвига, даже если у конкретного сдвига
+///    `ShiftSpec::keep_source: true` и источник реально не очищается —
+///    over-approximation, безопасная для статического графа (см. её
+///    doc-комментарий).
 /// 3. Целевая клетка КАЖДОГО сдвига — записывается.
 /// 4. Ячейки изменений (changes), по одному разу ОТНОСИТЕЛЬНО КАЖДОЙ цели
 ///    сдвига — записываются. Если сдвигов нет — относительно исходной
@@ -489,6 +608,19 @@ fn shift_delta(shift: &crate::types::ShiftSpec) -> (i32, i32) {
         Direction::Down => (0, shift.steps as i32),
         Direction::Left => (-(shift.steps as i32), 0),
         Direction::Right => (shift.steps as i32, 0),
+    }
+}
+
+/// (dx, dy) для ОДНОГО шага в данном направлении — та же таблица, что и
+/// `shift_delta` со `steps=1`, но без привязки к `ShiftSpec` (используется
+/// для `Rule::feedback`/`Rule::recursion`, у которых направление — само по
+/// себе поле, не часть сдвига).
+fn direction_unit_delta(direction: Direction) -> (i32, i32) {
+    match direction {
+        Direction::Up => (0, -1),
+        Direction::Down => (0, 1),
+        Direction::Left => (-1, 0),
+        Direction::Right => (1, 0),
     }
 }
 

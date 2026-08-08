@@ -19,7 +19,7 @@ fn mixed_group_rule_index() -> HashMap<CellType, Vec<Rule>> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     };
     let wildcard = Rule {
         id: vec![CellType(10)],
@@ -32,7 +32,7 @@ fn mixed_group_rule_index() -> HashMap<CellType, Vec<Rule>> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     };
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
     idx.insert(CellType(10), vec![full, wildcard]);

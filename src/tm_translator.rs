@@ -106,7 +106,7 @@ pub fn translate_tm(
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         });
     }
 

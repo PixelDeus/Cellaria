@@ -103,6 +103,11 @@ struct GpuRule {
     shift_dy0: i32,
     shift_dx1: i32,
     shift_dy1: i32,
+    // `ShiftSpec::broadcast` соответствующего сдвига (1/0) — см.
+    // `rule_table::MAX_BROADCAST_REACH`'s doc-комментарий. Осмыслено только
+    // при `shift_count >= 1`/`>= 2` соответственно.
+    shift_broadcast0: u32,
+    shift_broadcast1: u32,
     change_count: u32,
     change_dx0: i32,
     change_dy0: i32,
@@ -122,6 +127,36 @@ struct GpuRule {
     // См. `rule_table::GpuRule::tie_break` — прямое значение, вращение
     // делается при записи в GpuMatch (см. TIE_BREAK_MODULUS ниже).
     tie_break: u32,
+    // 0, если правило НЕ использует recursion — см.
+    // `rule_table::MAX_RECURSION_DEPTH`'s doc-комментарий.
+    recursion_max_depth: u32,
+    recursion_dx: i32,
+    recursion_dy: i32,
+    // См. `rule_table::GpuRule::has_starvation`'s doc-комментарий про то,
+    // почему это ОТДЕЛЬНЫЙ флаг, а не "0 в starvation_threshold = выключено"
+    // (порог 0 — реальное, отличное от "не установлено" значение).
+    has_starvation: u32,
+    starvation_threshold: u32,
+    // См. `rule_table::GpuRule::has_feedback`'s doc-комментарий.
+    has_feedback: u32,
+    feedback_timeout: u32,
+    feedback_alt_dx: i32,
+    feedback_alt_dy: i32,
+    // См. `rule_table::GpuRule::has_memory`'s doc-комментарий.
+    has_memory: u32,
+    memory_window: u32,
+    memory_trigger: u32, // 0 = NeighborType, 1 = RuleOutcome
+    memory_dx: i32,
+    memory_dy: i32,
+    memory_has_shift: u32,
+    // Плоские поля вместо массива (см. `rule_table::GpuRule`'s
+    // doc-комментарий про ограничение naga "may only be indexed by a
+    // constant" для значений, загруженных динамическим индексом) —
+    // значимы только первые `memory_window` из них.
+    memory_pattern0: u32,
+    memory_pattern1: u32,
+    memory_pattern2: u32,
+    memory_pattern3: u32,
 };
 
 // ДОЛЖНО совпадать с CPU `arbitrator::TIE_BREAK_MODULUS` — иначе побитовое
@@ -142,8 +177,18 @@ struct Offset {
     dy: i32,
 };
 
-// MAX_WRITE_CELLS в rule_table.rs = 1 + MAX_SHIFTS*(1+MAX_CHANGES) = 1+2*5 = 11.
-const MAX_WRITE_CELLS: u32 = 11u;
+// MAX_WRITE_CELLS в rule_table.rs = max(путь сдвигов = 1 + MAX_SHIFTS*(MAX_BROADCAST_REACH+MAX_CHANGES) = 17,
+// путь recursion = (MAX_RECURSION_DEPTH+1)*MAX_CHANGES = 5*4 = 20) = 20.
+// Обычный (не-broadcast) сдвиг пишет только 1 ячейку (конечную точку);
+// broadcast — до MAX_BROADCAST_REACH ячеек пути (см. её doc-комментарий про
+// то, почему это отдельный, более узкий потолок, чем MAX_SHIFT_REACH обычных
+// сдвигов); recursion (взаимоисключим со сдвигами) — до MAX_RECURSION_DEPTH+1
+// уровней, каждый до MAX_CHANGES ячеек (см. её doc-комментарий) — этот
+// массив общий для ВСЕХ конфигов сразу, шейдер компилируется один раз.
+const MAX_WRITE_CELLS: u32 = 20u;
+// ДОЛЖНО совпадать с CPU `rule_table::MAX_MEMORY_WINDOW` — потолок
+// `MemorySpec::window`, размер per-match среза в `memory_buffers` ниже.
+const MAX_MEMORY_WINDOW: u32 = 4u;
 // `params.max_matches_per_cell` (не константа!) — см. её doc-комментарий в
 // struct Params выше; статический потолок — rule_table::MAX_MATCHES_PER_CELL,
 // используется только для валидации на CPU-стороне, сюда не попадает.
@@ -177,6 +222,31 @@ struct GpuMatch {
     cell_count: u32,
     cells: array<u32, MAX_WRITE_CELLS>,
     values: array<u32, MAX_WRITE_CELLS>,
+    // 1, если правило ДЕЙСТВИТЕЛЬНО совпало (прошло все проверки pattern/
+    // min_age/gate) на этом тике, 0 — если отвергнуто ДО этой точки (тип не
+    // тот, паттерн не совпал, и т.д.). НЕ то же самое, что `cell_count > 0`
+    // (совпавшее правило может законно писать 0 ячеек — например, cam без
+    // цели в радиусе — и это НЕ равнозначно "не совпало" для целей
+    // `starvation_after`: правило детектировалось, просто нечего было
+    // писать). Используется ТОЛЬКО `update_starvation_pass` ниже, чтобы
+    // отличить "не участвовало в этом тике вовсе" (сброс счётчика — тот же
+    // класс осиротевшей записи, что был найден и исправлен для
+    // CPU-side `starvation_counters`, см. `engine/mod.rs`) от "участвовало,
+    // но проиграло" (рост счётчика).
+    //
+    // Для `Rule::memory`: `matched` означает "гейт открыт" (финальный
+    // статус кандидата — гейт-закрытые матчи трактуются как НЕ совпавшие
+    // для арбитража/starvation/feedback, см. `structural` ниже про их
+    // отличие).
+    matched: u32,
+    // 1, если правило СТРУКТУРНО совпало (pattern/min_age/active_only все
+    // прошли), НЕЗАВИСИМО от гейта `Rule::memory`. Нужен ТОЛЬКО для
+    // `update_memory_push_pass`/`update_memory_relocate_pass` ниже — буфер
+    // обязан продолжать наблюдать, даже когда гейт закрыт (зеркалит CPU
+    // `memory_targets`, взятый из ПОЛНОГО, ещё не гейтованного списка
+    // матчей, см. `engine/mod.rs`'s doc-комментарий). Для правил без
+    // `memory` это поле ни на что не влияет.
+    structural: u32,
 };
 
 struct Counters {
@@ -195,6 +265,44 @@ struct Counters {
 @group(0) @binding(9) var<storage, read_write> claims: array<atomic<u32>>;
 @group(0) @binding(10) var<storage, read_write> locked: array<atomic<u32>>;
 @group(0) @binding(11) var<storage, read_write> counters: Counters;
+// Persistent МЕЖДУ ТИКАМИ (в отличие от ВСЕХ буферов выше, которые
+// `clear_locked`/`clear_claims`/detect_pass пересоздают/перезаписывают
+// каждый тик заново) — единственная причина, по которой `starvation_after`
+// вообще портируем на GPU (см. `rule_table::GpuUnsupportedReason`'s
+// doc-комментарий про то, почему старое обоснование отказа было неверным).
+// Тот же размер/индексация, что и `matches`/`match_state`
+// (`width*height*max_matches_per_cell`) — АЛЛОЦИРУЕТСЯ ОДИН РАЗ в
+// `GpuEngine::init`, никогда не очищается между тиками, обновляется ТОЛЬКО
+// `update_starvation_pass` (после того, как финальный ACCEPTED/REJECTED
+// каждого матча уже известен — GPU-раундами ИЛИ CPU-fallback'ом, см. её
+// doc-комментарий).
+@group(0) @binding(12) var<storage, read_write> starvation_counters: array<atomic<u32>>;
+// Persistent, та же индексация, что и `starvation_counters` выше — ЗАЩЁЛКА
+// (см. `rule_table::GpuRule::has_feedback`'s doc-комментарий и CPU
+// `Engine::feedback_counters`): растёт на КАЖДЫЙ тик, где матч
+// детектируется (независимо от исхода арбитража, в отличие от
+// `starvation_counters`), никогда не сбрасывается победой — только
+// осиротевшей записью (`update_feedback_pass`) или ПЕРЕНОСОМ на новую
+// позицию, когда матч физически двигается (см. `apply_pass`'s релокацию
+// ниже) — маркер `feedback` двигается сдвигом каждый тик, а не
+// переоценивает одну и ту же клетку, как `starvation_after`.
+@group(0) @binding(13) var<storage, read_write> feedback_counters: array<atomic<u32>>;
+// Persistent — `Rule::memory`'s FIFO-буфер (см. `rule_table::GpuRule::has_memory`'s
+// doc-комментарий и CPU `Engine::memory_buffers`). Размер `n_matches *
+// MAX_MEMORY_WINDOW` — за матчем `m` закреплён СРЕЗ `[m*MAX_MEMORY_WINDOW ..
+// (m+1)*MAX_MEMORY_WINDOW)`, из которого реально используются только первые
+// `rules[rule_idx].memory_window` слотов. Индексация всегда ОДНИМ плоским
+// индексом (`m * MAX_MEMORY_WINDOW + i`) — top-level storage-массив, НЕ
+// поле-массив внутри значения, загруженного динамическим индексом (см.
+// `rule_table::GpuRule`'s doc-комментарий про ограничение naga), так что
+// динамическое `i` здесь абсолютно безопасно.
+@group(0) @binding(14) var<storage, read_write> memory_buffers: array<atomic<u32>>;
+// Persistent, индексация как `starvation_counters`/`feedback_counters`
+// (один слот на матч) — число РЕАЛЬНО заполненных элементов
+// `memory_buffers[m]`'s среза (0..=`memory_window`) — отличает "буфер ещё
+// не полон" (гейт закрыт по построению) от "полон, но значения не
+// совпадают" (гейт закрыт по содержимому).
+@group(0) @binding(15) var<storage, read_write> memory_len: array<atomic<u32>>;
 
 fn idx(x: u32, y: u32) -> u32 {
     return y * params.width + x;
@@ -540,6 +648,89 @@ fn push_write_cell(m: u32, n: u32, x: i32, y: i32, value: u32) -> u32 {
     return n + 1u;
 }
 
+// ============================================================================
+// `Rule::recursion` — каскад НЕЗАВИСИМЫХ (не-cam) уровней ВНУТРИ ОДНОГО
+// потока (см. `rule_table::MAX_RECURSION_DEPTH`'s doc-комментарий про то,
+// почему это чисто локальное вычисление, безопасное на GPU, в отличие от
+// `feedback`/`memory`/`starvation_after`). Каждый уровень `k=1..=max_depth`
+// заново проверяет ТОТ ЖЕ pattern, сдвинутый на `k×direction`, читая уже
+// НАКОПЛЕННЫЕ ЭТИМ ЖЕ матчем ячейки записи (`matches[m].cells[0..n]`,
+// `matches[m].values[0..n]` — уже единственный источник истины для "что
+// этот матч уже написал", ничего ДОПОЛНИТЕЛЬНОГО заводить не нужно) —
+// зеркалит CPU `applicator::read_cell_effective`/`read_age_effective`
+// 1-в-1, только "write_buffer" здесь — это уже посчитанный префикс
+// `cells[0..n]` ТЕКУЩЕГО матча, а не общий per-тик буфер (которого у GPU
+// нет и не может быть без межпоточной синхронизации — см. doc-комментарий
+// модуля про Simple/Arbitrated пайплайны).
+// ============================================================================
+
+// Значение клетки (x,y), учитывая уже накопленные ЭТИМ матчем записи
+// `cells[0..n]`/`values[0..n]` — зеркалит `read_cell_effective`.
+fn read_cell_effective_local(m: u32, n: u32, x: i32, y: i32) -> u32 {
+    if (x < 0 || y < 0) {
+        return params.default_cell_type;
+    }
+    let key = padded_idx(x, y);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        if (matches[m].cells[i] == key) {
+            return matches[m].values[i];
+        }
+    }
+    if (u32(x) >= params.width || u32(y) >= params.height) {
+        return params.default_cell_type;
+    }
+    return current[idx(u32(x), u32(y))].value;
+}
+
+// Эффективный возраст клетки (x,y) — зеркалит `read_age_effective`. Клетка,
+// уже записанная ЭТИМ каскадом (найдена в `cells[0..n]`), имеет эффективный
+// `born_at == params.generation` по построению (см. `apply_pass`'s `out.born_at
+// = params.generation + 1u` — REAL born_at материализуется только там, но
+// СЕМАНТИЧЕСКИ, для целей "сколько тиков клетка стабильна", "записана в этом
+// же каскаде этого же тика" ⟺ возраст 0, ровно как у CPU `write_buffer`).
+fn read_age_effective_local(m: u32, n: u32, x: i32, y: i32) -> u32 {
+    if (x < 0 || y < 0) {
+        return 0u;
+    }
+    let key = padded_idx(x, y);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        if (matches[m].cells[i] == key) {
+            return 0u;
+        }
+    }
+    if (u32(x) >= params.width || u32(y) >= params.height) {
+        return 0u;
+    }
+    let cell = current[idx(u32(x), u32(y))];
+    if (cell.value == params.default_cell_type) {
+        return 0u;
+    }
+    return params.generation - cell.born_at;
+}
+
+// Проверить pattern правила в позиции (ox,oy), читая ЭФФЕКТИВНОЕ (с учётом
+// уже накопленных ЭТИМ каскадом записей `cells[0..n]`) состояние, включая
+// `min_age` гейт на самой (ox,oy) — зеркалит `pattern_matches_effective`
+// 1-в-1 (та же роль (ox,oy) как единый "якорь" для min_age, что и (cx,cy)
+// у обычного матчера, см. её doc-комментарий).
+fn pattern_matches_effective_local(m: u32, n: u32, rule_idx: u32, ox: i32, oy: i32) -> bool {
+    let min_age = rules[rule_idx].min_age;
+    if (min_age > 0u && read_age_effective_local(m, n, ox, oy) < min_age) {
+        return false;
+    }
+    let pattern_start = rules[rule_idx].pattern_start;
+    let pattern_len = rules[rule_idx].pattern_len;
+    for (var p: u32 = 0u; p < pattern_len; p = p + 1u) {
+        let off = pattern_offsets[pattern_start + p];
+        let nx = ox + off.dx;
+        let ny = oy + off.dy;
+        if (read_cell_effective_local(m, n, nx, ny) != off.expected) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Ближайшая клетка типа `target_ct` в Chebyshev-радиусе `radius` вокруг (cx,cy)
 // — зеркалит CPU `matcher::search_nearest` 1-в-1, включая тай-брейк
 // (минимальное расстояние, при равенстве — лексикографически меньшая
@@ -601,6 +792,14 @@ fn detect_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let me = current[cell_idx];
     matches[m].cell_count = 0u;
+    matches[m].matched = 0u;
+    // Инициализация здесь ОБЯЗАТЕЛЬНА (не только у `matched` выше) — любой
+    // ранний `return` ДО строки `matches[m].structural = 1u;` ниже (тип не
+    // тот, паттерн не совпал, min_age и т.д.) обязан оставить `structural`
+    // равным 0 на ЭТОМ тике, иначе `update_memory_push_pass` читал бы
+    // УСТАРЕВШЕЕ значение с предыдущего тика (буфер продолжал бы расти,
+    // хотя структурного совпадения на самом деле уже нет).
+    matches[m].structural = 0u;
 
     if (me.value >= 256u) {
         atomicStore(&match_state[m], 2u); // REJECTED
@@ -631,6 +830,47 @@ fn detect_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    // С этой точки правило СТРУКТУРНО совпало (тип/min_age/active_only/
+    // pattern все прошли) — независимо от того, найдётся ли реально что
+    // записать (cam без цели в радиусе, например). См. `GpuMatch::matched`'s
+    // doc-комментарий про то, почему это НЕ то же самое, что `cell_count > 0`.
+    matches[m].matched = 1u;
+    matches[m].structural = 1u;
+
+    // `Rule::memory` (см. `rule_table::GpuRule::has_memory`'s doc-комментарий
+    // и CPU `engine/mod.rs`'s гейт-фильтр): ЧИСТО runtime-фильтр кандидатов
+    // ДО арбитража — если гейт закрыт, этот матч трактуется РОВНО как если
+    // бы паттерн не совпал вовсе (не участвует в arbитраже/starvation/
+    // feedback), но `structural` ОСТАЁТСЯ 1u — буфер обязан продолжать
+    // наблюдать (см. `update_memory_push_pass` ниже), даже пока гейт
+    // закрыт, иначе искомая последовательность никогда бы не накопилась.
+    // Гарантированно исключает CAM (`MemoryCamUnsupported` в
+    // `rule_table.rs`), так что этот блок безопасно стоит ДО CAM-ветки —
+    // ни один CAM-матч сюда никогда не попадёт.
+    if (rules[rule_idx].has_memory == 1u) {
+        let win = rules[rule_idx].memory_window;
+        var gate_open = atomicLoad(&memory_len[m]) == win;
+        if (gate_open && win >= 1u) { gate_open = atomicLoad(&memory_buffers[m * MAX_MEMORY_WINDOW + 0u]) == rules[rule_idx].memory_pattern0; }
+        if (gate_open && win >= 2u) { gate_open = atomicLoad(&memory_buffers[m * MAX_MEMORY_WINDOW + 1u]) == rules[rule_idx].memory_pattern1; }
+        if (gate_open && win >= 3u) { gate_open = atomicLoad(&memory_buffers[m * MAX_MEMORY_WINDOW + 2u]) == rules[rule_idx].memory_pattern2; }
+        if (gate_open && win >= 4u) { gate_open = atomicLoad(&memory_buffers[m * MAX_MEMORY_WINDOW + 3u]) == rules[rule_idx].memory_pattern3; }
+        if (!gate_open) {
+            matches[m].matched = 0u;
+            atomicStore(&match_state[m], 2u); // REJECTED — как если бы паттерн не совпал
+            return;
+        }
+    }
+
+    // `Rule::starvation_after` (см. `rule_table::GpuRule::has_starvation`'s
+    // doc-комментарий): эффективный priority — из persistent-счётчика ДО
+    // этого тика (обновляется `update_starvation_pass` ПОСЛЕ арбитража/
+    // гибридного добора этого же тика, см. её doc-комментарий) — та же
+    // семантика, что и CPU `arbitrator::resolve_sort_fields`.
+    var effective_priority = rules[rule_idx].priority;
+    if (rules[rule_idx].has_starvation == 1u && atomicLoad(&starvation_counters[m]) >= rules[rule_idx].starvation_threshold) {
+        effective_priority = 0xFFFFFFFFu;
+    }
+
     // CAM (`Rule::cam`, см. её doc-комментарий в `types.rs`) — отдельная
     // ветка, ДО обычной shift/changes-логики: у cam-правила `shift_count`/
     // `change_count` всегда 0 (см. валидацию в `config.rs`/`rule_table.rs`),
@@ -651,7 +891,7 @@ fn detect_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
         n = push_write_cell(m, n, i32(x), i32(y), rules[rule_idx].cam_target_type);
 
         matches[m].cell_count = n;
-        matches[m].priority = rules[rule_idx].priority;
+        matches[m].priority = effective_priority;
         matches[m].age = age;
         matches[m].tie_break = (rules[rule_idx].tie_break + params.generation) % TIE_BREAK_MODULUS;
         matches[m].id0 = rules[rule_idx].id_b0; matches[m].id1 = rules[rule_idx].id_b1;
@@ -682,6 +922,31 @@ fn detect_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (change_count >= 2u) { n = push_write_cell(m, n, i32(x) + rules[rule_idx].change_dx1, i32(y) + rules[rule_idx].change_dy1, rules[rule_idx].change_val1); }
         if (change_count >= 3u) { n = push_write_cell(m, n, i32(x) + rules[rule_idx].change_dx2, i32(y) + rules[rule_idx].change_dy2, rules[rule_idx].change_val2); }
         if (change_count >= 4u) { n = push_write_cell(m, n, i32(x) + rules[rule_idx].change_dx3, i32(y) + rules[rule_idx].change_dy3, rules[rule_idx].change_val3); }
+
+        // `Rule::recursion` (взаимоисключим со сдвигами по валидации
+        // `config.rs`, значит `shift_count == 0u` здесь гарантирован для
+        // ЛЮБОГО recursion-правила) — см. блок функций выше и
+        // `applicator.rs`'s "Фаза 3" doc-комментарий, который этот цикл
+        // зеркалит 1-в-1: каждый уровень k=1..=max_depth заново проверяет
+        // pattern на (x,y)+k×direction, эффективно (с учётом уже
+        // накопленных этим же каскадом `cells[0..n]`), и останавливается на
+        // первом несовпадении.
+        let rmax = rules[rule_idx].recursion_max_depth;
+        if (rmax > 0u) {
+            let rdx = rules[rule_idx].recursion_dx;
+            let rdy = rules[rule_idx].recursion_dy;
+            for (var k: u32 = 1u; k <= rmax; k = k + 1u) {
+                let ox = i32(x) + rdx * i32(k);
+                let oy = i32(y) + rdy * i32(k);
+                if (!pattern_matches_effective_local(m, n, rule_idx, ox, oy)) {
+                    break;
+                }
+                if (change_count >= 1u) { n = push_write_cell(m, n, ox + rules[rule_idx].change_dx0, oy + rules[rule_idx].change_dy0, rules[rule_idx].change_val0); }
+                if (change_count >= 2u) { n = push_write_cell(m, n, ox + rules[rule_idx].change_dx1, oy + rules[rule_idx].change_dy1, rules[rule_idx].change_val1); }
+                if (change_count >= 3u) { n = push_write_cell(m, n, ox + rules[rule_idx].change_dx2, oy + rules[rule_idx].change_dy2, rules[rule_idx].change_val2); }
+                if (change_count >= 4u) { n = push_write_cell(m, n, ox + rules[rule_idx].change_dx3, oy + rules[rule_idx].change_dy3, rules[rule_idx].change_val3); }
+            }
+        }
     } else {
         // ДВЕ отдельные фазы, СНАЧАЛА все сдвиги целиком, ПОТОМ все changes
         // целиком (не по одному сдвигу за раз с его "собственными" changes
@@ -693,14 +958,85 @@ fn detect_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
         // цель сдвига2 могла оказаться ПОСЛЕ change'а сдвига1 на той же
         // ячейке и неверно победить его (найдено `tests/gpu_v2_correctness.rs`'s
         // property-тестом на правиле с 2 сдвигами, чьи changes пересекались).
-        let sx0 = i32(x) + rules[rule_idx].shift_dx0;
-        let sy0 = i32(y) + rules[rule_idx].shift_dy0;
+        // `Rule::feedback` (см. её doc-комментарий у `feedback_counters`
+        // binding'а выше и CPU `applicator::apply_rule_buffered`'s
+        // "Фаза 1"): если persistent-счётчик ДЛЯ ЭТОГО матча уже достиг
+        // `feedback_timeout`, реальный применённый сдвиг — `feedback_alt_dx/dy`
+        // (`new_direction`), а не декларированный `shift_dx0/dy0`.
+        // Гарантированно применимо только к ЭТОМУ (единственному, см.
+        // `TooManyShifts`-защиту в `rule_table.rs`) сдвигу — `shift_dx1/dy1`
+        // (второй сдвиг) сюда не относится, `feedback` его в принципе не
+        // может иметь.
+        //
+        // ВАЖНО (найдено адверсариальным тестом, не сразу очевидно):
+        // сравниваем с `counter + 1`, НЕ с сырым `atomicLoad`. На CPU
+        // (`applicator.rs:342-343`) защёлка инкрементируется в
+        // `run_tick_with_cache` ДО вызова apply (после арбитража, но перед
+        // применением сдвигов), так что `feedback_override` там читает УЖЕ
+        // учитывающее ТЕКУЩИЙ тик значение — детекция этого тика тоже
+        // засчитывается в проверку timeout. Здесь же `feedback_counters[m]`
+        // хранит значение с КОНЦА предыдущего тика (сама защёлка растёт
+        // позже, в `update_feedback_latch_pass`, уже ПОСЛЕ того, как этот
+        // сдвиг посчитан) — без `+1` решение отставало бы от CPU ровно на
+        // один тик (счётчик всегда "не досчитывает" текущую детекцию).
+        // Насыщение (не переполнение через край u32) — та же защита, что и
+        // у `saturating_add` на CPU.
+        var effective_shift_dx0 = rules[rule_idx].shift_dx0;
+        var effective_shift_dy0 = rules[rule_idx].shift_dy0;
+        if (rules[rule_idx].has_feedback == 1u) {
+            let fc = atomicLoad(&feedback_counters[m]);
+            let fc_this_tick = select(fc + 1u, 0xFFFFFFFFu, fc == 0xFFFFFFFFu);
+            if (fc_this_tick >= rules[rule_idx].feedback_timeout) {
+                effective_shift_dx0 = rules[rule_idx].feedback_alt_dx;
+                effective_shift_dy0 = rules[rule_idx].feedback_alt_dy;
+            }
+        }
+        let sx0 = i32(x) + effective_shift_dx0;
+        let sy0 = i32(y) + effective_shift_dy0;
         let sx1 = i32(x) + rules[rule_idx].shift_dx1;
         let sy1 = i32(y) + rules[rule_idx].shift_dy1;
 
         n = push_write_cell(m, n, i32(x), i32(y), params.default_cell_type);
-        if (shift_count >= 1u) { n = push_write_cell(m, n, sx0, sy0, me.value); }
-        if (shift_count >= 2u) { n = push_write_cell(m, n, sx1, sy1, me.value); }
+
+        // Путь сдвига: обычный сдвиг пишет РОВНО конечную точку (телепорт);
+        // broadcast (`ShiftSpec::broadcast`, см. её doc-комментарий в
+        // `types.rs` и `applicator::apply_shift_buffered`'s `for k in
+        // 1..=steps`) пишет head_cell в КАЖДУЮ клетку пути от source+1 до
+        // конечной точки включительно — путь монотонен (фиксированное
+        // направление = знак dx/dy, фиксированный шаг), поэтому `steps`/unit
+        // вектор восстанавливаются прямо из дельты сдвига, без отдельного
+        // поля. `changes` ниже по-прежнему применяются ТОЛЬКО относительно
+        // конечной точки (sx0,sy0)/(sx1,sy1) — зеркалит CPU, где
+        // `apply_changes_at` вызывается по `shift_targets` (финальным целям),
+        // не по промежуточным клеткам пути (см. `applicator::apply_rule_buffered`).
+        if (shift_count >= 1u) {
+            if (rules[rule_idx].shift_broadcast0 == 1u) {
+                let steps0 = max(abs(rules[rule_idx].shift_dx0), abs(rules[rule_idx].shift_dy0));
+                var ux0: i32 = 0;
+                if (rules[rule_idx].shift_dx0 > 0) { ux0 = 1; } else if (rules[rule_idx].shift_dx0 < 0) { ux0 = -1; }
+                var uy0: i32 = 0;
+                if (rules[rule_idx].shift_dy0 > 0) { uy0 = 1; } else if (rules[rule_idx].shift_dy0 < 0) { uy0 = -1; }
+                for (var k: i32 = 1; k <= steps0; k = k + 1) {
+                    n = push_write_cell(m, n, i32(x) + ux0 * k, i32(y) + uy0 * k, me.value);
+                }
+            } else {
+                n = push_write_cell(m, n, sx0, sy0, me.value);
+            }
+        }
+        if (shift_count >= 2u) {
+            if (rules[rule_idx].shift_broadcast1 == 1u) {
+                let steps1 = max(abs(rules[rule_idx].shift_dx1), abs(rules[rule_idx].shift_dy1));
+                var ux1: i32 = 0;
+                if (rules[rule_idx].shift_dx1 > 0) { ux1 = 1; } else if (rules[rule_idx].shift_dx1 < 0) { ux1 = -1; }
+                var uy1: i32 = 0;
+                if (rules[rule_idx].shift_dy1 > 0) { uy1 = 1; } else if (rules[rule_idx].shift_dy1 < 0) { uy1 = -1; }
+                for (var k: i32 = 1; k <= steps1; k = k + 1) {
+                    n = push_write_cell(m, n, i32(x) + ux1 * k, i32(y) + uy1 * k, me.value);
+                }
+            } else {
+                n = push_write_cell(m, n, sx1, sy1, me.value);
+            }
+        }
 
         if (shift_count >= 1u) {
             if (change_count >= 1u) { n = push_write_cell(m, n, sx0 + rules[rule_idx].change_dx0, sy0 + rules[rule_idx].change_dy0, rules[rule_idx].change_val0); }
@@ -717,7 +1053,7 @@ fn detect_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     matches[m].cell_count = n;
-    matches[m].priority = rules[rule_idx].priority;
+    matches[m].priority = effective_priority;
     matches[m].age = age;
     matches[m].tie_break = (rules[rule_idx].tie_break + params.generation) % TIE_BREAK_MODULUS;
     matches[m].id0 = rules[rule_idx].id_b0; matches[m].id1 = rules[rule_idx].id_b1;
@@ -906,4 +1242,305 @@ fn apply_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
     out.value = value;
     out.born_at = params.generation + 1u;
     next[i] = out;
+}
+
+// Обновить `starvation_counters` — ЕДИНСТВЕННЫЙ потребитель финального
+// `match_state` (ACCEPTED/REJECTED), поэтому дispatch'ится (см.
+// `GpuEngine::dispatch_tick`) ПОСЛЕ `apply_pass` И ПОСЛЕ (если понадобился)
+// `GpuEngine::cpu_fallback_resolve`, который теперь дописывает финальный
+// исход НЕсошедшихся за GPU-раунды матчей обратно в `match_state_buf` —
+// без этого матчи, доигранные на CPU, навсегда остались бы PENDING(0) с
+// точки зрения этого прохода. Зеркалит CPU-side обновление
+// `Engine::starvation_counters` в `run_tick_with_cache` (win → сброс,
+// loss → рост, "осиротела" → сброс — см. её doc-комментарий про
+// найденный и исправленный баг с незачищенными записями) 1-в-1, только
+// каждый (cell, rule-слот) — свой собственный, персистентный элемент
+// GPU-буфера вместо HashMap-записи.
+//
+// ВАЖНО (найдено при повторном аудите после добавления `memory`, не сразу
+// очевидно): ЗДЕСЬ ОБЯЗАНА проверяться `structural`, а НЕ `matched`, для
+// решения "осиротела ли запись". Для `Rule::memory`-having правил `matched`
+// означает "гейт открыт" — а гейт может быть ЗАКРЫТ на этом тике, при этом
+// правило ВСЁ ЕЩЁ структурно совпадает (просто временно исключено из
+// арбитража). CPU (`engine/mod.rs`) считает `starving_keys` ПОСЛЕ
+// гейт-фильтра — гейт-закрытый матч просто НЕ ПОПАДАЕТ в этот список, а
+// НЕ появляется там с намерением сбросить счётчик: `starvation_counters`
+// для этого ключа этим тиком вообще НЕ ТРОГАЕТСЯ (замораживается на своём
+// текущем значении), а НЕ обнуляется. `structural` — единственный флаг,
+// который для НЕ-memory правил ВСЕГДА равен `matched` (см.
+// `GpuMatch::structural`'s doc-комментарий), так что переход на него
+// НИКАК не меняет поведение для `starvation_after` без `memory` — только
+// корректно чинит комбинацию `starvation_after` + `memory`, где раньше
+// закрытие гейта ошибочно обнуляло накопленный счётчик, не давая правилу
+// когда-либо выиграть через голодание (см.
+// `test_gpu_v2_starvation_plus_memory_gate_freezes_counter_not_resets_matches_cpu`
+// в `tests/gpu_v2_correctness.rs`).
+@compute @workgroup_size(256, 1, 1)
+fn update_starvation_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let m = gid.x;
+    let total = params.width * params.height * params.max_matches_per_cell;
+    if (m >= total) { return; }
+
+    let cell_idx = m / params.max_matches_per_cell;
+    let slot_in_cell = m % params.max_matches_per_cell;
+    let me = current[cell_idx];
+    if (me.value >= 256u) { return; }
+    let slot = head_slots[me.value];
+    if (slot_in_cell >= slot.rules_count) { return; }
+    let rule_idx = slot.rules_start + slot_in_cell;
+    if (rules[rule_idx].has_starvation == 0u) { return; }
+
+    if (matches[m].structural == 0u) {
+        // Осиротевшая запись (см. doc-комментарий binding'а выше): матч не
+        // был кандидатом вовсе на этом тике (структурно не совпал) — сброс,
+        // не рост, та же причина, что и у CPU-side фикса.
+        atomicStore(&starvation_counters[m], 0u);
+        return;
+    }
+    if (matches[m].matched == 0u) {
+        // Структурно совпало, но `Rule::memory`'s гейт закрыт этим тиком —
+        // ЭТО НЕ то же самое, что осиротела: правило просто исключено из
+        // арбитража на ЭТОТ тик, но остаётся тем же матчем — CPU НЕ трогает
+        // счётчик в этом случае (см. doc-комментарий выше), значит и здесь
+        // счётчик должен остаться КАК ЕСТЬ (ни сброс, ни рост) — `return`
+        // ОБЯЗАТЕЛЕН, иначе управление проваливается в ветку ниже
+        // (`match_state[m]` в этом случае всегда REJECTED, форсированное
+        // гейтом, что без `return` ошибочно засчиталось бы как "проиграл"
+        // и НЕВЕРНО нарастило бы счётчик).
+        return;
+    }
+    if (atomicLoad(&match_state[m]) == 1u) { // ACCEPTED — выиграл
+        atomicStore(&starvation_counters[m], 0u);
+    } else {
+        // REJECTED (проиграл арбитраж, но БЫЛ кандидатом) — растим,
+        // с насыщением (та же `saturating_add`, что и на CPU).
+        let cur = atomicLoad(&starvation_counters[m]);
+        if (cur < 0xFFFFFFFFu) {
+            atomicStore(&starvation_counters[m], cur + 1u);
+        }
+    }
+}
+
+// `Rule::feedback` — ДВА раздельных прохода (не один, как у
+// `update_starvation_pass`), дispatch'ятся СТРОГО ПОСЛЕДОВАТЕЛЬНО (см.
+// `GpuEngine::dispatch_tick`): между ДВУМЯ `dispatch_workgroups` внутри
+// ОДНОГО compute pass'а WebGPU гарантирует видимость записей предыдущего
+// (та же гарантия, на которой держится весь раундовый claim/resolve —
+// см. doc-комментарий модуля `engine.rs`). Раздельность ОБЯЗАТЕЛЬНА, не
+// стилистический выбор: перенос счётчика (Фаза 2) пишет в СЛОТ ДРУГОЙ
+// клетки (`new_m`, новая позиция маркера), которая параллельно СВОИМ
+// СОБСТВЕННЫМ потоком (Фаза 1, обрабатывающая `new_m` как "клетку САМУ ПО
+// СЕБЕ", по pre-tick состоянию) почти наверняка пишет туда же (осиротевший
+// сброс на 0, поскольку pre-tick эта позиция ещё не была feedback-матчем)
+// — если бы обе фазы были ОДНИМ проходом, это была бы гонка (какой поток
+// пишет последним — не определено), тихо стирающая перенесённый счётчик.
+// Порядок Фаза1→Фаза2 гарантирует, что перенос (Фаза 2, работает с уже
+// АКТУАЛЬНЫМ после Фазы 1 значением слота-источника) всегда происходит
+// СТРОГО ПОСЛЕ осиротевшего сброса slot'а-назначения (Фаза 1), так что
+// финальная запись в `new_m` — всегда от Фазы 2, детерминированно.
+
+// Фаза 1: обычное обновление защёлки — растёт при обнаружении, сбрасывается
+// только при осиротении. НИКАКИХ чужих слотов не трогает.
+//
+// ВАЖНО (тот же класс бага, что уже найден и исправлен в
+// `update_starvation_pass` — см. её doc-комментарий выше для полного
+// объяснения): проверять нужно `structural`, а НЕ `matched`. Для
+// `Rule::feedback`+`Rule::memory`-having правил `matched==0u` может
+// означать ПРОСТО "гейт памяти закрыт этим тиком" (правило по-прежнему
+// структурно совпадает) — CPU в этом случае НЕ трогает `feedback_counters`
+// вовсе (его инкремент-only цикл в `engine/mod.rs` строится по
+// `feedback_keys`, которые ТОЖЕ гейт-фильтрованы, см. её doc-комментарий:
+// "Считаются ПОСЛЕ гейт-фильтра памяти"), а НЕ сбрасывает защёлку — сброс
+// оправдан ТОЛЬКО когда правило по-настоящему перестало структурно
+// совпадать (`structural == 0u`). См.
+// `test_gpu_v2_feedback_plus_memory_gate_freezes_latch_not_resets_matches_cpu`
+// в `tests/gpu_v2_correctness.rs`.
+@compute @workgroup_size(256, 1, 1)
+fn update_feedback_latch_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let m = gid.x;
+    let total = params.width * params.height * params.max_matches_per_cell;
+    if (m >= total) { return; }
+
+    let cell_idx = m / params.max_matches_per_cell;
+    let slot_in_cell = m % params.max_matches_per_cell;
+    let me = current[cell_idx];
+    if (me.value >= 256u) { return; }
+    let slot = head_slots[me.value];
+    if (slot_in_cell >= slot.rules_count) { return; }
+    let rule_idx = slot.rules_start + slot_in_cell;
+    if (rules[rule_idx].has_feedback == 0u) { return; }
+
+    if (matches[m].structural == 0u) {
+        atomicStore(&feedback_counters[m], 0u);
+        return;
+    }
+    if (matches[m].matched == 0u) {
+        // Структурно совпало, но гейт памяти закрыт этим тиком — защёлку
+        // НЕ трогаем (ни сброс, ни рост), см. doc-комментарий выше.
+        return;
+    }
+    let cur = atomicLoad(&feedback_counters[m]);
+    if (cur < 0xFFFFFFFFu) {
+        atomicStore(&feedback_counters[m], cur + 1u);
+    }
+}
+
+// Фаза 2: перенос — ТОЛЬКО для матчей, выигравших арбитраж этого тика
+// (значит, реально применивших свой сдвиг). `matches[m].cells[0]` —
+// source-clear (старая позиция, == сама m), `cells[1]` — цель сдвига
+// (новая позиция) — гарантированно эта раскладка: `feedback` всегда имеет
+// РОВНО один, не-broadcast сдвиг (см. `rule_table.rs`'s защитную
+// проверку), значит `push_write_cell`'s порядок в `detect_pass` всегда
+// [source-clear, единственная цель, ...changes].
+@compute @workgroup_size(256, 1, 1)
+fn update_feedback_relocate_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let m = gid.x;
+    let total = params.width * params.height * params.max_matches_per_cell;
+    if (m >= total) { return; }
+
+    let cell_idx = m / params.max_matches_per_cell;
+    let slot_in_cell = m % params.max_matches_per_cell;
+    let me = current[cell_idx];
+    if (me.value >= 256u) { return; }
+    let slot = head_slots[me.value];
+    if (slot_in_cell >= slot.rules_count) { return; }
+    let rule_idx = slot.rules_start + slot_in_cell;
+    if (rules[rule_idx].has_feedback == 0u) { return; }
+    if (matches[m].matched == 0u || atomicLoad(&match_state[m]) != 1u) { return; }
+
+    let new_key = matches[m].cells[1];
+    let py = i32(new_key / padded_width());
+    let px = i32(new_key % padded_width());
+    let nx = px - i32(params.margin);
+    let ny = py - i32(params.margin);
+    if (nx < 0 || ny < 0 || u32(nx) >= params.width || u32(ny) >= params.height) {
+        return; // цель за пределами видимой решётки (overflow Discard) — переносить некуда
+    }
+    let new_cell_idx = u32(ny) * params.width + u32(nx);
+    let new_m = new_cell_idx * params.max_matches_per_cell + slot_in_cell;
+    if (new_m == m) {
+        return; // сдвиг "на месте" (вырожденный случай) — уже верное значение
+    }
+    let moved = atomicLoad(&feedback_counters[m]);
+    atomicStore(&feedback_counters[new_m], moved);
+    atomicStore(&feedback_counters[m], 0u);
+}
+
+// `Rule::memory` — ДВА раздельных прохода (та же причина, что у
+// `update_feedback_latch_pass`/`update_feedback_relocate_pass`: перенос
+// пишет в СЛОТ ДРУГОЙ клетки, что было бы гонкой с той клетки собственным
+// потоком-осиротевшим-сбросом внутри ОДНОГО прохода — см. их подробный
+// doc-комментарий выше, дословно применим и здесь). Диспетчеризуются
+// СТРОГО ПОСЛЕДОВАТЕЛЬНО (push → relocate), см. `GpuEngine::dispatch_tick`.
+
+// Фаза 1: запись нового наблюдения в буфер (FIFO — если полон, сдвиг влево
+// на 1 и запись в конец; если не полон, запись в первую свободную позицию),
+// ЛИБО осиротевший сброс, если структурного совпадения на этом тике не
+// было (см. `GpuMatch::structural`'s doc-комментарий — зеркалит CPU
+// `memory_targets`, взятый из ПОЛНОГО списка матчей, ДО применения гейта).
+// НИКАКИХ чужих слотов не трогает.
+@compute @workgroup_size(256, 1, 1)
+fn update_memory_push_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let m = gid.x;
+    let total = params.width * params.height * params.max_matches_per_cell;
+    if (m >= total) { return; }
+
+    let cell_idx = m / params.max_matches_per_cell;
+    let slot_in_cell = m % params.max_matches_per_cell;
+    let me = current[cell_idx];
+    if (me.value >= 256u) { return; }
+    let slot = head_slots[me.value];
+    if (slot_in_cell >= slot.rules_count) { return; }
+    let rule_idx = slot.rules_start + slot_in_cell;
+    if (rules[rule_idx].has_memory == 0u) { return; }
+
+    if (matches[m].structural == 0u) {
+        atomicStore(&memory_len[m], 0u);
+        return;
+    }
+
+    // Значение для записи — см. `types::RecordTrigger`'s doc-комментарий:
+    // `NeighborType` читает ТЕКУЩЕЕ (pre-tick, ещё не изменённое `apply_pass`
+    // этого же тика — `current[]` не трогается до самого конца тика) состояние
+    // соседа; `RuleOutcome` читает финальный исход арбитража ЭТОГО матча
+    // (уже точно известен — этот проход идёт ПОСЛЕ apply/CPU-fallback).
+    // Кодировка ОБЩАЯ с `rule_table::encode_recorded_value` — держать
+    // синхронно: 0..=255 = Type(код типа), 256 = Applied, 257 = Missed.
+    var value: u32;
+    if (rules[rule_idx].memory_trigger == 0u) {
+        let x = cell_idx % params.width;
+        let y = cell_idx / params.width;
+        let nx = i32(x) + rules[rule_idx].memory_dx;
+        let ny = i32(y) + rules[rule_idx].memory_dy;
+        if (nx < 0 || ny < 0 || u32(nx) >= params.width || u32(ny) >= params.height) {
+            value = params.default_cell_type;
+        } else {
+            value = current[idx(u32(nx), u32(ny))].value;
+        }
+    } else {
+        value = select(257u, 256u, atomicLoad(&match_state[m]) == 1u); // 256=Applied, 257=Missed
+    }
+
+    let win = rules[rule_idx].memory_window;
+    let len = atomicLoad(&memory_len[m]);
+    if (len < win) {
+        atomicStore(&memory_buffers[m * MAX_MEMORY_WINDOW + len], value);
+        atomicStore(&memory_len[m], len + 1u);
+    } else {
+        // Буфер уже полон — сдвиг влево на 1 (индекс 0 теряется, самое
+        // старое значение), новое значение — в конец. `win` ≤
+        // MAX_MEMORY_WINDOW (проверено в `build_gpu_rule_table`), цикл
+        // ограничен реальным `win`, не потолком.
+        for (var i = 0u; i + 1u < win; i = i + 1u) {
+            let next = atomicLoad(&memory_buffers[m * MAX_MEMORY_WINDOW + i + 1u]);
+            atomicStore(&memory_buffers[m * MAX_MEMORY_WINDOW + i], next);
+        }
+        atomicStore(&memory_buffers[m * MAX_MEMORY_WINDOW + win - 1u], value);
+    }
+}
+
+// Фаза 2: перенос — ТОЛЬКО для матчей, выигравших арбитраж этого тика
+// (гарантированно означает, что гейт БЫЛ открыт — гейт-закрытые матчи
+// принудительно REJECTED в `detect_pass`, никогда не доходят до ACCEPTED)
+// И физически имеющих сдвиг (`memory_has_shift` — правило без сдвига
+// никогда не двигается, буфер живёт на фиксированной позиции). Та же
+// раскладка `cells[1]` = новая позиция, что и у `update_feedback_relocate_pass`
+// — гарантированно (см. `MemoryBroadcastUnsupported`'s защиту в
+// `rule_table.rs`): `memory` с сдвигом всегда РОВНО один, не-broadcast.
+@compute @workgroup_size(256, 1, 1)
+fn update_memory_relocate_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let m = gid.x;
+    let total = params.width * params.height * params.max_matches_per_cell;
+    if (m >= total) { return; }
+
+    let cell_idx = m / params.max_matches_per_cell;
+    let slot_in_cell = m % params.max_matches_per_cell;
+    let me = current[cell_idx];
+    if (me.value >= 256u) { return; }
+    let slot = head_slots[me.value];
+    if (slot_in_cell >= slot.rules_count) { return; }
+    let rule_idx = slot.rules_start + slot_in_cell;
+    if (rules[rule_idx].has_memory == 0u || rules[rule_idx].memory_has_shift == 0u) { return; }
+    if (atomicLoad(&match_state[m]) != 1u) { return; }
+
+    let new_key = matches[m].cells[1];
+    let py = i32(new_key / padded_width());
+    let px = i32(new_key % padded_width());
+    let nx = px - i32(params.margin);
+    let ny = py - i32(params.margin);
+    if (nx < 0 || ny < 0 || u32(nx) >= params.width || u32(ny) >= params.height) {
+        return;
+    }
+    let new_cell_idx = u32(ny) * params.width + u32(nx);
+    let new_m = new_cell_idx * params.max_matches_per_cell + slot_in_cell;
+    if (new_m == m) {
+        return;
+    }
+    let win = rules[rule_idx].memory_window;
+    for (var i = 0u; i < win; i = i + 1u) {
+        let v = atomicLoad(&memory_buffers[m * MAX_MEMORY_WINDOW + i]);
+        atomicStore(&memory_buffers[new_m * MAX_MEMORY_WINDOW + i], v);
+    }
+    atomicStore(&memory_len[new_m], atomicLoad(&memory_len[m]));
+    atomicStore(&memory_len[m], 0u);
 }

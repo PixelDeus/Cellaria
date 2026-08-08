@@ -129,7 +129,7 @@ fn rule_strategy() -> impl Strategy<Value = Rule> {
                 overflow,
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             }
         })
 }
@@ -600,7 +600,7 @@ fn conflict_cluster_rule_index(m: usize) -> (HashMap<CellType, Vec<Rule>>, cella
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         })
         .collect();
     let rule_index = make_rule_index(&rules);

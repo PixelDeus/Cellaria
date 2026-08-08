@@ -62,7 +62,7 @@ fn shuttle_rules() -> Vec<Rule> {
             pattern: vec![(0, 0, CellType(HEAD_R)), (1, 0, CellType(WALL))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(HEAD_L))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
         // Едет вправо; обычное движение.
         Rule {
@@ -70,7 +70,7 @@ fn shuttle_rules() -> Vec<Rule> {
             pattern: vec![],
             shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
             changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
         // Едет влево; следующая клетка — стена -> разворот на месте.
         Rule {
@@ -78,7 +78,7 @@ fn shuttle_rules() -> Vec<Rule> {
             pattern: vec![(0, 0, CellType(HEAD_L)), (-1, 0, CellType(WALL))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(HEAD_R))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
         // Едет влево; обычное движение.
         Rule {
@@ -86,7 +86,7 @@ fn shuttle_rules() -> Vec<Rule> {
             pattern: vec![],
             shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
             changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         },
     ]
 }

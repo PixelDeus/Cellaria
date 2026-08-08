@@ -99,7 +99,7 @@ fn rule_strategy() -> impl Strategy<Value = Rule> {
                 overflow,
                 cam: None,
                 tie_break: 0,
-                starvation_after: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None,
             }
         })
 }

@@ -33,13 +33,13 @@ fn build_rules() -> HashMap<CellType, Vec<Rule>> {
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
     idx.insert(CellType(1), vec![Rule {
         id: vec![CellType(1)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
     }]);
     for s in 0..6u8 {
         idx.insert(CellType(10 + s), vec![Rule {
             id: vec![CellType(10 + s)], pattern: vec![], shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(10 + (s + 1) % 6))],
-            active_only: false, priority: 5, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None,
+            active_only: false, priority: 5, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
         }]);
     }
     idx

@@ -71,7 +71,7 @@ pub fn turing_rules(n: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         });
         state += 1;
     }
@@ -92,7 +92,7 @@ pub fn simple_turing_rules(n: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         })
         .collect()
 }
@@ -115,7 +115,7 @@ pub fn tag_rules(len: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         })
         .collect()
 }
@@ -150,7 +150,7 @@ pub fn priority_conflict_rules(m: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         })
         .collect();
     rules.push(Rule {
@@ -164,7 +164,7 @@ pub fn priority_conflict_rules(m: usize) -> Vec<Rule> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
     });
     rules
 }
@@ -282,7 +282,7 @@ pub fn replication_rules(len: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None,
         })
         .collect()
 }
