@@ -51,7 +51,7 @@ fn build_engine() -> Engine<VecStorage> {
     idx.insert(CellType(RAD), vec![Rule {
         id: vec![CellType(RAD)], pattern: vec![], shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(MID))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }]);
 
     let mut engine = Engine::new(grid, idx);
@@ -82,12 +82,12 @@ fn main() {
     inject_packet(&mut engine, 50, 77);
     println!(
         "После безопасной посылки (id=50): установлено? {} | отклонено охраной: {}",
-        engine.rule_index.contains_key(&CellType(50)),
+        engine.rule_index().contains_key(&CellType(50)),
         engine.rejected_self_modifications
     );
 
     inject_packet(&mut engine, RAD, 99);
-    let a_rule = &engine.rule_index[&CellType(RAD)];
+    let a_rule = &engine.rule_index()[&CellType(RAD)];
     let a_intact = a_rule.len() == 1 && a_rule[0].changes == vec![(0, 0, ChangeValue::Literal(MID))];
     println!(
         "После опасной посылки (id={} — как у модуля A): отклонено охраной: {} | модуль A не тронут: {}",

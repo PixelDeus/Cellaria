@@ -58,7 +58,7 @@ pub fn bench_conflict_free(c: &mut Criterion) {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let rules = vec![rule; width];
     let rule_index = helpers::make_rule_index(rules);

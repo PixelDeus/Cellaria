@@ -86,7 +86,7 @@ fn base_rule(id: u8, priority: u32) -> Rule {
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None,
+        memory: None, max_activations: None,
     }
 }
 

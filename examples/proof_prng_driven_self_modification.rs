@@ -87,7 +87,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         });
     }
 
@@ -109,7 +109,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             },
             Rule {
                 id: vec![CellType(SELECTOR_TYPE)],
@@ -122,7 +122,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             },
         ],
     );
@@ -142,7 +142,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(2),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }],
     );
     idx.insert(
@@ -158,7 +158,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(3),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }],
     );
 
@@ -178,7 +178,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             }],
         );
     }
@@ -226,7 +226,7 @@ fn run_experiment(seed_x: usize) -> Option<(u8, Direction)> {
 
     for _ in 0..TRANSMIT_TICKS {
         engine.run_tick();
-        if let Some(rule) = engine.rule_index.get(&CellType(GEN_ID)).and_then(|v| v.first()) {
+        if let Some(rule) = engine.rule_index().get(&CellType(GEN_ID)).and_then(|v| v.first()) {
             return Some((observed_bit, rule.shifts[0][0].direction));
         }
     }

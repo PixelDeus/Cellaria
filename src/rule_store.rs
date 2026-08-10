@@ -1,6 +1,7 @@
 use crate::grid::Grid;
 use crate::storage::GridStorage;
 use crate::types::{CellType, Rule, RuleId};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // === Protocol Constants ===
@@ -108,6 +109,7 @@ pub struct CompletedOp {
 }
 
 /// Хранилище правил с поддержкой самомодификации через канальный протокол.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RuleStore {
     /// Текущий набор правил.
     rules: Vec<Rule>,
@@ -619,6 +621,7 @@ fn deserialize_packet(data: &[u8]) -> Result<RuleOp, String> {
                 // как был).
                 feedback: None,
                 memory: None,
+                max_activations: None,
             };
 
             Ok(RuleOp::AddRule(rule))
@@ -710,6 +713,7 @@ fn deserialize_packet(data: &[u8]) -> Result<RuleOp, String> {
                 feedback: None,
                 recursion: None,
                 memory: None,
+                max_activations: None,
             };
 
             Ok(RuleOp::AddRule(rule))

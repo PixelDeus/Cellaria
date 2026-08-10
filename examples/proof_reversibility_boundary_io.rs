@@ -52,7 +52,7 @@ fn shift_rule(direction: Direction, overflow: OverflowAction) -> HashMap<CellTyp
             overflow,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }],
     );
     idx

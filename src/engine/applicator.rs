@@ -19,7 +19,31 @@ use crate::types::{
 /// (не часть публичного API), число записей за тик обычно единицы —
 /// SipHash-инициализация и раунды сжатия на таком объёме заметно дороже
 /// самой записи (см. `fast_hash` модуль).
-type WriteBuffer = FxHashMap<(u32, u32), Cell>;
+///
+/// `pub(crate)`, не приватный — `Engine` (сессия 2026-08-09, список
+/// "вопросы" п.4) держит один персистентный экземпляр как поле, вместо
+/// того чтобы `apply_matches_with_cam` создавал `WriteBuffer::default()`
+/// заново на каждый тик: микробенчмарк (generic `HashMap`, не
+/// специфично для `FxHashMap`) показал ~58.6% экономии от переиспользования
+/// `.clear()` вместо пересоздания на реалистичном объёме записей на тик.
+pub(crate) type WriteBuffer = FxHashMap<(u32, u32), Cell>;
+
+// Сессия 2026-08-09: `VecSink`/`WriteSink`-абстракция для safe-ветки
+// ("путь (а)") реализована, дважды исправлена (dyn -> generics, лишняя
+// аллокация в finalize) и в итоге ОТКАЧЕНА -- контролируемый A/B на реальном
+// CF-сценарии (apply_matches_with_cam, тот же код, разница только в
+// safe_len) показал РЕГРЕССИЮ (-19.9% даже после обоих исправлений, -66-104%
+// в промежуточных вариантах), а не выигрыш. Причина: изначальный
+// микробенчмарк, обосновавший идею (Vec+sort дешевле HashMap-вставки),
+// использовал синтетические УЖЕ ОТСОРТИРОВАННЫЕ по координате данные
+// (`for i in 0..N { push((i,0,...)) }`) -- лучший случай почти для любого
+// сортировщика. Реальный порядок записи (порядок арбитража/детекта) не
+// отсортирован, и настоящая O(N log N) стоимость сортировки на реальных
+// данных перевешивает то, что экономится на отказе от хэширования. Урок тот
+// же, что уже был найден в этой сессии для radix-сортировки в
+// `arbitrator.rs`: не всякий "теоретически дешевле" вариант быстрее на
+// практике — и синтетический микробенчмарк с нереалистичным порядком данных
+// может убедительно, но ошибочно, подтвердить неверную гипотезу.
 
 /// Применить набор совпадений к решётке с буферизацией.
 ///
@@ -33,14 +57,23 @@ pub fn apply_matches<S: GridStorage>(
     rule_index: &HashMap<CellType, Vec<Rule>>,
     rule_cache: &RuleDataCache,
 ) -> (Vec<AffectedRegion>, Vec<(u32, Cell)>) {
+    // Свежие буферы на каждый вызов — эта свободная функция, как и
+    // `run_tick`, не хранит состояния между вызовами (см. doc-комментарий
+    // `detect_matches`); персистентные буферы есть только у `Engine`
+    // (`Engine::write_buffer`/`Engine::pattern_buffer`), которые и
+    // переиспользуются в горячем пути `run_tick_with_cache`.
+    let mut write_buffer = WriteBuffer::default();
+    let mut pattern_buffer = Vec::new();
     apply_matches_with_cam(
         grid,
-        matches,
+        &matches,
         rule_index,
         rule_cache,
         &CamPositions::default(),
         &mut crate::engine::arbitrator::FeedbackCounters::default(),
         &mut crate::engine::arbitrator::MemoryBuffers::default(),
+        &mut write_buffer,
+        &mut pattern_buffer,
     )
 }
 
@@ -53,21 +86,40 @@ pub fn apply_matches<S: GridStorage>(
 /// — `&mut`, а не `&`: маркер физически ДВИГАЕТСЯ при сдвиге, так что запись
 /// счётчика нужно ПЕРЕНОСИТЬ на новую позицию (см. doc-комментарий
 /// `apply_shift_buffered`), а не только читать.
+///
+/// `matches: &[RuleMatch]`, не `Vec<RuleMatch>` (сессия 2026-08-09, список
+/// "вопросы", продолжение) — `RuleMatch` `Copy` (13 байт), эта функция
+/// никогда не нуждалась во владении, только в чтении; раньше сигнатура
+/// требовала владения, из-за чего единственный вызывающий (`run_tick_with_cache`)
+/// был вынужден передавать `accepted.clone()` -- полную копию `Vec<RuleMatch>`
+/// на КАЖДЫЙ тик с принятыми матчами -- лишь потому, что `accepted` нужен
+/// ещё раз ПОСЛЕ этого вызова (обновление бюджета активаций, `TickEventCounts`,
+/// собственный возврат `run_tick_with_cache`). Слайс убирает клон целиком.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_matches_with_cam<S: GridStorage>(
     grid: &mut Grid<S>,
-    matches: Vec<RuleMatch>,
+    matches: &[RuleMatch],
     rule_index: &HashMap<CellType, Vec<Rule>>,
     rule_cache: &RuleDataCache,
     cam_positions: &CamPositions,
     feedback_counters: &mut crate::engine::arbitrator::FeedbackCounters,
     memory_buffers: &mut crate::engine::arbitrator::MemoryBuffers,
+    write_buffer: &mut WriteBuffer,
+    pattern_buffer: &mut Vec<CellValue>,
 ) -> (Vec<AffectedRegion>, Vec<(u32, Cell)>) {
     let mut pending_boundary: Vec<(u32, Cell)> = Vec::new();
     let mut regions: Vec<AffectedRegion> = Vec::new();
-    // Общий буфер для всех match'ей
-    let mut write_buffer: WriteBuffer = WriteBuffer::default();
+    // Общий буфер для всех match'ей этого тика — переданный вызывающей
+    // стороной (см. doc-комментарий `WriteBuffer`), а не создаваемый здесь;
+    // очищаем сами (не полагаемся на то, что вызывающая сторона это
+    // сделала) — так же, как `rebuild_rule_cache` сам вызывается изнутри
+    // `set_rule_index`, а не по соглашению снаружи.
+    write_buffer.clear();
+    // Массив-lookup вместо `rule_index.get()` — см. doc-комментарий
+    // `HeadRuleIndex`/`build_head_index` (сессия 2026-08-09, "фантазия" п.1).
+    let head_index = crate::engine::build_head_index(rule_index);
 
-    for m in matches {
+    for &m in matches {
         // Резолвим по rule_idx, а не поиском по id: несколько правил могут
         // иметь одинаковую голову (недетерминированный выбор), и только
         // rule_idx однозначно определяет, какое именно правило сработало
@@ -76,13 +128,11 @@ pub(crate) fn apply_matches_with_cam<S: GridStorage>(
         // Без `.cloned()`: `apply_rule_buffered` использует правило только по
         // ссылке, а клонирование целого `Rule` (вложенные `Vec` в pattern/
         // changes/shifts/id) на каждый match каждого тика было чистой тратой.
-        let rule = rule_index
-            .get(&m.head)
-            .and_then(|rules| rules.get(m.rule_idx));
+        let rule = crate::engine::lookup_rule(&head_index, m.head, m.rule_idx);
         if let Some(rule) = rule {
             if let Some(cam) = rule.cam {
                 let gen = grid.generation();
-                let region = apply_cam_buffered(&*grid, &m, rule, cam, cam_positions, gen, &mut write_buffer);
+                let region = apply_cam_buffered(&*grid, &m, rule, cam, cam_positions, gen, write_buffer);
                 regions.push(region);
                 continue;
             }
@@ -92,15 +142,18 @@ pub(crate) fn apply_matches_with_cam<S: GridStorage>(
             // гарантирует отсутствие пересечения записей между matches, так
             // что объединять нечего, а лишний HashMap на каждый match — это
             // лишняя аллокация и хэширование на пустом месте.
-            let (region, outputs) = apply_rule_buffered(grid, &m, rule, rule_data, &mut write_buffer, feedback_counters, memory_buffers);
+            let (region, outputs) = apply_rule_buffered(grid, &m, rule, rule_data, write_buffer, feedback_counters, memory_buffers, pattern_buffer);
             regions.push(region);
             pending_boundary.extend(outputs);
         }
     }
 
-    // Фаза flush: атомарно применяем все изменения из буфера в решётку
+    // Фаза flush: атомарно применяем все изменения из буфера в решётку.
+    // `.drain()`, не `.into_iter()` (`write_buffer` теперь `&mut`, не
+    // владеющий) — попутно оставляет буфер пустым сразу после использования,
+    // а не только при следующем `.clear()` в начале функции.
     let gen = grid.generation();
-    for ((x, y), cell) in write_buffer {
+    for ((x, y), cell) in write_buffer.drain() {
         let w = grid.width();
         let h = grid.height();
         if x < w as u32 && y < h as u32 {
@@ -287,6 +340,7 @@ fn apply_rule_buffered<S: GridStorage>(
     write_buffer: &mut WriteBuffer,
     feedback_counters: &mut crate::engine::arbitrator::FeedbackCounters,
     memory_buffers: &mut crate::engine::arbitrator::MemoryBuffers,
+    pattern_buffer: &mut Vec<CellValue>,
 ) -> (AffectedRegion, Vec<(u32, Cell)>) {
     let cx = m.x as i32;
     let cy = m.y as i32;
@@ -311,8 +365,14 @@ fn apply_rule_buffered<S: GridStorage>(
         written_cells: Vec::new(),
     };
 
-    // Буфер значений паттерна для динамических ссылок ($0, $1, ...)
-    let mut pattern_buffer: Vec<CellValue> = Vec::new();
+    // Буфер значений паттерна для динамических ссылок ($0, $1, ...) —
+    // переданный вызывающей стороной (`Engine::pattern_buffer`, п.3 в
+    // "третьей оптимизации того же класса", сессия 2026-08-09), а не
+    // `Vec::new()` заново на каждый match: раньше это была свежая аллокация
+    // на КАЖДЫЙ match с непустым `pattern` (правила с пустым pattern,
+    // например чистые сдвиги без чтения соседей, эту цену не платили —
+    // `Vec::new()` сам по себе не аллоцирует, пока в него не запушили).
+    pattern_buffer.clear();
     for (dx, dy, _ct) in &rule.pattern {
         let px = m.x as i32 + *dx as i32;
         let py = m.y as i32 + *dy as i32;
@@ -343,6 +403,24 @@ fn apply_rule_buffered<S: GridStorage>(
         let latched = feedback_counters.get(&(m.x, m.y, m.rule_idx)).copied().unwrap_or(0) >= spec.timeout;
         latched.then_some(spec.new_direction)
     });
+    // Инкремент защёлки — СРАЗУ ПОСЛЕ чтения выше, ДО применения сдвига
+    // ниже. Обязательно именно здесь, а не отдельным проходом ПОСЛЕ всего
+    // apply (как для starvation_after): `apply_shift_buffered` следующим
+    // шагом может РЕЛОЦИРОВАТЬ эту же запись на новую позицию (remove
+    // старого ключа + insert нового) — если бы инкремент шёл отдельным
+    // проходом позже по СТАРОЙ позиции этого матча, для ВЫИГРАВШИХ и
+    // сдвинувшихся матчей он создавал бы ПОСТОРОННЮЮ свежую запись с 0 на
+    // уже покинутой позиции вместо инкремента РЕАЛЬНОЙ, уже перенесённой
+    // записи — защёлка никогда не достигала бы `timeout` (найдено
+    // эмпирически: маркер уезжал за край решётки, ни разу не переключившись).
+    // Проигравшие арбитраж матчи сюда не попадают (эта функция вызывается
+    // только для `accepted`) — они инкрементируются отдельно, в
+    // `run_tick_with_cache`, по своей (гарантированно НЕ релоцированной,
+    // раз apply для них не запускался) позиции.
+    if rule.feedback.is_some() {
+        let counter = feedback_counters.entry((m.x, m.y, m.rule_idx)).or_insert(0);
+        *counter = counter.saturating_add(1);
+    }
     for shift_group in &rule.shifts {
         for shift in shift_group {
             let effective_shift = match feedback_override {
@@ -377,10 +455,10 @@ fn apply_rule_buffered<S: GridStorage>(
         };
 
         if shift_targets.is_empty() {
-            apply_changes_at(rule, &pattern_buffer, cx, cy, (0, 0), grid, gen, write_buffer, &mut affected);
+            apply_changes_at(rule, pattern_buffer.as_slice(), cx, cy, (0, 0), grid, gen, write_buffer, &mut affected);
         } else {
             for &target in shift_targets {
-                apply_changes_at(rule, &pattern_buffer, cx, cy, target, grid, gen, write_buffer, &mut affected);
+                apply_changes_at(rule, pattern_buffer.as_slice(), cx, cy, target, grid, gen, write_buffer, &mut affected);
             }
         }
     }

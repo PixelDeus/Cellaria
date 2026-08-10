@@ -66,7 +66,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }],
     );
 
@@ -92,7 +92,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         });
 
         // Тихо (никто не прилетал QUIET_THRESHOLD тиков) — перевести
@@ -112,7 +112,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             });
         }
         idx.insert(counter_id, rules);
@@ -134,7 +134,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(0),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             }],
         );
     }
@@ -154,7 +154,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             }],
         );
     }
@@ -214,7 +214,7 @@ fn run_experiment(num_pulses: usize) -> Option<(u8, ShiftSpec)> {
 
     for _ in 1..=(WIDTH as u32) {
         engine.run_tick();
-        if let Some(rule) = engine.rule_index.get(&CellType(GEN_ID)).and_then(|v| v.first()) {
+        if let Some(rule) = engine.rule_index().get(&CellType(GEN_ID)).and_then(|v| v.first()) {
             return Some((k, rule.shifts[0][0].clone()));
         }
     }

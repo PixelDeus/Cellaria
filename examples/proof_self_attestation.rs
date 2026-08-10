@@ -55,7 +55,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 pattern: vec![(0, 0, CellType(ACC_BASE + acc)), (0, -1, CellType(d))],
                 shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
                 changes: vec![(0, 0, ChangeValue::Literal(ACC_BASE + next))],
-                active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+                active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             });
         }
         // Данные закончились (под маркером — пусто, ни одно из правил выше
@@ -65,7 +65,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             pattern: vec![(0, 0, CellType(ACC_BASE + acc))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(FINAL_BASE + acc))],
-            active_only: false, priority: 10, min_age: QUIET_THRESHOLD, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+            active_only: false, priority: 10, min_age: QUIET_THRESHOLD, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         });
         idx.insert(CellType(ACC_BASE + acc), rules);
 
@@ -77,7 +77,7 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(0),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }]);
     }
     idx

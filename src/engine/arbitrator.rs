@@ -5,6 +5,7 @@ use rayon::prelude::*;
 
 use crate::conflict_analyzer::{get_rule_data, RuleDataCache};
 use crate::engine::matcher::CamPositions;
+use crate::engine::{build_head_index, lookup_rule, HeadRuleIndex};
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::types::{CellType, OverflowAction, Rule, RuleMatch};
 
@@ -24,6 +25,12 @@ pub(crate) type FeedbackCounters = FxHashMap<(u32, u32, usize), u64>;
 /// per-match Engine-состояний.
 pub(crate) type MemoryBuffers = FxHashMap<(u32, u32, usize), std::collections::VecDeque<crate::types::RecordedValue>>;
 
+/// Счётчики побед в арбитраже для правил с `Rule::max_activations` — см. её
+/// doc-комментарий и `Engine::activation_counters`. Ключ — `(head, rule_idx)`,
+/// БЕЗ позиции (глобальный бюджет для правила, не для клетки) — в отличие
+/// от остальных счётчиков в этом модуле, все с ключом `(x, y, rule_idx)`.
+pub(crate) type ActivationCounters = FxHashMap<(CellType, usize), u32>;
+
 /// Ниже этого числа матчей накладные расходы rayon (work-stealing,
 /// синхронизация пула потоков) не окупаются — та же логика, что и
 /// `matcher::PARALLEL_THRESHOLD` (см. её doc-комментарий: там это уже
@@ -31,6 +38,37 @@ pub(crate) type MemoryBuffers = FxHashMap<(u32, u32, usize), std::collections::V
 /// для симметрии — оба места про запуск потоков на маленьком объёме
 /// работы).
 const PARALLEL_SORT_THRESHOLD: usize = 1024;
+
+thread_local! {
+    /// Персистентный (на весь OS-поток, не на один вызов) буфер для
+    /// `used_cells` в greedy-цикле `arbitrate_with_cam` — см. её
+    /// doc-комментарий про то, почему `thread_local!`, а не поле `Engine`.
+    static USED_CELLS_BUF: std::cell::RefCell<FxHashMap<(i32, i32), usize>> =
+        std::cell::RefCell::new(FxHashMap::default());
+    /// То же самое для `affected` — переиспользуемого буфера affected cells
+    /// ОДНОГО матча (см. `get_match_affected_cells`'s doc-комментарий про
+    /// сам буфер; здесь персистентна именно ВНЕШНЯЯ аллокация `Vec`,
+    /// пережившая один вызов `arbitrate_with_cam`, не только один матч
+    /// внутри него — та же цена холодного старта, что и у `used_cells`).
+    static AFFECTED_BUF: std::cell::RefCell<Vec<(i32, i32)>> =
+        std::cell::RefCell::new(Vec::new());
+    /// Персистентный (на весь OS-поток) буфер для `keyed` — decorate-фаза
+    /// сортировки в `arbitrate_with_cam` (см. её doc-комментарий у
+    /// `USED_CELLS_BUF` про причину `thread_local!`, не поля `Engine`).
+    /// Замерено (контролируемый A/B, прогретый `Vec` против свежего
+    /// `Vec::new()`+`collect()` на каждый вызов, реалистичный объём
+    /// CA-пробки, вместе с самой сортировкой): -30.6%.
+    static KEYED_BUF: std::cell::RefCell<Vec<KeyedEntry>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
+/// Тип одного элемента `keyed` -- см. `KEYED_BUF`/`arbitrate_with_cam`.
+type KeyedEntry = (
+    (Reverse<u32>, Reverse<u32>, Reverse<u32>, Reverse<RuleIdKey>, Reverse<u32>, Reverse<u32>, Reverse<usize>),
+    RuleMatch,
+    u32,
+    u32,
+);
 
 /// Модуль для вращения `Rule::tie_break` по поколениям (см. её doc-комментарий
 /// в `types.rs`). КРИТИЧНО, что CPU и GPU (`shader.wgsl::TIE_BREAK_MODULUS`)
@@ -88,6 +126,13 @@ pub fn arbitrate(
     // `FeedbackCounters` — та же история: свободная функция не хранит
     // состояние МЕЖДУ вызовами, так что `Rule::starvation_after`/
     // `Rule::feedback` для неё всегда no-op (см. их doc-комментарии).
+    //
+    // `TieBreakDecidedWins` (второй элемент результата `arbitrate_with_cam`)
+    // здесь отбрасывается сознательно — эта свободная функция не хранит
+    // `starvation_counters` между вызовами (см. выше), поэтому решать по
+    // нему всё равно нечего; публичная сигнатура остаётся прежней ради
+    // обратной совместимости (`property_arbitration.rs`/
+    // `local_arbitration_research.rs` уже держатся на `Vec<RuleMatch>`).
     arbitrate_with_cam(
         all_matches,
         rule_index,
@@ -99,6 +144,7 @@ pub fn arbitrate(
         &FeedbackCounters::default(),
         get_cell_age,
     )
+    .0
 }
 
 /// Как [`arbitrate`], но с картой найденных CAM-позиций (см.
@@ -119,6 +165,16 @@ pub fn arbitrate(
 /// `u32::MAX` (побеждает гарантированно). Обновление счётчиков (инкремент
 /// проигравших, сброс выигравших) — забота ВЫЗЫВАЮЩЕЙ стороны
 /// (`run_tick_with_cache`), не этой функции: она только ЧИТАЕТ счётчики.
+/// Ключи (`x, y, rule_idx`) принятых совпадений, чья победа НЕ была решена
+/// одним `priority`/`age` — у них был конкурент (пересекающийся affected
+/// region) с РАВНЫМИ `priority` и `age`, и решающим оказался `tie_break`
+/// (или более низкий уровень тай-брейка — `rule_id`/координаты). См.
+/// `Engine::starvation_counters`'s использование этого множества: победа
+/// НЕ из этого множества — решительная (сбрасывает счётчик голодания),
+/// победа ИЗ этого множества — "ничья, разрешённая жребием" (счётчик не
+/// трогается, ни сброс, ни инкремент).
+pub(crate) type TieBreakDecidedWins = FxHashSet<(u32, u32, usize)>;
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn arbitrate_with_cam(
     all_matches: Vec<RuleMatch>,
@@ -130,12 +186,23 @@ pub(crate) fn arbitrate_with_cam(
     starvation_counters: &StarvationCounters,
     feedback_counters: &FeedbackCounters,
     get_cell_age: impl Fn(usize, usize) -> u32,
-) -> Vec<RuleMatch> {
+) -> (Vec<RuleMatch>, TieBreakDecidedWins) {
     if all_matches.is_empty() {
-        return Vec::new();
+        return (Vec::new(), FxHashSet::default());
     }
+    // Массив-lookup вместо `rule_index.get()` — см. doc-комментарий
+    // `HeadRuleIndex`/`build_head_index` (сессия 2026-08-09, "фантазия" п.1).
+    let head_index = build_head_index(rule_index);
 
     let mut accepted: Vec<RuleMatch> = Vec::new();
+    // Priority/age КАЖДОГО принятого совпадения, тем же индексом, что и в
+    // `accepted` -- нужно повторно на этапе разрешения конфликтов ниже, чтобы
+    // определить, был ли отклонённый кандидат РОВНЕЙ владельцу занятой клетки
+    // (т.е. владелец победил не priority/age, а чем-то ниже).
+    let mut accepted_priority_age: Vec<(u32, u32)> = Vec::new();
+    // Индексы (в `accepted`) совпадений, чья победа оказалась решена не
+    // priority/age -- см. `TieBreakDecidedWins`.
+    let mut tie_break_decided: FxHashSet<usize> = FxHashSet::default();
     // Ключ — (i32, i32), а не (u32, u32): affected cells считаются в
     // абстрактных координатах относительно позиции матча и могут уходить в
     // отрицательные значения (например, у сдвигов/changes с отрицательным
@@ -146,9 +213,27 @@ pub(crate) fn arbitrate_with_cam(
     // Это особенно опасно с OverflowAction::Write, где реальная запись при
     // overflow клэмпится на границу решётки (уже неотрицательную позицию),
     // а анализ конфликтов смотрел на исходную (отброшенную) координату.
-    // FxHashSet, а не стандартный (SipHash) — чисто внутренняя структура,
-    // число записей за тик обычно единицы (см. `fast_hash` модуль).
-    let mut used_cells: FxHashSet<(i32, i32)> = FxHashSet::default();
+    // FxHashMap, а не стандартный (SipHash) — чисто внутренняя структура,
+    // число записей за тик обычно единицы... НЕТ, неверно для плотных
+    // сценариев (см. ниже) — доккомент ошибался, число записей масштабируется
+    // с числом принятых матчей, до ~90000 на CA-сценарии "пробка". Значение —
+    // индекс В `accepted` совпадения, занявшего клетку (не просто факт
+    // занятости, как раньше) — нужен, чтобы при отклонении конфликтующего
+    // кандидата понять, ЧЕЙ именно была победа и была ли она решена
+    // priority/age или чем-то ниже (см. `tie_break_decided` выше).
+    //
+    // `thread_local!`, не поле `Engine` (сессия 2026-08-09, "фантазия" п.1,
+    // продолжение) — `arbitrate_with_cam` вызывается ПАРАЛЛЕЛЬНО по полосам
+    // из `arbitrate_spatial_with_cam` (до ~25 раз за тик на CA через rayon),
+    // так что один персистентный буфер уровня `Engine` сюда physически не
+    // воткнуть — несколько потоков не могут безопасно разделять один и тот
+    // же `&mut`. `thread_local!` даёт КАЖДОМУ rayon-воркеру свой персистентный
+    // буфер, переживающий не только вызовы в пределах одного тика (полоса за
+    // полосой на одном потоке), но и между тиками — тот же принцип, что и у
+    // `Engine::write_buffer`, просто область персистентности не "на Engine",
+    // а "на OS-поток". Замерено (контролируемый A/B, прогретый персистентный
+    // буфер против холодного `FxHashMap::default()` на каждый вызов,
+    // реалистичный объём CA-пробки): -65.2%.
 
     // Полностью детерминированный тай-брейк: priority → age → rule_id →
     // координаты матча → rule_idx. Раньше при равенстве priority+age порядок
@@ -191,10 +276,29 @@ pub(crate) fn arbitrate_with_cam(
     // в matcher.rs) — не самописный алгоритм, а готовая, отточенная
     // реализация; порог, ниже которого не стоит платить за потоки, тот же,
     // что и в matcher.rs (см. `PARALLEL_THRESHOLD`).
-    let mut keyed: Vec<_> = all_matches
-        .iter()
-        .map(|m| {
-            let (priority, tie_break, rule_id) = resolve_sort_fields(m, rule_index, starvation_counters);
+    // `KEYED_BUF` -- thread_local, не свежий `Vec::new()`+`collect()` (см.
+    // её doc-комментарий) -- decorate/сортировка/распаковка все внутри
+    // одного заимствования, `.drain(..)` в конце опустошает буфер, отдавая
+    // владение элементами для `sorted`, но СОХРАНЯЯ выросшую capacity для
+    // следующего вызова (в отличие от `.into_iter()` на владеющем `Vec`).
+    //
+    // Приоритет/возраст уносим вместе с матчем в `sorted` (не только для
+    // сортировки) -- нужны повторно ниже, чтобы сравнить отклонённого
+    // кандидата с владельцем занятой клетки, а не только для построения
+    // ключа сортировки.
+    //
+    // `resolve_sort_fields` находит `&Rule` для тай-брейка (см. её doc-
+    // комментарий), и `get_match_affected_cells` ниже находит его ЖЕ ещё
+    // раз (для affected cells) — на первый взгляд дублирующийся lookup.
+    // Проверено (сессия 2026-08-09, список "вопросы" п.2): перенос
+    // найденного `&Rule` через `sorted`, чтобы убрать повторный поиск, дал
+    // -1.7% (шум, не выигрыш — измерено A/B на CA-сценарии "пробка",
+    // 89700 матчей, интерливинг old/new/new против погрешности прогрева).
+    // Не тот lookup доминирует в стоимости цикла — оставлено как есть.
+    let sorted: Vec<(RuleMatch, u32, u32)> = KEYED_BUF.with_borrow_mut(|keyed| {
+        keyed.clear();
+        keyed.extend(all_matches.iter().map(|m| {
+            let (priority, tie_break, rule_id) = resolve_sort_fields(m, &head_index, starvation_counters);
             let age = get_cell_age(m.x as usize, m.y as usize);
             // Вращаем ОДИН раз здесь (decorate-sort-undecorate), не внутри
             // компаратора сортировки — тот вызывается O(n log n) раз, а
@@ -212,31 +316,66 @@ pub(crate) fn arbitrate_with_cam(
                     Reverse(m.rule_idx),
                 ),
                 *m,
+                priority,
+                age,
             )
+        }));
+        if keyed.len() >= PARALLEL_SORT_THRESHOLD {
+            keyed.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        } else {
+            keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        }
+        keyed.drain(..).map(|(_, m, priority, age)| (m, priority, age)).collect()
+    });
+
+    // Оба буфера ниже — из `thread_local!` (см. её doc-комментарий и
+    // doc-комментарий `used_cells` выше про то, почему не поле `Engine`).
+    // `.clear()` в начале, не полагаемся на пустоту с прошлого раза (тот же
+    // принцип, что и у `WriteBuffer`/`VecSink` — самоочищающийся буфер
+    // безопасен по построению, а не по соглашению).
+    USED_CELLS_BUF.with_borrow_mut(|used_cells| {
+        used_cells.clear();
+        AFFECTED_BUF.with_borrow_mut(|affected| {
+            for (m, priority, age) in sorted {
+                // Получаем предвычисленные affected cells из кэша
+                get_match_affected_cells(&m, &head_index, rule_cache, bounds, cam_positions, feedback_counters, affected);
+
+                // Заодно с проверкой конфликта собираем владельцев занятых
+                // клеток -- если хоть один из них равен этому кандидату по
+                // priority/age, его победа была решена НЕ priority/age
+                // (иначе кандидат уже проиграл бы на этом уровне сравнения
+                // ключа сортировки, а не дошёл бы досюда с РАВНЫМИ
+                // priority/age).
+                let mut conflict = false;
+                for coord in affected.iter() {
+                    if let Some(&owner_idx) = used_cells.get(coord) {
+                        conflict = true;
+                        if accepted_priority_age[owner_idx] == (priority, age) {
+                            tie_break_decided.insert(owner_idx);
+                        }
+                    }
+                }
+
+                if !conflict {
+                    let idx = accepted.len();
+                    for &coord in affected.iter() {
+                        used_cells.insert(coord, idx);
+                    }
+                    accepted.push(m);
+                    accepted_priority_age.push((priority, age));
+                }
+            }
+        });
+    });
+
+    let tie_break_decided_keys: TieBreakDecidedWins = tie_break_decided
+        .into_iter()
+        .map(|idx| {
+            let m = &accepted[idx];
+            (m.x, m.y, m.rule_idx)
         })
         .collect();
-    if keyed.len() >= PARALLEL_SORT_THRESHOLD {
-        keyed.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    } else {
-        keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    }
-    let sorted: Vec<RuleMatch> = keyed.into_iter().map(|(_, m)| m).collect();
-
-    // Переиспользуемый буфер вместо свежего Vec на каждый матч (см.
-    // doc-комментарий `get_match_affected_cells`).
-    let mut affected: Vec<(i32, i32)> = Vec::new();
-    for m in sorted {
-        // Получаем предвычисленные affected cells из кэша
-        get_match_affected_cells(&m, rule_index, rule_cache, bounds, cam_positions, feedback_counters, &mut affected);
-        let conflict = affected.iter().any(|coord| used_cells.contains(coord));
-
-        if !conflict {
-            used_cells.extend(affected.iter().copied());
-            accepted.push(m);
-        }
-    }
-
-    accepted
+    (accepted, tie_break_decided_keys)
 }
 
 /// Ниже какого числа матчей разбиение на полосы не окупается — сама
@@ -280,6 +419,8 @@ pub fn arbitrate_spatial(
     reach: i32,
     get_cell_age: impl Fn(usize, usize) -> u32 + Sync,
 ) -> Vec<RuleMatch> {
+    // См. doc-комментарий `arbitrate` про то же самое отбрасывание
+    // `TieBreakDecidedWins` — публичная сигнатура не меняется.
     arbitrate_spatial_with_cam(
         all_matches,
         rule_index,
@@ -292,6 +433,7 @@ pub fn arbitrate_spatial(
         &FeedbackCounters::default(),
         get_cell_age,
     )
+    .0
 }
 
 /// Как [`arbitrate_spatial`], но с картой найденных CAM-позиций — см.
@@ -310,7 +452,7 @@ pub(crate) fn arbitrate_spatial_with_cam(
     starvation_counters: &StarvationCounters,
     feedback_counters: &FeedbackCounters,
     get_cell_age: impl Fn(usize, usize) -> u32 + Sync,
-) -> Vec<RuleMatch> {
+) -> (Vec<RuleMatch>, TieBreakDecidedWins) {
     if all_matches.len() < SPATIAL_THRESHOLD || reach <= 0 {
         return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, get_cell_age);
     }
@@ -339,6 +481,21 @@ pub(crate) fn arbitrate_spatial_with_cam(
         (start, end)
     };
 
+    // `safe_margin = margin + reach`: матч на расстоянии >= safe_margin от
+    // ОБЕИХ границ своей полосы гарантированно НЕ достижим НИКАКИМ
+    // boundary-матчем — худший boundary (dist = margin-1) пишет максимум на
+    // `reach` дальше, т.е. до `margin-1+reach = safe_margin-1` — ровно на
+    // клетку меньше safe_margin (см. развёрнутое обоснование у финального
+    // слияния ниже). Используется ПОСЛЕ арбитража каждой полосы (не для
+    // самого разбиения на core/boundary!) — все core-матчи полосы (и
+    // "глубокие", и "рискованные") ОБЯЗАНЫ арбитрироваться ВМЕСТЕ, в одном
+    // вызове `arbitrate_with_cam` per-полоса, иначе соседние по позиции
+    // (но оба core) матчи одной и той же полосы перестанут сравниваться
+    // друг с другом — именно так была сломана первая версия этого фикса
+    // (разделяла core на safe/at_risk ДО арбитража, x=103/x=104 в одной
+    // полосе перестали друг друга видеть).
+    let safe_margin = margin + reach as u32;
+
     let mut core_by_band: Vec<Vec<RuleMatch>> = (0..num_bands).map(|_| Vec::new()).collect();
     let mut boundary: Vec<RuleMatch> = Vec::new();
 
@@ -358,22 +515,107 @@ pub(crate) fn arbitrate_spatial_with_cam(
     }
 
     // Core-полосы — параллельно (Lemma 6: разные полосы никогда не делят
-    // клетки), каждая через тот же детерминированный тотальный порядок.
-    let core_results: Vec<RuleMatch> = core_by_band
+    // клетки), КАЖДАЯ полоса целиком (safe+at_risk вместе) через тот же
+    // детерминированный тотальный порядок. `map` (не `flat_map`, как
+    // раньше `Vec<RuleMatch>`-версия) -- каждая полоса теперь возвращает
+    // ПАРУ (принятые, tie-break-решённые), и их нужно смержить по
+    // отдельности, а не просто сплющить в общий Vec. Слияние — уже ОДНИМ
+    // потоком, после `.collect()`: `TieBreakDecidedWins` полос не
+    // пересекаются по построению (Lemma 6), так что порядок слияния не важен.
+    let band_results: Vec<(Vec<RuleMatch>, TieBreakDecidedWins)> = core_by_band
         .into_par_iter()
-        .flat_map(|band_matches| {
+        .map(|band_matches| {
             if band_matches.is_empty() {
-                Vec::new()
+                (Vec::new(), FxHashSet::default())
             } else {
                 arbitrate_with_cam(band_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &get_cell_age)
             }
         })
         .collect();
 
-    // Boundary — один общий последовательный проход, как и раньше.
-    let mut result = core_results;
-    result.extend(arbitrate_with_cam(boundary, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &get_cell_age));
-    result
+    // РЕАЛЬНЫЙ БАГ, найден 2026-08-10, исправлен здесь: раньше `core`
+    // (принятые в полосах, параллельно) и `boundary` (арбитрированный
+    // ОТДЕЛЬНО, сам с собой) просто СКЛЕИВАЛИСЬ (`result.extend(...)` для
+    // обоих) — БЕЗ перекрёстной проверки. `margin = 2*reach` доказывает
+    // только "core из РАЗНЫХ полос не пересекаются" (Lemma 6, всё ещё
+    // верно) — про boundary-против-соседнего-core (в том числе того же
+    // самого band'а!) теорема ничего не говорит и не может: boundary-матч
+    // прямо на границе своей зоны (dist = margin-1) физически может писать
+    // ещё на `reach` клеток дальше, вглубь соседней core-зоны (которая
+    // начинается сразу на dist = margin) — ни один конечный margin с этой
+    // простой пороговой схемой (dist >= margin ⟹ core) не может это
+    // исключить в общем случае (доказано конструктивно: worst-case boundary
+    // достигает margin-1+reach, core начинается на margin, и margin-1+reach
+    // >= margin для любого reach >= 1). Конкретный репро:
+    // `tests/property_arbitration.rs`'s
+    // `test_arbitrate_spatial_matches_centralized_recursion_dense_overlapping_writes`
+    // — x=7 (boundary) и x=8 (core), запись обоих по 4 клетки, пересечение
+    // на {8,9,10}, оба были приняты. Раньше не ловилось НИ РАЗУ, потому что
+    // все прежние Lemma-6-тесты писали в одну точку (без сдвигов и без
+    // recursion) — точка не может дотянуться через границу вне
+    // зависимости от margin.
+    //
+    // Фикс: КАЖДАЯ полоса уже арбитрировала СВОЙ ПОЛНЫЙ core-набор целиком
+    // (см. правку выше) — значит матчи одной полосы уже корректно сверены
+    // друг с другом, включая пары вроде x=103/x=104 (оба core одной полосы,
+    // но близко к границе), которые сломала бы предварительная делёжка на
+    // safe/at_risk ДО арбитража. Теперь, из УЖЕ ПРИНЯТЫХ результатов
+    // каждой полосы, делим на `safe_accepted` (>= safe_margin от ОБЕИХ
+    // границ СВОЕЙ полосы — доказанно недостижимы НИКАКИМ boundary-матчем,
+    // см. doc-комментарий `safe_margin` выше) и `at_risk_accepted`
+    // (оставшиеся core-победители, теоретически достижимые boundary).
+    // `safe_accepted` — окончательный, без дальнейших проверок (та часть
+    // выигрыша от параллелизации, которую фикс бага не обязан приносить в
+    // жертву — первая версия фикса сливала ВСЕ core-матчи обратно,
+    // измеренная регрессия ~30-50% на CA-пробке даже для reach=1, где
+    // риска никогда не было). `at_risk_accepted` идёт ОДНИМ дополнительным
+    // проходом `arbitrate_with_cam` вместе с `boundary`, как СЫРЫЕ
+    // кандидаты (уже победившие локально, но не факт, что переживут
+    // встречу с boundary) — тем же детерминированным тотальным порядком.
+    // Lemma 6 гарантирует, что at_risk_accepted-vs-at_risk_accepted (разные
+    // полосы) здесь никогда не найдёт конфликт (это ещё core по ИСХОДНОМУ
+    // определению) — проход тратит на них время впустую, но не портит
+    // результат; единственные РЕАЛЬНЫЕ решения этого прохода —
+    // boundary-vs-at_risk_accepted и boundary-vs-boundary, ровно то, чего
+    // не хватало.
+    //
+    // Остаточный теоретический риск (не закрыт этим фикс: если
+    // at_risk-победитель полосы ПРОИГРЫВАЕТ boundary-конкуренту в финальном
+    // проходе, а внутри его же полосы БЫЛ более слабый кандидат на ТУ ЖЕ
+    // клетку, отвергнутый на этапе локального арбитража полосы — этот
+    // более слабый кандидат уже не переигрывается, хотя в истинном
+    // централизованном порядке мог бы унаследовать клетку. Не воспроизведён
+    // ни на одном property-тесте этой сессии (включая специально
+    // построенный recursion-репро) — но и не доказан невозможным аналитически.
+    let mut safe_accepted: Vec<RuleMatch> = Vec::new();
+    let mut safe_tie_break_decided: TieBreakDecidedWins = FxHashSet::default();
+    let mut at_risk_accepted: Vec<RuleMatch> = Vec::new();
+    for (band, (accepted, tbd)) in band_results.into_iter().enumerate() {
+        let (start, end) = band_range(band);
+        let mut band_safe_keys: TieBreakDecidedWins = FxHashSet::default();
+        for m in accepted {
+            let dist_left = m.x - start;
+            let dist_right = (end - 1).saturating_sub(m.x);
+            if dist_left >= safe_margin && dist_right >= safe_margin {
+                band_safe_keys.insert((m.x, m.y, m.rule_idx));
+                safe_accepted.push(m);
+            } else {
+                at_risk_accepted.push(m);
+            }
+        }
+        safe_tie_break_decided.extend(tbd.into_iter().filter(|key| band_safe_keys.contains(key)));
+    }
+
+    let mut merge_candidates = boundary;
+    merge_candidates.extend(at_risk_accepted);
+    let (merge_accepted, merge_tie_break_decided) =
+        arbitrate_with_cam(merge_candidates, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, get_cell_age);
+
+    let mut result = safe_accepted;
+    result.extend(merge_accepted);
+    safe_tie_break_decided.extend(merge_tie_break_decided);
+
+    (result, safe_tie_break_decided)
 }
 
 /// Приоритет и id правила, сработавшего в данном match'е, — ОДНИМ поиском
@@ -394,10 +636,10 @@ pub(crate) fn arbitrate_spatial_with_cam(
 /// или пока счётчик ниже порога — обычный номинальный `priority`, без изменений.
 fn resolve_sort_fields(
     m: &RuleMatch,
-    rule_index: &HashMap<CellType, Vec<Rule>>,
+    head_index: &HeadRuleIndex,
     starvation_counters: &StarvationCounters,
 ) -> (u32, u32, RuleIdKey) {
-    match rule_index.get(&m.head).and_then(|rules| rules.get(m.rule_idx)) {
+    match lookup_rule(head_index, m.head, m.rule_idx) {
         Some(rule) => {
             let priority = match rule.starvation_after {
                 Some(threshold) if starvation_counters.get(&(m.x, m.y, m.rule_idx)).copied().unwrap_or(0) >= threshold => u32::MAX,
@@ -478,7 +720,7 @@ impl Ord for RuleIdKey {
 /// Буфер переиспользуется вызывающим кодом между итерациями цикла.
 fn get_match_affected_cells(
     m: &RuleMatch,
-    rule_index: &HashMap<CellType, Vec<Rule>>,
+    head_index: &HeadRuleIndex,
     rule_cache: &RuleDataCache,
     bounds: (usize, usize),
     cam_positions: &CamPositions,
@@ -487,7 +729,7 @@ fn get_match_affected_cells(
 ) {
     out.clear();
     let head = m.head;
-    let matched_rule = rule_index.get(&head).and_then(|rules| rules.get(m.rule_idx));
+    let matched_rule = lookup_rule(head_index, head, m.rule_idx);
 
     // CAM-матч БЕЗ `recursion`: точные affected cells — найденная позиция
     // (не консервативный весь-диск из `RuleData::write_cells`, который
@@ -529,15 +771,12 @@ fn get_match_affected_cells(
         Some(rd) => rd,
         None => {
             // Правило не найдено в кэше — в норме недостижимо, т.к.
-            // rule_cache строится из того же rule_index, что передан сюда,
-            // и содержит запись под каждый (head, rule_idx). Консервативный
-            // фолбэк: длина id сработавшего правила (или 1, если и его не
-            // найти) как ширина паттерна вдоль x, как строился bы паттерн
-            // из id по умолчанию (см. `config::load_config`).
-            let id_len = rule_index
-                .get(&head)
-                .and_then(|rules| rules.get(m.rule_idx))
-                .map_or(1, |rule| rule.id.len().max(1));
+            // rule_cache строится из того же rule_index, откуда взят и
+            // `matched_rule`, и содержит запись под каждый (head, rule_idx).
+            // Консервативный фолбэк: длина id сработавшего правила (или 1,
+            // если и его не найти) как ширина паттерна вдоль x, как строился
+            // бы паттерн из id по умолчанию (см. `config::load_config`).
+            let id_len = matched_rule.map_or(1, |rule| rule.id.len().max(1));
             for i in 0..id_len {
                 out.push((m.x as i32 + i as i32, m.y as i32));
             }

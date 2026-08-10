@@ -22,7 +22,7 @@ fn main() {
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(2))],
-        active_only: false, priority: 10, min_age: 3, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 3, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);

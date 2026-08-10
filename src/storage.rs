@@ -1,5 +1,6 @@
 use crate::fast_hash::FxHashMap;
 use crate::types::Cell;
+use serde::{Deserialize, Serialize};
 
 /// Абстракция хранилища ячеек решётки.
 ///
@@ -29,7 +30,7 @@ pub trait GridStorage: Sync {
 ///
 /// Хранит все ячейки в плоском векторе `cells` размером `width × height`.
 /// Индексация: `index = y * width + x`.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct VecStorage {
     /// Плоский вектор всех ячеек решётки.
     pub cells: Vec<Cell>,
@@ -106,15 +107,19 @@ impl GridStorage for VecStorage {
     }
 }
 
-/// Размер чанка в одну сторону (64×64 ячеек).
-const CHUNK_SIZE: usize = 64;
+/// Размер чанка в одну сторону (64×64 ячеек) по умолчанию —
+/// `ChunkStorage::new`. Настраивается через `ChunkStorage::with_chunk_size`
+/// (п.1, сессия 2026-08-09): больше — меньше `HashMap`-записей и накладных
+/// расходов на разреженных мирах с крупными активными областями; меньше —
+/// меньше впустую выделенной памяти на мирах с редкими, мелкими кластерами.
+const DEFAULT_CHUNK_SIZE: usize = 64;
 
 /// Чанк — квадратный блок ячеек фиксированного размера.
 ///
 /// Хранит `Option<Cell>`: `None` для дефолтных ячеек (оптимизация памяти).
 /// `non_default_count` отслеживает количество не-дефолтных ячеек для быстрой
 /// проверки, нужно ли хранить чанк.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Chunk {
     cells: Vec<Option<Cell>>,
     non_default_count: usize,
@@ -122,16 +127,16 @@ struct Chunk {
 
 impl Chunk {
     /// Создать новый пустой чанк (все ячейки `None`).
-    fn new() -> Self {
+    fn new(chunk_size: usize) -> Self {
         Self {
-            cells: vec![None; CHUNK_SIZE * CHUNK_SIZE],
+            cells: vec![None; chunk_size * chunk_size],
             non_default_count: 0,
         }
     }
 
     /// Преобразовать локальные координаты в индекс внутри чанка.
-    fn index(lx: usize, ly: usize) -> usize {
-        ly * CHUNK_SIZE + lx
+    fn index(lx: usize, ly: usize, chunk_size: usize) -> usize {
+        ly * chunk_size + lx
     }
 
     /// Есть ли в чанке хоть одна не-дефолтная ячейка?
@@ -156,7 +161,7 @@ impl Chunk {
 /// Чанки создаются лениво при первом обращении через [`set`](GridStorage::set).
 /// Пустые чанки не хранятся в `HashMap`.
 /// Не-дефолтные ячейки хранятся как `Some(Cell)`, дефолтные — как `None`.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ChunkStorage {
     /// `FxHashMap`, а не стандартный `HashMap` (SipHash) — приватное поле на
     /// горячем пути: КАЖДЫЙ `get`/`set` на этом storage делает lookup по
@@ -164,6 +169,8 @@ pub struct ChunkStorage {
     /// `fast_hash`).
     chunks: FxHashMap<(usize, usize), Chunk>,
     default_cell: Cell,
+    /// Размер чанка в одну сторону — см. doc-комментарий [`DEFAULT_CHUNK_SIZE`].
+    chunk_size: usize,
 }
 
 impl Default for ChunkStorage {
@@ -173,11 +180,20 @@ impl Default for ChunkStorage {
 }
 
 impl ChunkStorage {
-    /// Создать пустое хранилище.
+    /// Создать пустое хранилище с размером чанка по умолчанию
+    /// ([`DEFAULT_CHUNK_SIZE`]).
     pub fn new() -> Self {
+        Self::with_chunk_size(DEFAULT_CHUNK_SIZE)
+    }
+
+    /// Как [`ChunkStorage::new`], но с явным размером чанка вместо
+    /// [`DEFAULT_CHUNK_SIZE`].
+    pub fn with_chunk_size(chunk_size: usize) -> Self {
+        assert!(chunk_size > 0, "ChunkStorage::with_chunk_size: chunk_size должен быть > 0");
         Self {
             chunks: FxHashMap::default(),
             default_cell: Cell::default(),
+            chunk_size,
         }
     }
 
@@ -190,27 +206,28 @@ impl ChunkStorage {
     }
 
     /// Преобразовать глобальные координаты в координаты чанка.
-    fn chunk_coords(x: usize, y: usize) -> (usize, usize) {
-        (x / CHUNK_SIZE, y / CHUNK_SIZE)
+    fn chunk_coords(&self, x: usize, y: usize) -> (usize, usize) {
+        (x / self.chunk_size, y / self.chunk_size)
     }
 
     /// Преобразовать глобальные координаты в локальные внутри чанка.
-    fn local_coords(x: usize, y: usize) -> (usize, usize) {
-        (x % CHUNK_SIZE, y % CHUNK_SIZE)
+    fn local_coords(&self, x: usize, y: usize) -> (usize, usize) {
+        (x % self.chunk_size, y % self.chunk_size)
     }
 
     /// Получить или создать чанк по координатам.
     fn ensure_chunk(&mut self, cx: usize, cy: usize) -> &mut Chunk {
-        self.chunks.entry((cx, cy)).or_insert_with(Chunk::new)
+        let chunk_size = self.chunk_size;
+        self.chunks.entry((cx, cy)).or_insert_with(|| Chunk::new(chunk_size))
     }
 
     /// Заменить содержимое ячейки, проверяя, нужно ли обновить счётчик.
     ///
     /// Возвращает старое значение ячейки (опционально).
     fn replace_cell(&mut self, x: usize, y: usize, cell: Cell) -> Option<Cell> {
-        let (cx, cy) = Self::chunk_coords(x, y);
-        let (lx, ly) = Self::local_coords(x, y);
-        let idx = Chunk::index(lx, ly);
+        let (cx, cy) = self.chunk_coords(x, y);
+        let (lx, ly) = self.local_coords(x, y);
+        let idx = Chunk::index(lx, ly, self.chunk_size);
 
         let chunk = self.ensure_chunk(cx, cy);
 
@@ -240,11 +257,11 @@ impl ChunkStorage {
 
 impl GridStorage for ChunkStorage {
     fn get(&self, x: usize, y: usize) -> Option<&Cell> {
-        let (cx, cy) = Self::chunk_coords(x, y);
-        let (lx, ly) = Self::local_coords(x, y);
+        let (cx, cy) = self.chunk_coords(x, y);
+        let (lx, ly) = self.local_coords(x, y);
 
         if let Some(chunk) = self.chunks.get(&(cx, cy)) {
-            let idx = Chunk::index(lx, ly);
+            let idx = Chunk::index(lx, ly, self.chunk_size);
             if let Some(cell) = &chunk.cells[idx] {
                 return Some(cell);
             }
@@ -266,6 +283,7 @@ impl GridStorage for ChunkStorage {
 
     fn active_cells(&self) -> Box<dyn Iterator<Item = (usize, usize)> + '_> {
         let default = &self.default_cell;
+        let chunk_size = self.chunk_size;
         Box::new(self.chunks.iter().flat_map(move |(&(cx, cy), chunk)| {
             chunk
                 .cells
@@ -274,9 +292,9 @@ impl GridStorage for ChunkStorage {
                 .filter_map(move |(idx, cell)| {
                     cell.as_ref().and_then(|c| {
                         if c.value != default.value || c.born_at != default.born_at {
-                            let lx = idx % CHUNK_SIZE;
-                            let ly = idx / CHUNK_SIZE;
-                            Some((cx * CHUNK_SIZE + lx, cy * CHUNK_SIZE + ly))
+                            let lx = idx % chunk_size;
+                            let ly = idx / chunk_size;
+                            Some((cx * chunk_size + lx, cy * chunk_size + ly))
                         } else {
                             None
                         }

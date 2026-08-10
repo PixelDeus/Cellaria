@@ -108,6 +108,11 @@ struct GpuRule {
     // при `shift_count >= 1`/`>= 2` соответственно.
     shift_broadcast0: u32,
     shift_broadcast1: u32,
+    // `ShiftSpec::keep_source` соответствующего сдвига (1/0) — см.
+    // `GpuMatch::keep_age_mask`'s doc-комментарий и её использование в
+    // detect_pass. Осмыслено только при `shift_count >= 1`/`>= 2`.
+    shift_keep_source0: u32,
+    shift_keep_source1: u32,
     change_count: u32,
     change_dx0: i32,
     change_dy0: i32,
@@ -220,6 +225,20 @@ struct GpuMatch {
     y: u32,
     rule_idx: u32,
     cell_count: u32,
+    // Бит `k` = 1, если `values[k]` НЕ должно сбрасывать `born_at` клетки
+    // `cells[k]` при apply, даже выигрывая арбитраж — единственный
+    // потребитель: `ShiftSpec::keep_source` (см. её doc-комментарий в
+    // `types.rs`, "излучение"). Источник ВСЕГДА входит в `cells[]` (для
+    // конфликта — та же консервативная граница, что и на CPU,
+    // `conflict_analyzer::compute_affected_cells`, независимо от
+    // `keep_source`), но его ЗНАЧЕНИЕ (`me.value`, то есть без изменений) и
+    // этот бит вместе дают ровно то же наблюдаемое поведение, что CPU
+    // `applicator::apply_shift_buffered`: клетка физически не трогается,
+    // просто участвует в арбитраже как занятая. 20 бит достаточно —
+    // `MAX_WRITE_CELLS = 20 ≤ 32`, весь набор умещается в один `u32`,
+    // отдельный array<u32, MAX_WRITE_CELLS> был бы избыточен для одного
+    // bool на слот.
+    keep_age_mask: u32,
     cells: array<u32, MAX_WRITE_CELLS>,
     values: array<u32, MAX_WRITE_CELLS>,
     // 1, если правило ДЕЙСТВИТЕЛЬНО совпало (прошло все проверки pattern/
@@ -648,6 +667,19 @@ fn push_write_cell(m: u32, n: u32, x: i32, y: i32, value: u32) -> u32 {
     return n + 1u;
 }
 
+// Как `push_write_cell`, но дополнительно помечает слот `n` в
+// `keep_age_mask` (см. её doc-комментарий у `GpuMatch`) — ЕДИНСТВЕННЫЙ
+// потребитель: `ShiftSpec::keep_source`'s клетка-источник. Отдельная
+// функция, а не параметр у `push_write_cell`, чтобы не трогать ~15
+// существующих мест вызова ради одного нового.
+fn push_write_cell_keep_age(m: u32, n: u32, x: i32, y: i32, value: u32) -> u32 {
+    if (n >= MAX_WRITE_CELLS) {
+        return n;
+    }
+    matches[m].keep_age_mask = matches[m].keep_age_mask | (1u << n);
+    return push_write_cell(m, n, x, y, value);
+}
+
 // ============================================================================
 // `Rule::recursion` — каскад НЕЗАВИСИМЫХ (не-cam) уровней ВНУТРИ ОДНОГО
 // потока (см. `rule_table::MAX_RECURSION_DEPTH`'s doc-комментарий про то,
@@ -914,6 +946,7 @@ fn detect_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
     // реально ничего туда не пишет из-за overflow), сама цель (несёт
     // head_value) и changes относительно неё, тоже безусловно).
     var n: u32 = 0u;
+    matches[m].keep_age_mask = 0u;
     let shift_count = rules[rule_idx].shift_count;
     let change_count = rules[rule_idx].change_count;
 
@@ -968,35 +1001,55 @@ fn detect_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
         // (второй сдвиг) сюда не относится, `feedback` его в принципе не
         // может иметь.
         //
-        // ВАЖНО (найдено адверсариальным тестом, не сразу очевидно):
-        // сравниваем с `counter + 1`, НЕ с сырым `atomicLoad`. На CPU
-        // (`applicator.rs:342-343`) защёлка инкрементируется в
-        // `run_tick_with_cache` ДО вызова apply (после арбитража, но перед
-        // применением сдвигов), так что `feedback_override` там читает УЖЕ
-        // учитывающее ТЕКУЩИЙ тик значение — детекция этого тика тоже
-        // засчитывается в проверку timeout. Здесь же `feedback_counters[m]`
-        // хранит значение с КОНЦА предыдущего тика (сама защёлка растёт
-        // позже, в `update_feedback_latch_pass`, уже ПОСЛЕ того, как этот
-        // сдвиг посчитан) — без `+1` решение отставало бы от CPU ровно на
-        // один тик (счётчик всегда "не досчитывает" текущую детекцию).
-        // Насыщение (не переполнение через край u32) — та же защита, что и
-        // у `saturating_add` на CPU.
+        // Читаем `feedback_counters[m]` НАПРЯМУЮ, без какой-либо поправки —
+        // тот же приём, что уже используют `starvation_counters` чуть выше:
+        // detect_pass ОБЯЗАН видеть счётчик КАК ОН БЫЛ на конец предыдущего
+        // тика (защёлка растёт позже, в `update_feedback_latch_pass`, уже
+        // ПОСЛЕ apply этого тика) — обнаружение матча В ЭТОМ тике НЕ
+        // засчитывается для решения ЭТОГО же тика, оно станет видимым
+        // только со следующего. CPU (`run_tick_with_cache`) следует ТОЙ ЖЕ
+        // дисциплине — инкремент `feedback_counters` стоит строго ПОСЛЕ
+        // apply, так что оба места (арбитраж и apply) читают ОДИН и тот же
+        // "на начало тика" снимок.
+        //
+        // ИСТОРИЯ (не повторять): более ранняя версия этой строки сравнивала
+        // с `counter + 1`, компенсируя то, что CPU в тот момент инкрементировал
+        // `feedback_counters` МЕЖДУ арбитражем и apply — GPU-сторона была
+        // корректной, а компенсация здесь маскировала неверную семантику
+        // именно на CPU-стороне (обнаружение этим тиком ошибочно засчитывалось
+        // для решения этого же тика — единственное место кодовой базы,
+        // нарушавшее принцип "detect/arbitrate/apply видят один и тот же
+        // снимок состояния на начало тика", уже соблюдаемый `starvation_after`/
+        // `min_age`/`age`). Исправлено на CPU (перенос инкремента после
+        // apply), поправка здесь снята как более не нужная.
         var effective_shift_dx0 = rules[rule_idx].shift_dx0;
         var effective_shift_dy0 = rules[rule_idx].shift_dy0;
-        if (rules[rule_idx].has_feedback == 1u) {
-            let fc = atomicLoad(&feedback_counters[m]);
-            let fc_this_tick = select(fc + 1u, 0xFFFFFFFFu, fc == 0xFFFFFFFFu);
-            if (fc_this_tick >= rules[rule_idx].feedback_timeout) {
-                effective_shift_dx0 = rules[rule_idx].feedback_alt_dx;
-                effective_shift_dy0 = rules[rule_idx].feedback_alt_dy;
-            }
+        if (rules[rule_idx].has_feedback == 1u && atomicLoad(&feedback_counters[m]) >= rules[rule_idx].feedback_timeout) {
+            effective_shift_dx0 = rules[rule_idx].feedback_alt_dx;
+            effective_shift_dy0 = rules[rule_idx].feedback_alt_dy;
         }
         let sx0 = i32(x) + effective_shift_dx0;
         let sy0 = i32(y) + effective_shift_dy0;
         let sx1 = i32(x) + rules[rule_idx].shift_dx1;
         let sy1 = i32(y) + rules[rule_idx].shift_dy1;
 
-        n = push_write_cell(m, n, i32(x), i32(y), params.default_cell_type);
+        // `keep_source`: клетка-источник ВСЕГДА заявляется для арбитража
+        // (та же консервативная граница, что и на CPU, см. её doc-комментарий
+        // у `GpuMatch::keep_age_mask`), но при `keep_source` пишется её ЖЕ
+        // собственное значение (без изменений) и помечается, что при apply
+        // возраст трогать не надо — иначе GPU молодило бы источник каждый
+        // тик, хотя физически ничего не изменилось (то, чего CPU не делает,
+        // см. `applicator::apply_shift_buffered`'s `if !shift.keep_source`).
+        // Если сдвигов два и они расходятся в `keep_source` — очищаем, если
+        // ХОТЬ ОДИН требует очистки (та же семантика, что у CPU: обе
+        // `apply_shift_buffered`-вызова пишут в один и тот же `write_buffer`,
+        // и запись любого сдвига БЕЗ `keep_source` побеждает).
+        let all_shifts_keep_source = (rules[rule_idx].shift_keep_source0 == 1u) && (shift_count < 2u || rules[rule_idx].shift_keep_source1 == 1u);
+        if (all_shifts_keep_source) {
+            n = push_write_cell_keep_age(m, n, i32(x), i32(y), me.value);
+        } else {
+            n = push_write_cell(m, n, i32(x), i32(y), params.default_cell_type);
+        }
 
         // Путь сдвига: обычный сдвиг пишет РОВНО конечную точку (телепорт);
         // broadcast (`ShiftSpec::broadcast`, см. её doc-комментарий в
@@ -1226,6 +1279,11 @@ fn apply_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
     let winner = atomicLoad(&claims[pi]);
     let cell_count = matches[winner].cell_count;
     var value = current[i].value;
+    // Вместе со `value` — бит "не сбрасывать возраст" (см.
+    // `GpuMatch::keep_age_mask`'s doc-комментарий) у ТОЙ ЖЕ, последней по
+    // порядку записи, что определила `value` — та же "последняя побеждает"
+    // семантика, что и у `value` ниже, применённая заодно и к этому флагу.
+    var keep_age = false;
     // БЕЗ break: если несколько записей матча целятся в одну и ту же
     // ячейку (например, 2+ `changes` на одном смещении, или change,
     // совпавший со своей же shift-целью), побеждает ПОСЛЕДНЯЯ по порядку
@@ -1236,11 +1294,20 @@ fn apply_pass(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var k: u32 = 0u; k < cell_count; k = k + 1u) {
         if (matches[winner].cells[k] == pi) {
             value = matches[winner].values[k];
+            keep_age = (matches[winner].keep_age_mask & (1u << k)) != 0u;
         }
     }
     var out: Cell;
     out.value = value;
-    out.born_at = params.generation + 1u;
+    if (keep_age) {
+        // `ShiftSpec::keep_source` — клетка выиграла арбитраж, но физически
+        // не изменилась (см. `push_write_cell_keep_age`), значит и возраст
+        // не должен сбрасываться — зеркалит CPU, где `apply_shift_buffered`
+        // при `keep_source` вообще не трогает исходную клетку.
+        out.born_at = current[i].born_at;
+    } else {
+        out.born_at = params.generation + 1u;
+    }
     next[i] = out;
 }
 

@@ -32,7 +32,7 @@ fn make_rule(
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }
 }
 
@@ -475,6 +475,7 @@ fn test_feedback_conflict_only_visible_via_alternate_direction_union() {
         feedback: Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down }),
         recursion: None,
         memory: None,
+        max_activations: None,
     };
     // Правило B: статичное self-change, без сдвигов — пишет только в (0,0)
     // ОТНОСИТЕЛЬНО СЕБЯ. Размещено (в терминах относительного офсета,
@@ -493,7 +494,7 @@ fn test_feedback_conflict_only_visible_via_alternate_direction_union() {
         cam: None,
         tie_break: 0,
         starvation_after: None,
-        feedback: None, recursion: None, memory: None,
+        feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let graph = ConflictGraph::build(&[rule_a, rule_b]);
@@ -504,4 +505,53 @@ fn test_feedback_conflict_only_visible_via_alternate_direction_union() {
 Рёбра: {:?}",
         graph.edges
     );
+}
+
+// ========================================================================
+// analyze_conflicts / ConflictReport (п.4, сессия 2026-08-09) — тот же
+// вопрос, что ConflictGraph::build, но на уровне rule_index конфига, с
+// ответом в человекочитаемых (голова, локальный индекс) вместо плоских
+// индексов ConflictGraph.
+// ========================================================================
+
+#[test]
+fn test_analyze_conflicts_conflict_free_reports_empty() {
+    let (_, rule_index) = crate::config::load_config("configs/parallel.yaml")
+        .unwrap_or_else(|e| panic!("Не удалось загрузить parallel.yaml: {}", e));
+    let report = analyze_conflicts(&rule_index);
+    assert!(
+        report.is_conflict_free(),
+        "parallel.yaml: отчёт должен быть пуст, но получено: {:?}",
+        report.conflicts
+    );
+}
+
+#[test]
+fn test_analyze_conflicts_maps_flat_indices_back_to_head_and_local_idx() {
+    // conflict.yaml: голова 1 (правило [1,2]) и голова 3 (правило [3,4]) —
+    // ровно по одному правилу на голову, так что оба должны получить
+    // rule_idx=0, а не сырой плоский индекс ConflictGraph. ConflictGraph
+    // также проверяет каждое правило само на себя (см. doc-комментарий
+    // `ConflictGraph::build`), так что помимо кросс-головной пары 1<->3 в
+    // отчёте ожидаются ещё и две self-пары (1,1) и (3,3) — тест ищет именно
+    // кросс-головную пару, а не требует, чтобы она была единственной.
+    let (_, rule_index) = crate::config::load_config("configs/conflict.yaml")
+        .unwrap_or_else(|e| panic!("Не удалось загрузить conflict.yaml: {}", e));
+    let report = analyze_conflicts(&rule_index);
+    assert!(
+        !report.is_conflict_free(),
+        "conflict.yaml: отчёт не должен быть пуст"
+    );
+    let cross_head = report.conflicts.iter().find(|p| p.head_a != p.head_b);
+    let pair = cross_head.unwrap_or_else(|| {
+        panic!("ожидалась кросс-головная конфликтующая пара (1<->3), получено: {:?}", report.conflicts)
+    });
+    let heads: (CellType, CellType) = (pair.head_a, pair.head_b);
+    assert!(
+        heads == (CellType(1), CellType(3)) || heads == (CellType(3), CellType(1)),
+        "ожидались головы 1 и 3, получено: {:?}",
+        pair
+    );
+    assert_eq!(pair.rule_idx_a, 0, "у каждой головы ровно одно правило — локальный индекс обязан быть 0: {:?}", pair);
+    assert_eq!(pair.rule_idx_b, 0, "у каждой головы ровно одно правило — локальный индекс обязан быть 0: {:?}", pair);
 }

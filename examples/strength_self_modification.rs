@@ -70,7 +70,7 @@ fn main() {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             }],
         );
     }
@@ -82,14 +82,14 @@ fn main() {
     println!(
         "До передачи: правило для типа {} существует? {}\n",
         TARGET_ID,
-        engine.rule_index.contains_key(&CellType(TARGET_ID))
+        engine.rule_index().contains_key(&CellType(TARGET_ID))
     );
 
     let mut was_installed = false;
     for tick in 1..=100u32 {
         engine.run_tick();
 
-        let now_installed = engine.rule_index.contains_key(&CellType(TARGET_ID));
+        let now_installed = engine.rule_index().contains_key(&CellType(TARGET_ID));
         if now_installed && !was_installed {
             println!(
                 "тик {:>2}: правило для типа {} появилось в rule_index — решётка сама его сгенерировала и передала, run_tick сам его подхватил, без единой внешней строчки между тиками",

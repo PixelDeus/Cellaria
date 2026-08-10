@@ -261,3 +261,37 @@ fn test_chunk_storage_write_and_clear_chunk() {
     // Чанк должен быть удалён из HashMap (пустой чанк не хранится)
     assert_eq!(storage.chunks.len(), 0, "Empty chunk should be removed from HashMap");
 }
+
+#[test]
+fn test_chunk_storage_with_chunk_size_splits_at_custom_boundary() {
+    // chunk_size=4 (не 64 по умолчанию) — (0,0) и (4,0) обязаны попасть в
+    // РАЗНЫЕ чанки, хотя с дефолтным размером оба сидели бы в одном и том же
+    // чанке (0,0). Если бы `ensure_chunk`/`chunk_coords`/`local_coords`
+    // где-то забыли о `self.chunk_size` и продолжали молча использовать
+    // `DEFAULT_CHUNK_SIZE`, этот тест не заметил бы разницы — именно
+    // поэтому проверка идёт по факту разбиения на чанки, а не только по
+    // значениям get().
+    let mut storage = ChunkStorage::with_chunk_size(4);
+    storage.set(0, 0, Cell { value: CellValue(CellType(1)), born_at: 0 });
+    storage.set(4, 0, Cell { value: CellValue(CellType(2)), born_at: 0 });
+
+    assert_eq!(storage.get(0, 0).unwrap().value, CellValue(CellType(1)));
+    assert_eq!(storage.get(4, 0).unwrap().value, CellValue(CellType(2)));
+    assert_eq!(
+        storage.chunks.len(),
+        2,
+        "с chunk_size=4 клетки (0,0) и (4,0) обязаны попасть в разные чанки"
+    );
+
+    // А (0,0) и (3,0) — ещё внутри одного и того же 4×4 чанка.
+    storage.set(3, 0, Cell { value: CellValue(CellType(3)), born_at: 0 });
+    assert_eq!(
+        storage.chunks.len(),
+        2,
+        "(3,0) должна лечь в тот же чанк, что и (0,0) — размер чанка всё ещё 4"
+    );
+    assert_eq!(storage.get(3, 0).unwrap().value, CellValue(CellType(3)));
+
+    let active: std::collections::HashSet<_> = storage.active_cells().collect();
+    assert_eq!(active, std::collections::HashSet::from([(0, 0), (4, 0), (3, 0)]));
+}

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc db0b665821593dc94a86b45c289c158da88386560a18cb5a90e44e6dd53936a3 # shrinks to rule_index = {CellType(1): [Rule { id: [CellType(1)], pattern: [], shifts: [[ShiftSpec { direction: Up, steps: 1, broadcast: false, keep_source: false }]], changes: [], active_only: false, priority: 1, min_age: 0, overflow: Discard, cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None }]}, cells = [(2, 0, 1), (0, 0, 1)], ticks = 1
+cc d2a1f06463eb9eae3b4f133af476c55236749c005bf63c31cd040aae552efaa8 # shrinks to rule_index = {CellType(1): [Rule { id: [CellType(1)], pattern: [], shifts: [[ShiftSpec { direction: Up, steps: 1, broadcast: false, keep_source: false }]], changes: [], active_only: false, priority: 5, min_age: 0, overflow: Discard, cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None }]}, cells = [(1, 5, 1), (1, 4, 2), (3, 5, 1), (0, 4, 2), (5, 3, 2)], ticks_before = 4, ticks_after = 4

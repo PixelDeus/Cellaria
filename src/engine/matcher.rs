@@ -250,47 +250,38 @@ pub(crate) fn detect_matches_with_group_data<S: GridStorage + Sync>(
     let bounds = grid.storage.bounds();
     let default_cell = Cell::default();
 
-    // Отфильтровываем клетки, чей тип вообще не имеет привязанных правил.
-    // Раньше это делал `cells_by_type` (группировка по head-типу): клетки
-    // без своей группы правил никогда не попадали в основной цикл. Без этого
-    // шага параллельная фаза ниже проходила бы по ВСЕМ активным клеткам —
-    // включая заведомо нерелевантные (например, "чужой" тип в шахматном
-    // паттерне 1A: половина активных клеток вообще не может ни с чем
-    // совпасть, но раньше на них тратился полный проход с поиском в
-    // group_data и загрузкой ячейки).
+    // Отфильтровываем клетки, чей тип вообще не имеет привязанных правил, —
+    // ПРЯМО ВНУТРИ прохода ниже, а не отдельным `filter().collect()` до него
+    // (как было раньше). Раньше это был отдельный проход (изначально —
+    // `cells_by_type`, группировка по head-типу; клетки без своей группы
+    // правил никогда не попадали в основной цикл), затем — отдельный
+    // `par_iter().filter().collect()` перед `fold`. Замер (сессия
+    // 2026-08-09, список "вопросы" п.1): слияние в один проход даёт ~37-43%
+    // на 300×300 (и на сценарии с большой долей нерелевантных клеток типа
+    // шахматки 1A, и на сценарии с полностью релевантными) — сама проверка
+    // типа не становится дешевле, но пропадает ВТОРОЙ rayon dispatch/reduce
+    // и промежуточная `Vec<(usize,usize)>` под отфильтрованный список,
+    // которых при слиянии просто нет.
     //
-    // Ниже PARALLEL_THRESHOLD — обычный последовательный итератор: сам rayon
-    // par_iter().filter().collect() над горсткой элементов уже стоит дороже,
-    // чем последовательный проход по ней целиком.
-    let relevant_cells: Vec<(usize, usize)> = if active_coords.len() >= PARALLEL_THRESHOLD {
-        active_coords
-            .par_iter()
-            .copied()
-            .filter(|&(cx, cy)| {
-                grid.get_cell(cx, cy)
-                    .map_or(false, |c| group_data.contains_key(&c.value.0))
-            })
-            .collect()
-    } else {
-        active_coords
-            .iter()
-            .copied()
-            .filter(|&(cx, cy)| {
-                grid.get_cell(cx, cy)
-                    .map_or(false, |c| group_data.contains_key(&c.value.0))
-            })
-            .collect()
+    // Порог параллелизации теперь только один — по `active_coords.len()`
+    // (раньше проверялся дважды: до фильтра и после) — раз проверка
+    // релевантности уже не отдельный проход, применять порог к
+    // "уже отфильтрованному" списку было бы нечем: он не существует отдельно.
+    let is_relevant = |&(cx, cy): &(usize, usize)| -> bool {
+        grid.get_cell(cx, cy).map_or(false, |c| group_data.contains_key(&c.value.0))
     };
 
-    if relevant_cells.len() >= PARALLEL_THRESHOLD {
-        relevant_cells
+    if active_coords.len() >= PARALLEL_THRESHOLD {
+        active_coords
             .par_iter()
             .fold(
                 // Аккумулятор на rayon-поток: (переиспользуемый буфер "хвоста"
                 // кэша соседей >8 ячеек, накопленные матчи).
                 || (Vec::<CellType>::new(), Vec::<RuleMatch>::new()),
-                |(mut cache_overflow, mut local_matches), &(cx, cy)| {
-                    match_cell(grid, group_data, bounds, default_cell, cx, cy, &mut cache_overflow, &mut local_matches);
+                |(mut cache_overflow, mut local_matches), coord @ &(cx, cy)| {
+                    if is_relevant(coord) {
+                        match_cell(grid, group_data, bounds, default_cell, cx, cy, &mut cache_overflow, &mut local_matches);
+                    }
                     (cache_overflow, local_matches)
                 },
             )
@@ -308,8 +299,10 @@ pub(crate) fn detect_matches_with_group_data<S: GridStorage + Sync>(
         // на последовательный не может повлиять на результат.
         let mut cache_overflow = Vec::new();
         let mut local_matches = Vec::new();
-        for &(cx, cy) in &relevant_cells {
-            match_cell(grid, group_data, bounds, default_cell, cx, cy, &mut cache_overflow, &mut local_matches);
+        for coord @ &(cx, cy) in active_coords.iter() {
+            if is_relevant(coord) {
+                match_cell(grid, group_data, bounds, default_cell, cx, cy, &mut cache_overflow, &mut local_matches);
+            }
         }
         local_matches
     }

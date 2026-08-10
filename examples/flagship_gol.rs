@@ -83,7 +83,7 @@ fn build_gol_rules() -> Vec<Rule> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             });
         }
     }

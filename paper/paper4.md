@@ -259,7 +259,35 @@ adversarial test (`test_feedback_conflict_only_visible_via_alternate_direction_u
 never overlap, but whose *alternate*-direction footprint does — asserts
 `ConflictGraph::build` finds the edge. GPU rejects `feedback` rules
 outright (`GpuUnsupportedReason::FeedbackUnsupported`), same policy as
-`starvation_after`.
+`starvation_after`. *(Status note added 2026-08-08: `feedback` was later
+ported to GPU too — see the correction below and §11 for the current,
+much wider GPU-supported subset; this section's "GPU rejects `feedback`
+outright" is historical, not current.)*
+
+**Correction (2026-08-08): "the one actually-realized value" above was not
+actually true from this section's original writing (2026-07-31) until
+2026-08-08.** `get_match_affected_cells` (arbitration's read) and
+`applicator::apply_rule_buffered`'s `feedback_override` (apply's read) both
+decide the effective direction from `feedback_counters`, but the counter's
+own increment sat *between* the two reads — arbitration saw the value from
+before this tick's own detection, apply saw it already incremented. On the
+one tick a match's counter crosses `timeout`, the two reads could disagree
+about which direction was "the one actually-realized value," so arbitration
+could reserve/check conflicts for one direction while apply silently wrote
+to the other — a cell arbitration never verified against other accepted
+matches. Found via a GPU-vs-CPU parity test (an independently-built,
+differently-structured implementation disagreeing with this one), not by
+inspection of this proof. The counter now increments strictly *after* apply
+(mirroring `starvation_counters`, whose own read/update was correct from
+the start — see its paragraph above), so detect/arbitrate/apply all see the
+counter exactly as it stood at the *start* of the tick, the same discipline
+`age`/`min_age` already use for grid state — this tick's own detection
+becomes visible starting the *next* tick, not this one. The Lemma 4
+theorem itself (the union-bound argument two paragraphs up) was never
+affected — it reasons about the conservative *static* bound, which is
+sound regardless of which mode is realized at runtime; only this section's
+prose describing the *exact, per-tick* computation overclaimed a
+consistency that the implementation didn't yet have.
 
 **Design note carried over from the block-F discussion, confirmed
 unchanged:** the "success" condition (e.g. target reached) is *not* part

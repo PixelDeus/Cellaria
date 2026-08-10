@@ -128,6 +128,9 @@ struct YamlRule {
     /// Память по последовательности прошлых наблюдений — см. `Rule::memory`.
     #[serde(default)]
     memory: Option<YamlMemory>,
+    /// Бюджет срабатываний — см. `Rule::max_activations`.
+    #[serde(default)]
+    max_activations: Option<u32>,
 }
 
 /// YAML-формат начальной ячейки.
@@ -157,9 +160,25 @@ struct YamlGrid {
     boundaries: Option<Vec<YamlBoundary>>,
 }
 
+/// Текущая поддерживаемая версия формата конфига. Растёт только при
+/// реально несовместимом изменении формата (не при добавлении новых
+/// опциональных полей с `#[serde(default)]` — те уже обратно совместимы
+/// без версии, см. `YamlRule::max_activations` и остальные расширения
+/// этой сессии).
+const SUPPORTED_CONFIG_VERSION: u32 = 1;
+
 /// YAML-формат конфигурации.
 #[derive(Debug, Deserialize)]
 struct YamlConfig {
+    /// `#[serde(default)]`, а не обязательное поле — конфиги, написанные
+    /// ДО появления версионирования, не указывают его вовсе; отсутствие
+    /// трактуется как версия 1 (см. `load_config`), а не как ошибка.
+    /// Намеренно НЕ участвует в отдельной проверке "поле обязано
+    /// присутствовать" — цель версии в том, чтобы будущий формат МОГ
+    /// отличить себя от текущего, а не в том, чтобы наказывать
+    /// существующие конфиги за то, что их написали раньше этой сессии.
+    #[serde(default)]
+    version: Option<u32>,
     grid: YamlGrid,
     rules: Vec<YamlRule>,
 }
@@ -323,8 +342,25 @@ pub type RuleIndex = HashMap<CellType, Vec<Rule>>;
 
 pub fn load_config(path: &str) -> ConfigResult {
     let content = fs::read_to_string(path)?;
-    let yaml: YamlConfig = serde_yaml::from_str(&content)
+    load_config_str(&content)
+}
+
+/// Собственно разбор — вынесен из [`load_config`] отдельной функцией,
+/// принимающей уже прочитанное содержимое, а не путь к файлу: тестам
+/// проверки версии не нужен реальный файл на диске ради пары строк YAML.
+fn load_config_str(content: &str) -> ConfigResult {
+    let yaml: YamlConfig = serde_yaml::from_str(content)
         .map_err(|e| CellariaError::Config(format!("YAML parse error: {}", e)))?;
+    // `unwrap_or(1)` -- отсутствие поля `version` в конфиге, написанном до
+    // версионирования, ЭКВИВАЛЕНТНО версии 1, не ошибка (см. её
+    // doc-комментарий у `YamlConfig::version`).
+    let config_version = yaml.version.unwrap_or(1);
+    if config_version != SUPPORTED_CONFIG_VERSION {
+        return Err(CellariaError::Config(format!(
+            "unsupported config version {config_version} (this build supports version {SUPPORTED_CONFIG_VERSION}) -- \
+             if this config was written for a newer Cellaria, upgrade; if older, a migration may be needed"
+        )));
+    }
     let yg = yaml.grid;
 
     // Собираем начальные активные координаты
@@ -576,6 +612,7 @@ pub fn load_config(path: &str) -> ConfigResult {
                 None => None,
             },
             memory: yr.memory.map(build_memory_spec).transpose()?,
+            max_activations: yr.max_activations,
         });
     }
 
@@ -632,6 +669,33 @@ mod tests {
     fn test_load_config_invalid_path() {
         let result = load_config("nonexistent.yaml");
         assert!(result.is_err(), "Should fail for nonexistent file");
+    }
+
+    const MINIMAL_CONFIG_BODY: &str = "\ngrid:\n  width: 2\n  height: 2\n  default_cell_type: 0\n  initial_cells: []\nrules: []\n";
+
+    #[test]
+    fn test_load_config_missing_version_is_accepted_as_v1() {
+        // Конфиги, написанные ДО версионирования, не должны сломаться --
+        // отсутствие `version` эквивалентно версии 1.
+        let result = load_config_str(MINIMAL_CONFIG_BODY);
+        assert!(result.is_ok(), "config without a version field must load: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_load_config_explicit_supported_version_is_accepted() {
+        let content = format!("version: {SUPPORTED_CONFIG_VERSION}{MINIMAL_CONFIG_BODY}");
+        assert!(load_config_str(&content).is_ok());
+    }
+
+    #[test]
+    fn test_load_config_rejects_unsupported_version() {
+        let content = format!("version: 999{MINIMAL_CONFIG_BODY}");
+        let Err(err) = load_config_str(&content) else {
+            panic!("expected an error for unsupported config version 999");
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("999"), "error must mention the unsupported version: {msg}");
+        assert!(msg.contains(&SUPPORTED_CONFIG_VERSION.to_string()), "error must mention the supported version: {msg}");
     }
 
     #[test]

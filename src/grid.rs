@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use serde::{Deserialize, Serialize};
+
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::storage::GridStorage;
 use crate::types::{BoundaryBuffer, Cell};
@@ -41,7 +43,15 @@ use crate::types::{BoundaryBuffer, Cell};
 /// точка мутации значения ячейки в кодовой базе (см. его doc-комментарий),
 /// поэтому хук здесь ловит абсолютно любое изменение независимо от вызывающего
 /// кода (apply_matches, apply_input, ручная загрузка конфига, тесты).
-#[derive(Clone)]
+/// `Serialize`/`Deserialize` — для [`crate::engine::EngineSnapshot`]
+/// (сохранение/восстановление состояния симуляции). Явный `bound` нужен
+/// потому, что derive иначе требовал бы `S: GridStorage` САМ реализовывал
+/// `Serialize`/`Deserialize` только когда это фактически нужно (то есть при
+/// сериализации конкретного `Grid<S>`), а не как часть трейта `GridStorage`
+/// вообще — `GridStorage` не требует этого от всех реализаций, только от
+/// тех, что реально сериализуются.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
 pub struct Grid<S: GridStorage> {
     /// Внутреннее хранилище.
     pub storage: S,

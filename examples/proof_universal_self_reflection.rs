@@ -49,7 +49,7 @@ fn build_universal_machine() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(0), // неси своё значение как есть
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }]);
     }
     idx.insert(CellType(255), vec![Rule {
@@ -58,7 +58,7 @@ fn build_universal_machine() -> HashMap<CellType, Vec<Rule>> {
         overflow: OverflowAction::WriteLiteral(0), // единственный, кому нужен буквальный 0
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }]);
     idx
 }
@@ -103,7 +103,7 @@ fn main() {
          (тип {} тоже используется как обычный носитель байта; после установки R оно будет\n\
          замещено настоящим поведением R — это ожидаемо, не ошибка): {:?}\n",
         target_id, target_id,
-        engine.rule_index.get(&CellType(target_id)).and_then(|v| v.first())
+        engine.rule_index().get(&CellType(target_id)).and_then(|v| v.first())
     );
 
     let mut rule_store = RuleStore::new();
@@ -148,16 +148,15 @@ fn main() {
         }
         if installed {
             for (k, v) in rule_store.get_index() {
-                engine.rule_index.insert(*k, v.clone());
+                engine.set_rules_for_head(*k, v.clone());
             }
-            engine.rebuild_rule_cache();
             break;
         }
     }
 
     println!("Ошибок декодирования протокола: {}\n", rule_store.error_stats());
 
-    match engine.rule_index.get(&CellType(target_id)).and_then(|v| v.first()) {
+    match engine.rule_index().get(&CellType(target_id)).and_then(|v| v.first()) {
         Some(rule) => {
             let ok = rule.priority == priority as u32
                 && rule.shifts == vec![vec![ShiftSpec::new(Direction::Up, steps as u16)]]

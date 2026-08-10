@@ -1,3 +1,4 @@
+use cellaria::conflict_analyzer::analyze_conflicts;
 use cellaria::config::load_config;
 use cellaria::engine::Engine;
 use cellaria::render::{render_grid, render_grid_json};
@@ -44,6 +45,18 @@ fn main() {
             engine.grid().width(),
             engine.grid().height()
         );
+        let report = analyze_conflicts(engine.rule_index());
+        if report.is_conflict_free() {
+            println!("CF: арбитраж не нужен (конфликтов между правилами не обнаружено)");
+        } else {
+            println!("Обнаружены потенциальные конфликты правил ({}):", report.conflicts.len());
+            for pair in &report.conflicts {
+                println!(
+                    "  {:?}[{}] <-> {:?}[{}]",
+                    pair.head_a, pair.rule_idx_a, pair.head_b, pair.rule_idx_b
+                );
+            }
+        }
         println!();
         println!("Тик 0:");
         render_grid(engine.grid());

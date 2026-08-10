@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3de2ad7c6f1eb92e15b5cd974b202596fdb5b0cfa8f2ba0b9abb82af82148c1b # shrinks to rules = [Rule { id: [CellType(1)], pattern: [(0, 0, CellType(1))], shifts: [[ShiftSpec { direction: Down, steps: 1, broadcast: false, keep_source: false }]], changes: [], active_only: false, priority: 0, min_age: 0, overflow: Discard, cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None }], cells = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]

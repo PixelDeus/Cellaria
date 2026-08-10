@@ -129,7 +129,7 @@ fn rule_strategy() -> impl Strategy<Value = Rule> {
                 overflow,
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             }
         })
 }
@@ -600,7 +600,7 @@ fn conflict_cluster_rule_index(m: usize) -> (HashMap<CellType, Vec<Rule>>, cella
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         })
         .collect();
     let rule_index = make_rule_index(&rules);
@@ -666,4 +666,189 @@ fn test_arbitrate_spatial_matches_centralized_dense_adjacent_clusters() {
 
     assert_eq!(centralized.len(), spatial.len());
     assert_eq!(centralized_set, spatial_set, "плотная упаковка (много boundary-матчей) не должна расходиться с централизованным арбитражем");
+}
+
+/// Lemma 6 (спатиальная декомпозиция арбитража) доказана для модели БЕЗ
+/// `recursion` — эта дыра не была закрыта эмпирически ни разу: обе функции
+/// выше используют `pattern`-only правила, `recursion: None` жёстко зашит
+/// (см. `conflict_cluster_rule_index`). `recursion` расширяет РЕАЛЬНУЮ
+/// зону записи матча за пределы одного affected-региона (каскад
+/// `k=1..=max_depth`), а `arbitrate_spatial`'s `margin = 2*reach` обязан
+/// это учитывать — теоретически ЧЕРЕЗ `RuleData::write_cells` (union дисков
+/// всех уровней каскада, см. `compute_rule_data`), практически — никогда не
+/// проверено на большом (>SPATIAL_THRESHOLD) наборе матчей, где boundary-путь
+/// вообще запускается. `reach` здесь — НЕ константа "1", а вычислен из
+/// РЕАЛЬНОГО `RuleData::bbox` (та же формула, что `Engine::max_affected_radius`
+/// в mod.rs) — тест проверяет саму АЛГОРИТМИЧЕСКУЮ корректность band-split
+/// при данном (корректном) reach, не корректность вычисления reach как
+/// такового.
+fn recursion_cluster_rule_index(m: usize, max_depth: u8) -> (HashMap<CellType, Vec<Rule>>, cellaria::conflict_analyzer::RuleDataCache) {
+    let rules: Vec<Rule> = (0..m)
+        .map(|i| Rule {
+            id: vec![CellType(1)],
+            pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(2))],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal((i % 250 + 1) as u8))],
+            active_only: false,
+            priority: i as u32,
+            min_age: 0,
+            overflow: OverflowAction::Discard,
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: Some(cellaria::types::RecursionSpec { max_depth, direction: Direction::Right }),
+            memory: None,
+            max_activations: None,
+        })
+        .collect();
+    let rule_index = make_rule_index(&rules);
+    let rule_cache = build_rule_data_cache(&rule_index);
+    (rule_index, rule_cache)
+}
+
+/// Реальный `reach` из `RuleData::bbox` — та же формула, что
+/// `compute_conflict_partners` в `mod.rs` использует для
+/// `Engine::max_affected_radius`, воспроизведена здесь напрямую (тест не
+/// имеет доступа к `pub(crate)`-функции), чтобы не полагаться на угаданное
+/// число.
+fn max_reach_from_cache(rule_cache: &cellaria::conflict_analyzer::RuleDataCache) -> i32 {
+    rule_cache
+        .iter()
+        .filter_map(|opt| opt.as_ref())
+        .flat_map(|rules| rules.iter())
+        .map(|data| {
+            let (min_x, max_x, min_y, max_y) = data.bbox;
+            min_x.unsigned_abs().max(max_x.unsigned_abs()).max(min_y.unsigned_abs()).max(max_y.unsigned_abs()) as i32
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn test_arbitrate_spatial_matches_centralized_recursion_isolated_clusters() {
+    const MAX_DEPTH: u8 = 3;
+    let (rule_index, rule_cache) = recursion_cluster_rule_index(5, MAX_DEPTH);
+    let reach = max_reach_from_cache(&rule_cache);
+    assert!(reach > 1, "recursion must genuinely widen the reach beyond the pattern's own 1 -- otherwise this test isn't exercising recursion's extra margin at all");
+
+    const N_CLUSTERS: u32 = 1500;
+    let spacing = (reach as u32) * 1000; // намного больше 2*reach -- кластеры гарантированно независимы
+    let mut matches: Vec<RuleMatch> = Vec::new();
+    for cluster in 0..N_CLUSTERS {
+        let x = cluster * spacing;
+        for rule_idx in 0..5usize {
+            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+        }
+    }
+
+    let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(2654435761) % 7;
+
+    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
+    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
+
+    let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+    let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+
+    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+    assert_eq!(centralized_set, spatial_set, "разбиение на полосы с recursion-расширенным reach должно принимать РОВНО ТЕ ЖЕ матчи, что централизованный арбитраж");
+    assert_eq!(spatial.len() as u32, N_CLUSTERS, "должен победить ровно один матч на кластер");
+}
+
+#[test]
+fn test_arbitrate_spatial_matches_centralized_recursion_dense_overlapping_writes() {
+    // В отличие от изолированных кластеров выше (spacing >> reach — соседние
+    // кластеры НИКОГДА физически не пересекаются, каким бы ни был margin, а
+    // значит и не проверяют его корректность вообще — обнаружено эмпирически
+    // при попытке сабо­тажа margin, который ни isolated, ни первоначальный
+    // dense (spacing=2*reach, тот же недостаток) вариант не ловили): здесь
+    // анкоры стоят ВПЛОТНУЮ (spacing=1) вдоль всей линии — recursion-запись
+    // каждого анкора (расширенная на `reach` клеток) физически ПЕРЕСЕКАЕТСЯ
+    // с записью нескольких соседних анкоров. Это создаёт РЕАЛЬНУЮ
+    // конкуренцию через границы будущих полос band-split, а не только
+    // формальное попадание в boundary-класс без физических последствий —
+    // именно тот сценарий, где заниженный/неверный margin реально дал бы
+    // spatial != centralized. Полностью аналогично методологии, уже
+    // применённой в этой сессии к CA-"пробке" (сплошной, не изолированный
+    // конфликт).
+    const MAX_DEPTH: u8 = 3;
+    let (rule_index, rule_cache) = recursion_cluster_rule_index(3, MAX_DEPTH);
+    let reach = max_reach_from_cache(&rule_cache);
+    assert!(reach > 1, "recursion must genuinely widen the reach beyond the pattern's own 1");
+
+    const N_ANCHORS: u32 = 3000;
+    let mut matches: Vec<RuleMatch> = Vec::new();
+    for x in 0..N_ANCHORS {
+        for rule_idx in 0..3usize {
+            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+        }
+    }
+
+    let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(40503) % 5;
+
+    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
+    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
+
+    let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+    let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+
+    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+    assert_eq!(centralized_set, spatial_set, "плотная упаковка recursion-матчей не должна расходиться с централизованным арбитражем");
+}
+
+/// Тот же класс стресс-теста, что нашёл реальный баг boundary-vs-core (см.
+/// CHANGELOG `[0.7.0] / Fixed`), но для ОБЫЧНОГО сдвига (`shifts`, без
+/// `recursion`, без `cam`) — САМОГО распространённого случая, который
+/// НИ РАЗУ не проверялся так до сегодня: `conflict_cluster_rule_index`
+/// (тесты выше) всегда использовал `shifts: vec![]`. CA-"пробка"
+/// (`300×300`, сплошной сдвиг вправо), которую эта сессия гоняла весь день
+/// ради замеров производительности (`Engine::run_tick_profiled`), легко
+/// превышает `SPATIAL_THRESHOLD=4096` матчей за тик — но НИ РАЗУ не
+/// сверялась с централизованным эталоном, только замерялось время. Этот
+/// тест — прямая, целенаправленная проверка именно этого пробела.
+#[test]
+fn test_arbitrate_spatial_matches_centralized_plain_shift_dense_overlapping_writes() {
+    // Анкоры вплотную (spacing=1), каждый сдвигается на 1 клетку вправо —
+    // write_cells = {source(0,0), target(1,0)}, bbox даёт reach=1. Anchor
+    // x пишет {x,x+1}, anchor x+1 пишет {x+1,x+2} -- гарантированное
+    // пересечение на x+1 для КАЖДОЙ соседней пары, ровно та же плотность
+    // конкуренции, что и в реальной CA-"пробке".
+    let rules: Vec<Rule> = (0..3)
+        .map(|i| Rule {
+            id: vec![CellType(1)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: i as u32,
+            min_age: 0,
+            overflow: OverflowAction::Discard,
+            cam: None,
+            tie_break: 0,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        })
+        .collect();
+    let rule_index = make_rule_index(&rules);
+    let rule_cache = build_rule_data_cache(&rule_index);
+    let reach = max_reach_from_cache(&rule_cache);
+    assert_eq!(reach, 1, "простой сдвиг на 1 клетку -- reach обязан быть ровно 1");
+
+    const N_ANCHORS: u32 = 3000; // × 3 rule_idx = 9000 > SPATIAL_THRESHOLD=4096
+    let mut matches: Vec<RuleMatch> = Vec::new();
+    for x in 0..N_ANCHORS {
+        for rule_idx in 0..3usize {
+            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+        }
+    }
+
+    let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(40503) % 5;
+
+    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
+    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
+
+    let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+    let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+
+    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+    assert_eq!(centralized_set, spatial_set, "плотная упаковка ОБЫЧНЫХ сдвигов не должна расходиться с централизованным арбитражем -- самый частый случай, впервые проверен только сегодня");
 }

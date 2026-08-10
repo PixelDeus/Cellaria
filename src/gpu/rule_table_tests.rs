@@ -15,7 +15,7 @@ fn base_rule(id: Vec<u8>, pattern: Vec<(i8, i8, u8)>, changes: Vec<(i32, i32, Ch
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }
 }
 
@@ -373,15 +373,73 @@ fn test_build_gpu_rule_table_rejects_cam_with_recursion() {
     assert_eq!(err, GpuUnsupportedReason::CamRecursionUnsupported { head: 1, rule_idx: 0 });
 }
 
+/// `ShiftSpec::keep_source` без `feedback`/`memory` — ПОДДЕРЖИВАЕТСЯ (см.
+/// `GpuMatch::keep_age_mask` в `shader.wgsl`): плоский `build_gpu_rule_table`
+/// не должен отвергать эту комбинацию.
 #[test]
-fn test_build_gpu_rule_table_rejects_keep_source() {
+fn test_build_gpu_rule_table_accepts_plain_keep_source() {
     let mut idx = HashMap::new();
     let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
     rule.shifts = vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: true }]];
     idx.insert(CellType(1), vec![rule]);
 
+    assert!(build_gpu_rule_table(&idx).is_ok(), "keep_source alone (no feedback/memory) must be GPU-supported");
+}
+
+/// "Излучение" (`broadcast` + `keep_source` вместе) — тоже ПОДДЕРЖИВАЕТСЯ,
+/// исходный мотивирующий случай.
+#[test]
+fn test_build_gpu_rule_table_accepts_emit_broadcast_plus_keep_source() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![vec![ShiftSpec { direction: Direction::Right, steps: 3, broadcast: true, keep_source: true }]];
+    idx.insert(CellType(1), vec![rule]);
+
+    assert!(build_gpu_rule_table(&idx).is_ok(), "broadcast+keep_source (emit) must be GPU-supported");
+}
+
+/// `keep_source` + `feedback` вместе — вне GPU-подмножества (перенос
+/// счётчика не портирован для случая, когда источник не освобождается).
+#[test]
+fn test_build_gpu_rule_table_rejects_feedback_plus_keep_source() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: true }]];
+    rule.feedback = Some(FeedbackSpec { timeout: 3, new_direction: Direction::Down });
+    idx.insert(CellType(1), vec![rule]);
+
     let err = build_gpu_rule_table(&idx).unwrap_err();
-    assert_eq!(err, GpuUnsupportedReason::KeepSourceUnsupported { head: 1, rule_idx: 0 });
+    assert_eq!(err, GpuUnsupportedReason::FeedbackKeepSourceUnsupported { head: 1, rule_idx: 0 });
+}
+
+/// `keep_source` + `memory` вместе — та же причина, вне GPU-подмножества.
+#[test]
+fn test_build_gpu_rule_table_rejects_memory_plus_keep_source() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.shifts = vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: true }]];
+    rule.memory = Some(MemorySpec {
+        window: 1,
+        record_trigger: RecordTrigger::NeighborType(Direction::Right),
+        match_pattern: vec![RecordedValue::Type(CellType(9))],
+    });
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::MemoryKeepSourceUnsupported { head: 1, rule_idx: 0 });
+}
+
+/// `Rule::max_activations` — вне GPU-подмножества (см. её doc-комментарий:
+/// ключ `(head, rule_idx)` без позиции, нет готового GPU-буфера такой формы).
+#[test]
+fn test_build_gpu_rule_table_rejects_max_activations() {
+    let mut idx = HashMap::new();
+    let mut rule = base_rule(vec![1], vec![(0, 0, 1)], vec![]);
+    rule.max_activations = Some(3);
+    idx.insert(CellType(1), vec![rule]);
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::MaxActivationsUnsupported { head: 1, rule_idx: 0 });
 }
 
 /// `Rule::memory` — ПОДДЕРЖИВАЕТСЯ (см. `GpuRuleTable::needs_memory`'s

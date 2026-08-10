@@ -15,7 +15,13 @@ path = "src/main.rs"
 unwrap_used = "warn"
 
 [features]
+default = ["mimalloc-alloc"]
 gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+# Отключаемо (`default-features = false`) для потребителей `cellaria` как
+# библиотеки, которые хотят выбрать СВОЙ глобальный аллокатор -- `#[global_allocator]`
+# может быть объявлен только ОДИН раз на весь финальный бинарник, конфликт
+# иначе неразрешим со стороны потребителя (см. doc-комментарий в lib.rs).
+mimalloc-alloc = ["dep:mimalloc"]
 
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
@@ -27,6 +33,7 @@ rayon = "1.12.0"
 wgpu = { version = "22", optional = true }
 pollster = { version = "0.3", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
+mimalloc = { version = "0.1.52", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["plotters"] }

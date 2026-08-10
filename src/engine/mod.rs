@@ -1,8 +1,11 @@
 pub mod applicator;
 pub mod arbitrator;
 pub mod matcher;
+mod rule_state;
 
 use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
 
 use crate::conflict_analyzer::build_rule_data_cache;
 use crate::fast_hash::{FxHashMap, FxHashSet};
@@ -14,17 +17,25 @@ use crate::types::{
 };
 
 pub use applicator::apply_matches;
-use applicator::apply_matches_with_cam;
+use applicator::{apply_matches_with_cam, WriteBuffer};
 pub use arbitrator::{arbitrate, arbitrate_spatial};
 use arbitrator::{arbitrate_spatial_with_cam, arbitrate_with_cam};
 pub use matcher::detect_matches;
 use matcher::{build_group_data, detect_cam_matches, detect_matches_with_group_data, GroupCache};
+use rule_state::RuleStateStore;
 
 /// Двигатель симуляции Cellaria.
 pub struct Engine<S: GridStorage> {
     pub grid: Grid<S>,
-    pub rule_index: HashMap<CellType, Vec<Rule>>,
-    pub rule_cache: HashMap<(CellType, usize), crate::conflict_analyzer::RuleData>,
+    /// Приватно с [`Engine::rule_index`] (точка 4, сессия 2026-08-09) — единственный
+    /// способ ИЗМЕНИТЬ состав правил извне это [`Engine::set_rule_index`]/
+    /// [`Engine::set_rules_for_head`], которые сами вызывают
+    /// [`Engine::rebuild_rule_cache`]. Раньше поле было `pub`, и прямая правка
+    /// в обход `rebuild_rule_cache` молча ломала кэши/счётчики (см.
+    /// doc-комментарий `rebuild_rule_cache`) — только дисциплина
+    /// разработчика "не забыть вызвать" не давала это гарантий.
+    rule_index: HashMap<CellType, Vec<Rule>>,
+    pub rule_cache: crate::conflict_analyzer::RuleDataCache,
     /// Кэш `GroupData` матчера (эффективные паттерны, offset-карты,
     /// упакованные u128-паттерны) — то же самое соображение, что и у
     /// `rule_cache`: `matcher::detect_matches` (свободная функция)
@@ -131,60 +142,92 @@ pub struct Engine<S: GridStorage> {
     /// Сколько раз [`Engine::enable_guarded_self_modification`] отклонила
     /// самопереданное правило как небезопасное для композиции.
     pub rejected_self_modifications: u64,
-    /// Сколько тиков ПОДРЯД конкретный матч `(x, y, rule_idx)` детектировался,
-    /// но проигрывал арбитраж — только для правил с `Rule::starvation_after
-    /// = Some(_)` (см. её doc-комментарий и `arbitrator::TIE_BREAK_MODULUS`
-    /// по аналогии). Сбрасывается (запись удаляется) при выигрыше матча;
-    /// растёт (`saturating_add`, чтобы не переполниться на очень длинных
-    /// прогонах) при проигрыше. Пусто и не трогается, если ни одно правило
-    /// набора не использует это поле — нулевые накладные расходы для кода,
-    /// который об этом не просил.
-    starvation_counters: FxHashMap<(u32, u32, usize), u32>,
-    /// Сколько тиков ПОДРЯД конкретный МАРКЕР (не клетка!) детектировался
-    /// (независимо от исхода арбитража — считаются попытки, не поражения) —
-    /// только для правил с `Rule::feedback = Some(_)` (см. её doc-комментарий).
-    /// В отличие от `starvation_counters`, это ЗАЩЁЛКА: `saturating_add`
-    /// растёт, но НИКОГДА не сбрасывается — раз счётчик достиг
-    /// `FeedbackSpec::timeout`, `new_direction` действует для этого матча
-    /// навсегда. Пусто и не трогается, если ни одно правило набора не
-    /// использует это поле.
-    ///
-    /// Ключ `(x, y, rule_idx)` — это ТЕКУЩАЯ позиция маркера, не
-    /// зафиксированная клетка: правило с `feedback` физически ДВИГАЕТСЯ
-    /// каждый тик (в отличие от `starvation_after`, где один и тот же матч
-    /// раз за разом переоценивается на ОДНОЙ и той же клетке), так что
-    /// `applicator::apply_shift_buffered` явно ПЕРЕНОСИТ запись со старой
-    /// позиции на новую при каждом сдвиге — без этого переноса счётчик
-    /// обнулялся бы на каждом шагу (найдено тестом: маркер физически ехал
-    /// без остановки, `FeedbackSpec::timeout` никогда не достигался).
-    ///
-    /// Запись удаляется (не только "не сбрасывается") и в ОДНОМ дополнительном
-    /// случае: если позиция перестаёт совпадать с этим `rule_idx` вовсе (тип
-    /// клетки сменился внешне — не своим же сдвигом, для этого есть перенос
-    /// выше) — см. блок "осиротевшие записи" в `run_tick_with_cache`. Иначе
-    /// защёлка была бы верна для маркера, который физически больше не
-    /// существует.
-    feedback_counters: FxHashMap<(u32, u32, usize), u64>,
-    /// FIFO-буферы по последовательности прошлых наблюдений — только для
-    /// правил с `Rule::memory = Some(_)` (см. её doc-комментарий). Ключ
-    /// `(x, y, rule_idx)` — та же конвенция, что и у `feedback_counters`;
-    /// перенос записи при сдвиге делает `applicator::apply_shift_buffered`
-    /// (та же причина: правило с `memory` и `Some(shift)` физически
-    /// двигается, ключ должен следовать за ним).
-    ///
-    /// Обновляется в ДВУХ разных точках тик-пайплайна, в зависимости от
-    /// `RecordTrigger` конкретного правила — не два механизма, один (эта
-    /// карта) с двумя триггерами: `NeighborType` пишется ДО арбитража (что
-    /// увидели), `RuleOutcome` — ПОСЛЕ (что случилось с самим матчем).
-    /// Гейт (сравнение буфера с `MemorySpec::match_pattern`) читает
-    /// состояние буфера КАК ОНО БЫЛО НА КОНЕЦ ПРЕДЫДУЩЕГО тика — сам этот
-    /// тик буфер обновляется уже ПОСЛЕ того, как гейт применён к арбитражу.
-    ///
-    /// Запись удаляется целиком, когда позиция перестаёт совпадать с этим
-    /// `rule_idx` вовсе (тип клетки сменился внешне — не своим же сдвигом,
-    /// для этого есть перенос выше) — см. блок "осиротевшие записи" в
-    /// `run_tick_with_cache`.
-    memory_buffers: arbitrator::MemoryBuffers,
+    /// Всё персистентное (живущее между тиками) состояние правил —
+    /// `starvation_counters`/`feedback_counters`/`memory_buffers`/
+    /// `activation_counters` — в одной точке, за типобезопасным
+    /// snapshot/writer-доступом. Раньше это были четыре отдельных поля
+    /// прямо здесь; вынесено в `rule_state::RuleStateStore` (пп.3+5,
+    /// сессия 2026-08-09) — см. её подробный doc-комментарий модуля про то,
+    /// что это не просто перегруппировка полей, а формализация дисциплины
+    /// снимка тика (2.2.1) в типах, plus единая точка инвалидации при
+    /// изменении состава правил (бывший `last_rebuilt_rule_index`, теперь
+    /// тоже внутри неё).
+    state: RuleStateStore,
+    /// Журнал вызовов `push_input`, только пока запись включена
+    /// ([`Engine::enable_input_recording`]) — см. [`InputEvent`] и
+    /// [`Engine::replay`]. `None` (по умолчанию) — нулевые накладные
+    /// расходы, `push_input` не делает лишней работы для кода, который об
+    /// этом не просил.
+    input_log: Option<Vec<InputEvent>>,
+    /// Структурированный лог событий тика (п.5, сессия 2026-08-09), только
+    /// пока запись включена ([`Engine::enable_tick_logging`]) — см.
+    /// [`TickLogEntry`]. Тот же принцип, что и `input_log` выше: `None` по
+    /// умолчанию, `run_tick` не считает счётчики событий, если их некуда
+    /// записывать.
+    tick_log: Option<Vec<TickLogEntry>>,
+    /// Персистентный буфер для `apply_matches_with_cam` (п.4, сессия
+    /// 2026-08-09) — переиспользуется между тиками через `.clear()` вместо
+    /// `WriteBuffer::default()` заново на каждый тик. Измерено (generic
+    /// `HashMap`, не специфично для `FxHashMap`): ~58.6% экономии на
+    /// реалистичном объёме записей на тик. Чистое царапина-состояние
+    /// (никогда не читается ДО заполнения в рамках одного и того же
+    /// вызова `apply_matches_with_cam`, который сам чистит его в начале) —
+    /// не часть `EngineSnapshot`, как и `rule_cache`/`group_cache`.
+    write_buffer: WriteBuffer,
+    /// Персистентный буфер значений паттерна для динамических ссылок
+    /// (`$0`/`$1`/...) внутри `apply_rule_buffered` (третья оптимизация
+    /// того же класса, что `write_buffer` выше, сессия 2026-08-09) —
+    /// переиспользуется через `.clear()` вместо `Vec::new()` на каждый
+    /// match с непустым `pattern`. Та же оговорка про "чистое
+    /// царапина-состояние", не часть `EngineSnapshot`.
+    pattern_buffer: Vec<CellValue>,
+}
+
+/// Один вызов `Engine::push_input` — `tick` это `grid.generation()` НА
+/// МОМЕНТ вызова (то есть поколение, которое ЕЩЁ НЕ наступило — станет
+/// текущим на следующем `run_tick`, чья фаза Input и заберёт значение из
+/// очереди). Для [`Engine::replay`] это единственный способ узнать, ПЕРЕД
+/// каким по счёту тиком нужно повторно вызвать `push_input`, а не просто
+/// "когда-то до конца записи".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputEvent {
+    pub tick: u64,
+    pub channel: u32,
+    pub value: u8,
+}
+
+/// Сохраняемый снимок состояния симуляции — см. [`Engine::snapshot`]/
+/// [`Engine::from_snapshot`]. Содержит РОВНО то, что не выводится заново из
+/// остального: `grid`, состав правил, персистентные счётчики расширений,
+/// самомодификационное состояние. НЕ содержит `rule_cache`/`group_cache`/
+/// `search_radius_cache`/`extension_flags`/`conflict_partners`/
+/// `max_affected_radius` — все они чистые функции от `rule_index`,
+/// `Engine::new` (внутри `from_snapshot`) пересобирает их заново, хранить
+/// их в снимке было бы избыточной, никогда не читаемой копией.
+///
+/// Поля намеренно приватные — работа со снимком идёт через `Serialize`/
+/// `Deserialize` (любой формат serde), а не через прямой доступ к полям;
+/// `RuleStateStore`/`FxHashSet` (внутренние, `pub(crate)` типы) иначе не
+/// смогли бы появиться в сигнатуре публичной структуры.
+///
+/// **НЕ `serde_json`** — `rule_index` (ключ `CellType`), `Grid::boundaries`
+/// (ключ `(usize,usize)`) и все карты внутри `RuleStateStore` (ключи вида
+/// `(u32,u32,usize)`) используют НЕ-строковые ключи `HashMap`, а JSON
+/// требует, чтобы ключи объекта были строками — `serde_json::to_string`
+/// падает с "key must be a string" (найдено эмпирически, см. тест). Любой
+/// формат без этого ограничения подходит — `serde_yaml` (уже зависимость
+/// проекта, проверено тестом), `bincode`, MessagePack и т.п.
+#[derive(Serialize, Deserialize)]
+#[serde(bound(serialize = "S: Serialize", deserialize = "S: serde::de::DeserializeOwned"))]
+pub struct EngineSnapshot<S: GridStorage> {
+    grid: Grid<S>,
+    rule_index: HashMap<CellType, Vec<Rule>>,
+    state: RuleStateStore,
+    self_mod: Option<crate::rule_store::RuleStore>,
+    guard_self_modification: bool,
+    original_rule_index: HashMap<CellType, Vec<Rule>>,
+    self_mod_managed_heads: FxHashSet<CellType>,
+    rejected_self_modifications: u64,
 }
 
 impl<S: GridStorage> Engine<S> {
@@ -198,6 +241,15 @@ impl<S: GridStorage> Engine<S> {
         let search_radius_cache = compute_search_radius_cache(&rule_index);
         let extension_flags = compute_extension_flags(&rule_index);
         let (conflict_partners, max_affected_radius) = compute_conflict_partners(&rule_index, &rule_cache);
+        // Заполняет `RuleStateStore`'s внутренний снимок `rule_index` СРАЗУ,
+        // а не оставляет его пустым до первого `rebuild_rule_cache()` — иначе
+        // первый же вызов `rebuild_rule_cache()` после нескольких реальных
+        // тиков увидел бы ВСЕ текущие правила как "новые" (диф против
+        // пустоты) и ошибочно счёл бы уже накопленные счётчики устаревшими.
+        // Счётчики здесь ещё пусты (только что созданы), так что сама
+        // чистка — no-op, важен только побочный эффект — правильный снимок.
+        let mut state = RuleStateStore::default();
+        state.invalidate_stale(&rule_index, &grid);
         Self {
             grid,
             rule_index,
@@ -215,10 +267,49 @@ impl<S: GridStorage> Engine<S> {
             original_rule_index: HashMap::new(),
             self_mod_managed_heads: FxHashSet::default(),
             rejected_self_modifications: 0,
-            starvation_counters: FxHashMap::default(),
-            feedback_counters: FxHashMap::default(),
-            memory_buffers: FxHashMap::default(),
+            state,
+            input_log: None,
+            tick_log: None,
+            write_buffer: WriteBuffer::default(),
+            pattern_buffer: Vec::new(),
         }
+    }
+
+    /// Снимок текущего состояния для сохранения (см. [`EngineSnapshot`]) —
+    /// НЕ потребляет `self`, движок продолжает работать после вызова как ни
+    /// в чём не бывало (нужен `S: Clone`, только для этого метода, не для
+    /// всего `Engine<S>` — большинству кода клонировать `storage` незачем).
+    pub fn snapshot(&self) -> EngineSnapshot<S>
+    where
+        S: Clone,
+    {
+        EngineSnapshot {
+            grid: self.grid.clone(),
+            rule_index: self.rule_index.clone(),
+            state: self.state.clone(),
+            self_mod: self.self_mod.clone(),
+            guard_self_modification: self.guard_self_modification,
+            original_rule_index: self.original_rule_index.clone(),
+            self_mod_managed_heads: self.self_mod_managed_heads.clone(),
+            rejected_self_modifications: self.rejected_self_modifications,
+        }
+    }
+
+    /// Восстановить движок из снимка ([`Engine::snapshot`]/сериализованного
+    /// [`EngineSnapshot`]). Пересобирает ВСЕ кэши заново из `rule_index`
+    /// (та же логика, что `Engine::new` — кэши никогда не входят в снимок,
+    /// см. её doc-комментарий), затем восстанавливает персистентное
+    /// состояние (`state`, самомодификацию) ТОЧНО как было на момент
+    /// снимка, а не заново с нуля.
+    pub fn from_snapshot(snapshot: EngineSnapshot<S>) -> Self {
+        let mut engine = Self::new(snapshot.grid, snapshot.rule_index);
+        engine.state = snapshot.state;
+        engine.self_mod = snapshot.self_mod;
+        engine.guard_self_modification = snapshot.guard_self_modification;
+        engine.original_rule_index = snapshot.original_rule_index;
+        engine.self_mod_managed_heads = snapshot.self_mod_managed_heads;
+        engine.rejected_self_modifications = snapshot.rejected_self_modifications;
+        engine
     }
 
     /// Включить самомодификацию: с этого момента `run_tick` сам, каждый тик,
@@ -306,13 +397,88 @@ impl<S: GridStorage> Engine<S> {
     /// Отправить значение на входной канал граничной ячейки.
     /// Ищет первый граничный буфер с direction == "input" и
     /// помещает значение в очередь указанного канала.
+    ///
+    /// Если включена запись ([`Engine::enable_input_recording`]) — вызов
+    /// ЗАПИСЫВАЕТСЯ в `input_log` ДО поиска буфера, безусловно (даже если
+    /// подходящего input-буфера почему-то не нашлось) — [`Engine::replay`]
+    /// должен воспроизвести ТУ ЖЕ последовательность вызовов, что была на
+    /// самом деле, а не только те, что успешно на что-то подействовали.
     pub fn push_input(&mut self, ch: u32, value: u8) {
+        if let Some(log) = self.input_log.as_mut() {
+            log.push(InputEvent { tick: self.grid.generation(), channel: ch, value });
+        }
         for (_, buf) in self.grid.iter_boundaries_mut() {
             if buf.direction == "input" {
                 buf.enqueue(ch, Cell::new(value));
                 return;
             }
         }
+    }
+
+    /// Включить запись вызовов `push_input` в `input_log` (для
+    /// [`Engine::replay`]) — с этого момента, не с начала работы движка;
+    /// уже прошедшие вызовы `push_input` не восстанавливаются задним числом.
+    pub fn enable_input_recording(&mut self) {
+        self.input_log.get_or_insert_with(Vec::new);
+    }
+
+    /// Текущий журнал записанных вызовов `push_input` — `None`, если запись
+    /// не включена.
+    pub fn input_log(&self) -> Option<&[InputEvent]> {
+        self.input_log.as_deref()
+    }
+
+    /// Включить запись структурированного лога тиков ([`TickLogEntry`]) —
+    /// с этого момента, не с начала работы движка; уже прошедшие тики не
+    /// восстанавливаются задним числом. Каждый последующий вызов
+    /// [`Engine::run_tick`] добавляет одну запись.
+    pub fn enable_tick_logging(&mut self) {
+        self.tick_log.get_or_insert_with(Vec::new);
+    }
+
+    /// Текущий структурированный лог тиков — `None`, если запись не
+    /// включена. Сериализуется через `serde_json` (не `serde_yaml`, в
+    /// отличие от [`Engine::snapshot`] — здесь нет нестроковых ключей
+    /// `HashMap`, только плоский `Vec` из полей-примитивов, так что
+    /// ограничение `EngineSnapshot`'s doc-комментария сюда не относится).
+    pub fn tick_log(&self) -> Option<&[TickLogEntry]> {
+        self.tick_log.as_deref()
+    }
+
+    /// Восстановить движок из снимка и повторно применить журнал ввода до
+    /// (не включая) `target_tick` — воспроизводит РЕАЛЬНУЮ
+    /// последовательность `push_input`/`run_tick`, а не просто "дошли до
+    /// нужного тика как-то". Пример использования (отладка): нашли
+    /// расхождение на тике 1000 → взять снимок и `input_log`, снятые на
+    /// тике 900 (или раньше) → `Engine::replay(snapshot, &log, 1000)` →
+    /// получить движок ровно в том состоянии, в котором он был бы на тике
+    /// 1000 в оригинальном прогоне, и продолжить исследовать оттуда, не
+    /// пересчитывая весь прогон с нуля вручную.
+    ///
+    /// `target_tick` сравнивается с `grid.generation()` — то же число,
+    /// которое `InputEvent::tick` записывает при `push_input`, так что
+    /// каждое событие подаётся РОВНО перед тем `run_tick()`, который
+    /// изначально его и забрал (см. doc-комментарий `InputEvent`).
+    ///
+    /// `apply_input()` вызывается КАЖДУЮ итерацию, БЕЗУСЛОВНО (даже если
+    /// на этот тик нет ни одного события в `log`) — `push_input` только
+    /// кладёт значение в очередь граничного буфера, реальный перенос на
+    /// решётку делает `apply_input()`, отдельный шаг, не часть `run_tick()`
+    /// (см. её doc-комментарий) — канонический паттерн использования (см.
+    /// `examples/strength_live_io.rs`) вызывает его каждый тик безусловно,
+    /// не только когда только что был `push_input`; `replay` обязан
+    /// воспроизвести ТУ ЖЕ последовательность вызовов.
+    pub fn replay(snapshot: EngineSnapshot<S>, log: &[InputEvent], target_tick: u64) -> Self {
+        let mut engine = Self::from_snapshot(snapshot);
+        while engine.grid.generation() < target_tick {
+            let current = engine.grid.generation();
+            for event in log.iter().filter(|e| e.tick == current) {
+                engine.push_input(event.channel, event.value);
+            }
+            engine.apply_input();
+            engine.run_tick();
+        }
+        engine
     }
 
     /// Извлечь выходные данные из граничных буферов.
@@ -546,6 +712,8 @@ impl<S: GridStorage> Engine<S> {
     /// перед следующим тиком.
     pub fn run_tick(&mut self) -> (Vec<RuleMatch>, Vec<(u32, Cell)>) {
         let conflict_ctx = ConflictContext { partners: &self.conflict_partners, max_radius: self.max_affected_radius };
+        let tick = self.grid.generation();
+        let mut counts = self.tick_log.is_some().then(TickEventCounts::default);
         let result = run_tick_with_cache(
             &mut self.grid,
             &self.rule_index,
@@ -554,12 +722,51 @@ impl<S: GridStorage> Engine<S> {
             &self.search_radius_cache,
             &self.extension_flags,
             Some(&conflict_ctx),
-            &mut self.starvation_counters,
-            &mut self.feedback_counters,
-            &mut self.memory_buffers,
+            &mut self.state,
+            None,
+            counts.as_mut(),
+            &mut self.write_buffer,
+            &mut self.pattern_buffer,
         );
+        if let (Some(log), Some(c)) = (self.tick_log.as_mut(), counts) {
+            log.push(TickLogEntry {
+                tick,
+                accepted: c.accepted,
+                rejected: c.rejected,
+                starvation_events: c.starvation_events,
+                feedback_events: c.feedback_events,
+            });
+        }
         self.absorb_self_modifications();
         result
+    }
+
+    /// Как [`Engine::run_tick`], но дополнительно возвращает разбивку этого
+    /// тика по фазам ([`TickPhaseTimings`]) — для профилирования "где узкое
+    /// место у конкретного конфига", без общего времени всего тика как
+    /// единственного числа. `Instant::now()` вызывается ТОЛЬКО этим путём
+    /// (`run_tick` использует ветку `None`, см. `mark_phase!` в
+    /// `run_tick_with_cache`) — нулевая цена для кода, который об этом не
+    /// просил.
+    pub fn run_tick_profiled(&mut self) -> (Vec<RuleMatch>, Vec<(u32, Cell)>, TickPhaseTimings) {
+        let conflict_ctx = ConflictContext { partners: &self.conflict_partners, max_radius: self.max_affected_radius };
+        let mut timings = TickPhaseTimings::default();
+        let result = run_tick_with_cache(
+            &mut self.grid,
+            &self.rule_index,
+            &self.rule_cache,
+            &self.group_cache,
+            &self.search_radius_cache,
+            &self.extension_flags,
+            Some(&conflict_ctx),
+            &mut self.state,
+            Some(&mut timings),
+            None,
+            &mut self.write_buffer,
+            &mut self.pattern_buffer,
+        );
+        self.absorb_self_modifications();
+        (result.0, result.1, timings)
     }
 
     /// Если самомодификация включена — дренировать канал 0 выходных
@@ -683,6 +890,13 @@ impl<S: GridStorage> Engine<S> {
     /// вызывающему коду знать про это взаимодействие и вручную "трогать"
     /// конкретные клетки.
     pub fn rebuild_rule_cache(&mut self) {
+        // Инвалидация переиспользованных `rule_idx` в персистентном
+        // состоянии правил — см. `rule_state::RuleStateStore::invalidate_stale`'s
+        // doc-комментарий (логика и её обоснование перенесены туда целиком,
+        // п.5 сессии 2026-08-09: `RuleStateStore` — единая точка для всего,
+        // что касается персистентного состояния правил, не только карт, но
+        // и их инвалидации).
+        self.state.invalidate_stale(&self.rule_index, &self.grid);
         self.rule_cache = build_rule_data_cache(&self.rule_index);
         self.group_cache = build_group_data(&self.rule_index);
         self.search_radius_cache = compute_search_radius_cache(&self.rule_index);
@@ -695,6 +909,39 @@ impl<S: GridStorage> Engine<S> {
         for (x, y) in active {
             self.grid.mark_dirty(x, y);
         }
+    }
+
+    /// Только-чтение доступ к текущему набору правил — см. doc-комментарий
+    /// поля `rule_index` про то, почему нет прямого мутабельного доступа
+    /// извне: единственный способ ИЗМЕНИТЬ состав правил — [`Engine::set_rule_index`]/
+    /// [`Engine::set_rules_for_head`], которые сами вызывают
+    /// [`Engine::rebuild_rule_cache`], так что забыть — физически нельзя.
+    pub fn rule_index(&self) -> &HashMap<CellType, Vec<Rule>> {
+        &self.rule_index
+    }
+
+    /// Заменить ВЕСЬ набор правил и перестроить кэши — единственный
+    /// поддерживаемый способ извне заменить `rule_index` целиком (п.4 сессии
+    /// 2026-08-09). Раньше поле было `pub`, и прямая правка `engine.rule_index = ...`
+    /// в обход `rebuild_rule_cache()` молча портила кэши/счётчики — этот
+    /// метод физически не даёт забыть.
+    pub fn set_rule_index(&mut self, new_rule_index: HashMap<CellType, Vec<Rule>>) {
+        self.rule_index = new_rule_index;
+        self.rebuild_rule_cache();
+    }
+
+    /// Заменить список правил ОДНОЙ головы (вставить новую голову, если её
+    /// раньше не было) и перестроить кэши — тот же принцип, что и
+    /// [`Engine::set_rule_index`], только для точечной правки одной головы
+    /// (самый частый случай на практике — см. `strength_live_rules.rs`).
+    /// Чтобы заменить/добавить ОДНО конкретное правило внутри уже
+    /// существующего списка головы, прочитайте текущий список через
+    /// [`Engine::rule_index`], постройте изменённый `Vec<Rule>` и передайте
+    /// его сюда целиком — отдельного метода "заменить правило по индексу"
+    /// нет специально, чтобы не плодить API на каждый частный случай.
+    pub fn set_rules_for_head(&mut self, head: CellType, rules: Vec<Rule>) {
+        self.rule_index.insert(head, rules);
+        self.rebuild_rule_cache();
     }
 
     /// Пересчитать `original_rule_index` из ТЕКУЩЕГО `rule_index` — как "то,
@@ -758,7 +1005,9 @@ fn compute_conflict_partners(
     }
 
     let max_radius = rule_cache
-        .values()
+        .iter()
+        .filter_map(|opt| opt.as_ref())
+        .flat_map(|rules| rules.iter())
         .map(|data| {
             let (min_x, max_x, min_y, max_y) = data.bbox;
             min_x.unsigned_abs().max(max_x.unsigned_abs()).max(min_y.unsigned_abs()).max(max_y.unsigned_abs()) as i32
@@ -794,11 +1043,12 @@ struct ConflictContext<'a> {
 /// реальная регрессия (найдено экспериментально: наивная версия этой
 /// оптимизации замедлила GoL на порядки).
 ///
-/// `Rule::starvation_after`/`Rule::feedback`/`Rule::memory` для этого пути
-/// всегда no-op — см. их doc-комментарии: нужна память МЕЖДУ вызовами, а эта
-/// функция её не хранит (свежие пустые `StarvationCounters`/
-/// `FeedbackCounters`/`MemoryBuffers` на каждый вызов, как и `CamPositions`
-/// выше — буфер памяти никогда не наполнится, гейт никогда не откроется).
+/// `Rule::starvation_after`/`Rule::feedback`/`Rule::memory`/
+/// `Rule::max_activations` для этого пути всегда no-op — см. их
+/// doc-комментарии: нужна память МЕЖДУ вызовами, а эта функция её не хранит
+/// (свежие пустые `StarvationCounters`/`FeedbackCounters`/`MemoryBuffers`/
+/// `ActivationCounters` на каждый вызов, как и `CamPositions` выше — буфер
+/// памяти никогда не наполнится, гейт никогда не откроется/не закроется).
 pub fn run_tick<S: GridStorage>(
     grid: &mut Grid<S>,
     rule_index: &HashMap<CellType, Vec<Rule>>,
@@ -807,10 +1057,10 @@ pub fn run_tick<S: GridStorage>(
     let group_cache = build_group_data(rule_index);
     let search_radius_cache = compute_search_radius_cache(rule_index);
     let extension_flags = compute_extension_flags(rule_index);
-    let mut starvation_counters = arbitrator::StarvationCounters::default();
-    let mut feedback_counters = arbitrator::FeedbackCounters::default();
-    let mut memory_buffers = arbitrator::MemoryBuffers::default();
-    run_tick_with_cache(grid, rule_index, &rule_cache, &group_cache, &search_radius_cache, &extension_flags, None, &mut starvation_counters, &mut feedback_counters, &mut memory_buffers)
+    let mut state = RuleStateStore::default();
+    let mut write_buffer = WriteBuffer::default();
+    let mut pattern_buffer = Vec::new();
+    run_tick_with_cache(grid, rule_index, &rule_cache, &group_cache, &search_radius_cache, &extension_flags, None, &mut state, None, None, &mut write_buffer, &mut pattern_buffer)
 }
 
 /// Общая логика одного тика, параметризованная источниками `rule_cache`/
@@ -846,6 +1096,34 @@ pub fn run_tick<S: GridStorage>(
 /// каждого совпадения проверяются только 3×3 соседние корзины — этого
 /// достаточно, потому что две точки дальше `bucket` друг от друга по любой
 /// оси не могут оказаться в соседних (или той же) корзине.
+/// Быстрый lookup правил по head-типу — массив вместо `HashMap` (сессия
+/// 2026-08-09, "фантазия" п.1). `CellType` оборачивает `u8` (256
+/// возможных значений) — прямая индексация категорически дешевле
+/// хэширования: замерено 94% экономии на реальной последовательности
+/// head-значений тика (не синтетика — урок предыдущих раундов этой сессии).
+///
+/// Строится ОДИН РАЗ за вызов горячей функции (не персистентно у `Engine` —
+/// `&'a Vec<Rule>` заимствует у `rule_index`, который сам живёт в `Engine`;
+/// хранить такое заимствование полем того же `Engine` — самоссылающаяся
+/// структура, потребовала бы unsafe/`ouroboros`, той же ценой, что уже
+/// сознательно отвергали раньше в этой сессии для похожего случая), из уже
+/// имеющегося параметра `rule_index` — дёшево, O(число голов), а не O(256).
+pub(crate) type HeadRuleIndex<'a> = [Option<&'a Vec<Rule>>; 256];
+
+pub(crate) fn build_head_index(rule_index: &HashMap<CellType, Vec<Rule>>) -> HeadRuleIndex<'_> {
+    let mut index: HeadRuleIndex = [None; 256];
+    for (&head, rules) in rule_index {
+        index[head.0 as usize] = Some(rules);
+    }
+    index
+}
+
+/// Замена `rule_index.get(&head).and_then(|rules| rules.get(rule_idx))` —
+/// та же семантика Option-цепочки, через [`HeadRuleIndex`] вместо `HashMap`.
+pub(crate) fn lookup_rule<'a>(head_index: &HeadRuleIndex<'a>, head: CellType, rule_idx: usize) -> Option<&'a Rule> {
+    head_index[head.0 as usize].and_then(|rules| rules.get(rule_idx))
+}
+
 fn spatial_bypass_split(matches: Vec<RuleMatch>, ctx: &ConflictContext) -> (Vec<RuleMatch>, Vec<RuleMatch>) {
     let (mut safe, candidates): (Vec<RuleMatch>, Vec<RuleMatch>) =
         matches.into_iter().partition(|m| !ctx.partners.contains_key(&m.head));
@@ -903,10 +1181,32 @@ fn run_tick_with_cache<S: GridStorage>(
     search_radius_cache: &SearchRadiusCache,
     extension_flags: &ExtensionFlags,
     conflict_ctx: Option<&ConflictContext>,
-    starvation_counters: &mut arbitrator::StarvationCounters,
-    feedback_counters: &mut arbitrator::FeedbackCounters,
-    memory_buffers: &mut arbitrator::MemoryBuffers,
+    state: &mut RuleStateStore,
+    mut timings: Option<&mut TickPhaseTimings>,
+    mut counts: Option<&mut TickEventCounts>,
+    write_buffer: &mut WriteBuffer,
+    pattern_buffer: &mut Vec<CellValue>,
 ) -> (Vec<RuleMatch>, Vec<(u32, Cell)>) {
+    // `Instant::now()` только когда `timings` реально запрошен (`Some`) —
+    // ветка ниже, а не безусловный замер: `Instant::now()` сам по себе
+    // недорог, но не бесплатен, а этот путь — самый горячий во всём
+    // движке (каждый тик). См. `Engine::run_tick_profiled`.
+    let mut phase_start = timings.is_some().then(std::time::Instant::now);
+    macro_rules! mark_phase {
+        ($field:ident) => {
+            if let (Some(start), Some(t)) = (phase_start, timings.as_mut()) {
+                t.$field += start.elapsed();
+                // Последний вызов (перед `apply`) переприсваивает значение,
+                // которое больше никто не читает — безвредно, дешевле, чем
+                // отдельный вариант макроса для "последней" фазы.
+                #[allow(unused_assignments)]
+                {
+                    phase_start = Some(std::time::Instant::now());
+                }
+            }
+        };
+    }
+
     let search_coords = resolve_search_coords_advance(grid, search_radius_cache);
 
     let mut matches = detect_matches_with_group_data(grid, group_cache, &search_coords);
@@ -986,14 +1286,20 @@ fn run_tick_with_cache<S: GridStorage>(
             })
             .map(|m| (m.x, m.y, m.rule_idx))
             .collect();
+        // `mutate()`, не `snapshot()` -- технически это запись (remove), но
+        // безопасная относительно 2.2.1: ключи, которые чистит этот блок,
+        // структурно НЕ совпадают ни с одним матчем этого тика (иначе они
+        // были бы в `prune_targets`), значит никакое чтение этого же тика их
+        // не увидит — см. doc-комментарий выше про сам механизм чистки.
+        let mut w = state.mutate();
         for &(x, y) in &search_coords {
             let (xu, yu) = (x as u32, y as u32);
             for &r in &extension_flags.extension_rule_indices {
                 let key = (xu, yu, r);
                 if !prune_targets.contains(&key) {
-                    feedback_counters.remove(&key);
-                    memory_buffers.remove(&key);
-                    starvation_counters.remove(&key);
+                    w.feedback_counters_mut().remove(&key);
+                    w.memory_buffers_mut().remove(&key);
+                    w.starvation_counters_mut().remove(&key);
                 }
             }
         }
@@ -1008,6 +1314,10 @@ fn run_tick_with_cache<S: GridStorage>(
         // только на пути с реально применённым тиком, из-за чего вызов
         // `run_tick()` N раз не гарантировал N реально прошедших тиков.
         grid.advance_age();
+        mark_phase!(detect);
+        if let Some(c) = counts.as_mut() {
+            **c = TickEventCounts::default();
+        }
         return (Vec::new(), Vec::new());
     }
 
@@ -1022,18 +1332,22 @@ fn run_tick_with_cache<S: GridStorage>(
         grid.mark_dirty(m.x as usize, m.y as usize);
     }
 
+    // Массив-lookup вместо `rule_index.get()` для всего блока ниже — см.
+    // doc-комментарий `HeadRuleIndex`/`build_head_index`/`lookup_rule`.
+    let head_index = build_head_index(rule_index);
+
     // Матчи правил с `Rule::memory` — список нужен из ПОЛНОГО (ещё не
     // гейтованного) набора: буфер обязан продолжать наблюдать, даже пока
     // гейт этого правила закрыт, иначе искомая последовательность никогда
     // бы не накопилась (см. `Engine::memory_buffers`'s doc-комментарий).
     // Скан целиком пропускается (см. `ExtensionFlags`'s doc-комментарий),
     // если НИ ОДНО правило набора не использует `memory` — иначе платили бы
-    // O(число матчей) HashMap-лукапов каждый тик безусловно, вопреки
-    // заявленным "нулевым накладным расходам".
+    // O(число матчей) лукапов каждый тик безусловно, вопреки заявленным
+    // "нулевым накладным расходам".
     let memory_targets: Vec<(u32, u32, usize, CellType)> = if extension_flags.memory {
         matches
             .iter()
-            .filter(|m| rule_index.get(&m.head).and_then(|rules| rules.get(m.rule_idx)).is_some_and(|r| r.memory.is_some()))
+            .filter(|m| lookup_rule(&head_index, m.head, m.rule_idx).is_some_and(|r| r.memory.is_some()))
             .map(|m| (m.x, m.y, m.rule_idx, m.head))
             .collect()
     } else {
@@ -1050,13 +1364,33 @@ fn run_tick_with_cache<S: GridStorage>(
     // поэтому `conflict_analyzer` не требует изменений (Лемма 4 тут не
     // нужна — см. `types::MemorySpec`'s doc-комментарий).
     if !memory_targets.is_empty() {
+        let snap = state.snapshot();
         matches.retain(|m| {
-            let Some(spec) = rule_index.get(&m.head).and_then(|rules| rules.get(m.rule_idx)).and_then(|r| r.memory.as_ref()) else {
+            let Some(spec) = lookup_rule(&head_index, m.head, m.rule_idx).and_then(|r| r.memory.as_ref()) else {
                 return true;
             };
-            memory_buffers.get(&(m.x, m.y, m.rule_idx)).is_some_and(|buf| {
+            snap.memory_buffers().get(&(m.x, m.y, m.rule_idx)).is_some_and(|buf| {
                 buf.len() == spec.window && buf.iter().eq(spec.match_pattern.iter())
             })
+        });
+    }
+
+    // Гейт-фильтр бюджета активаций (`Rule::max_activations`, см. её
+    // doc-комментарий) — убирает из `matches` кандидатов, чьё правило уже
+    // исчерпало ГЛОБАЛЬНЫЙ (не по позиции) бюджет побед. Счётчик читается
+    // КАК ОН БЫЛ НА КОНЕЦ ПРЕДЫДУЩЕГО тика (2.2.1) — этот тик ещё не писал
+    // в него (инкремент ниже, после apply). В отличие от memory-гейта, не
+    // нужен отдельный "сырой" список целей до фильтра — запись счётчика не
+    // привязана к позиции и не нуждается в непрерывном наблюдении, когда
+    // гейт закрыт (нечему наблюдать — как только правило исчерпало бюджет,
+    // оно исчерпало его НАВСЕГДА, дальше проверять нечего).
+    if extension_flags.max_activations {
+        let snap = state.snapshot();
+        matches.retain(|m| {
+            let Some(limit) = lookup_rule(&head_index, m.head, m.rule_idx).and_then(|r| r.max_activations) else {
+                return true;
+            };
+            snap.activation_counters().get(&(m.head, m.rule_idx)).copied().unwrap_or(0) < limit
         });
     }
 
@@ -1072,7 +1406,7 @@ fn run_tick_with_cache<S: GridStorage>(
         matches
             .iter()
             .filter(|m| {
-                rule_index.get(&m.head).and_then(|rules| rules.get(m.rule_idx)).is_some_and(|r| r.starvation_after.is_some())
+                lookup_rule(&head_index, m.head, m.rule_idx).is_some_and(|r| r.starvation_after.is_some())
             })
             .map(|m| (m.x, m.y, m.rule_idx))
             .collect()
@@ -1082,80 +1416,77 @@ fn run_tick_with_cache<S: GridStorage>(
     let feedback_keys: Vec<(u32, u32, usize)> = if extension_flags.feedback {
         matches
             .iter()
-            .filter(|m| rule_index.get(&m.head).and_then(|rules| rules.get(m.rule_idx)).is_some_and(|r| r.feedback.is_some()))
+            .filter(|m| lookup_rule(&head_index, m.head, m.rule_idx).is_some_and(|r| r.feedback.is_some()))
             .map(|m| (m.x, m.y, m.rule_idx))
             .collect()
     } else {
         Vec::new()
     };
 
-    // Обновление счётчиков обратной связи — ОБЯЗАНО происходить ДО арбитража
-    // (не после, как раньше стояло у голодания/памяти), НЕОЧЕВИДНАЯ, но
-    // критичная деталь: `arbitrator::get_match_affected_cells` (вызывается
-    // ИЗНУТРИ арбитража, ниже) читает ЭТОТ ЖЕ `feedback_counters`, чтобы
-    // решить, какое направление (декларированное или `new_direction`)
-    // реально станет affected-cells матча — и `applicator::apply_rule_buffered`
-    // (вызывается ПОСЛЕ, при `apply_matches_with_cam`) читает ТОТ ЖЕ
-    // счётчик для ТОГО ЖЕ решения. Если бы инкремент стоял МЕЖДУ ними (как
-    // было раньше), на тике, где счётчик матча ПЕРЕСЕКАЕТ `timeout` ИМЕННО
-    // на ЭТОМ тике, арбитраж резервировал/проверял бы конфликты для ОДНОГО
-    // направления (старое значение, ещё не защёлкнуто), а apply реально
-    // писал бы в ДРУГОЕ (новое значение, УЖЕ защёлкнуто) — цель, которую
-    // арбитраж НИКОГДА не проверял на конфликт с другими матчами. Найдено
-    // тестом на GPU-параллелизм (`tests/gpu_v2_correctness.rs`'s
-    // `test_gpu_v2_feedback_plus_memory_gate_freezes_latch_not_resets_matches_cpu`):
-    // GPU (который вычисляет эффективное направление ОДИН раз в `detect_pass`
-    // и использует его последовательно И для арбитража, И для apply —
-    // см. `shader.wgsl`) оказался КОРРЕКТНЕЕ этого места CPU, разошедшись
-    // с ним именно в момент пересечения порога — маркер физически ИСЧЕЗАЛ
-    // (source-clear проходил, но целевая запись проигрывала гонку с
-    // независимо принятым чужим матчем, которого арбитраж не видел). Тот же
-    // приём, что уже используется у голодания (`resolve_sort_fields` читает
-    // счётчик ДО его собственного обновления) — только у голодания порядок
-    // УЖЕ был правильным (эффективный priority не меняет affected-cells,
-    // только сортировку, так что рассинхронизация была невозможна в
-    // принципе); у feedback опасность была именно в том, что affected-cells
-    // САМИ зависят от значения счётчика.
-    for key in &feedback_keys {
-        let counter = feedback_counters.entry(*key).or_insert(0);
-        *counter = counter.saturating_add(1);
-    }
+    // Снимок для отчёта (п.5) -- ДО того, как `matches` уйдёт по значению в
+    // арбитраж ниже; `starving_keys`/`feedback_keys` тоже считаются здесь на
+    // случай, если сами векторы позже будут перемещены/изменены.
+    let candidate_count = matches.len();
+    let starvation_candidate_count = starving_keys.len();
+    let feedback_candidate_count = feedback_keys.len();
+
+    mark_phase!(detect);
 
     // Арбитраж: матчи, у которых в ЭТОМ тике физически нет рядом ни одного
     // структурного конфликт-партнёра, принимаются напрямую, без единого
     // сравнения (см. doc-комментарий функции); остальные — через обычный
     // арбитраж.
     let generation = grid.generation() as u32;
-    let accepted = match conflict_ctx {
-        None => arbitrate_with_cam(matches, rule_index, rule_cache, (grid.width(), grid.height()), &cam_positions, generation, starvation_counters, feedback_counters, |x, y| {
-            grid.get_age(x, y) as u32
-        }),
-        Some(ctx) => {
-            let (safe, unsafe_matches) = spatial_bypass_split(matches, ctx);
-            if unsafe_matches.is_empty() {
-                safe
-            } else {
-                let mut accepted = safe;
-                accepted.extend(arbitrate_spatial_with_cam(
-                    unsafe_matches,
-                    rule_index,
-                    rule_cache,
-                    (grid.width(), grid.height()),
-                    ctx.max_radius,
-                    &cam_positions,
-                    generation,
-                    starvation_counters,
-                    feedback_counters,
-                    |x, y| grid.get_age(x, y) as u32,
-                ));
-                accepted
+    // `tie_break_decided` -- ключи принятых матчей, чья победа НЕ решена
+    // priority/age (см. `arbitrator::TieBreakDecidedWins`), нужны ниже для
+    // корректного обновления `starvation_counters` (5.2/2.2.1: победа "по
+    // жребию" не должна сбрасывать счётчик голодания так же, как решительная
+    // победа). `safe`-ветка (`spatial_bypass_split`) сюда не попадает вообще
+    // -- у нeё по построению нет ни одного структурного конфликт-партнёра
+    // рядом в этом тике, значит и тай-брейка не было, победа заведомо
+    // решительна.
+    let (accepted, tie_break_decided): (Vec<RuleMatch>, FxHashSet<(u32, u32, usize)>) = {
+        // Снимок держится, пока arbitrate читает счётчики -- borrow checker
+        // не даст получить `state.mutate()` (нужен для обновлений ниже),
+        // пока этот `snap` жив, ровно то формальное ограничение из
+        // doc-комментария `rule_state`, которое раньше держалось только
+        // дисциплиной.
+        let snap = state.snapshot();
+        match conflict_ctx {
+            None => arbitrate_with_cam(matches, rule_index, rule_cache, (grid.width(), grid.height()), &cam_positions, generation, snap.starvation_counters(), snap.feedback_counters(), |x, y| {
+                grid.get_age(x, y) as u32
+            }),
+            Some(ctx) => {
+                let (safe, unsafe_matches) = spatial_bypass_split(matches, ctx);
+                if unsafe_matches.is_empty() {
+                    (safe, FxHashSet::default())
+                } else {
+                    let (unsafe_accepted, tie_break_decided) = arbitrate_spatial_with_cam(
+                        unsafe_matches,
+                        rule_index,
+                        rule_cache,
+                        (grid.width(), grid.height()),
+                        ctx.max_radius,
+                        &cam_positions,
+                        generation,
+                        snap.starvation_counters(),
+                        snap.feedback_counters(),
+                        |x, y| grid.get_age(x, y) as u32,
+                    );
+                    let mut accepted = safe;
+                    accepted.extend(unsafe_accepted);
+                    (accepted, tie_break_decided)
+                }
             }
         }
     };
+    mark_phase!(arbitrate);
 
     // Голодание и память (при триггере `RuleOutcome`) оба смотрят "кто
     // выиграл арбитраж" — считаем этот набор один раз, а не дважды.
-    let accepted_keys: FxHashSet<(u32, u32, usize)> = if starving_keys.is_empty() && memory_targets.is_empty() {
+    // `feedback_keys` тоже нужен этот набор (см. её doc-комментарий ниже) —
+    // добавлен в условие наравне со starving_keys/memory_targets.
+    let accepted_keys: FxHashSet<(u32, u32, usize)> = if starving_keys.is_empty() && memory_targets.is_empty() && feedback_keys.is_empty() {
         FxHashSet::default()
     } else {
         accepted.iter().map(|m| (m.x, m.y, m.rule_idx)).collect()
@@ -1166,12 +1497,25 @@ fn run_tick_with_cache<S: GridStorage>(
     // поля). Делается ПОСЛЕ арбитража, а не во время — сам арбитраж только
     // ЧИТАЕТ счётчики (см. `resolve_sort_fields`), обновление их же в
     // процессе сортировки было бы порядко-зависимым UB-по-смыслу.
-    for key in starving_keys {
-        if accepted_keys.contains(&key) {
-            starvation_counters.remove(&key);
-        } else {
-            let counter = starvation_counters.entry(key).or_insert(0);
-            *counter = counter.saturating_add(1);
+    {
+        let mut w = state.mutate();
+        for key in starving_keys {
+            if accepted_keys.contains(&key) {
+                // Победа "по жребию" (tie_break, не priority/age) не сбрасывает
+                // счётчик голодания -- см. doc-комментарий `tie_break_decided`
+                // выше и `arbitrator::TieBreakDecidedWins`. Счётчик остаётся КАК
+                // ЕСТЬ: не растёт (это всё-таки победа, не проигрыш), но и не
+                // обнуляется (реального превосходства не было -- следующий тик
+                // должен считаться от того же накопленного значения, иначе
+                // правило, побеждающее только жребием, никогда не докопит до
+                // `starvation_after` даже суммарно проигрывая чаще, чем выигрывая).
+                if !tie_break_decided.contains(&key) {
+                    w.starvation_counters_mut().remove(&key);
+                }
+            } else {
+                let counter = w.starvation_counters_mut().entry(key).or_insert(0);
+                *counter = counter.saturating_add(1);
+            }
         }
     }
 
@@ -1181,53 +1525,140 @@ fn run_tick_with_cache<S: GridStorage>(
     // пишет исход АРБИТРАЖА этого тика (`accepted_keys`, уже посчитан выше).
     // FIFO: новое значение — в конец, при переполнении `window` — старое
     // вылетает с начала.
-    for (x, y, rule_idx, head) in memory_targets {
-        let Some(spec) = rule_index.get(&head).and_then(|rules| rules.get(rule_idx)).and_then(|r| r.memory.as_ref()) else {
-            continue;
-        };
-        let value = match spec.record_trigger {
-            RecordTrigger::NeighborType(dir) => {
-                let (dx, dy) = arbitrator::direction_delta(dir);
-                let nx = x as i32 + dx;
-                let ny = y as i32 + dy;
-                let cell_type = if nx < 0 || ny < 0 {
-                    CellType::new(DEFAULT_CELL_VALUE)
-                } else {
-                    grid.get_cell(nx as usize, ny as usize)
-                        .map(|c| c.value.0)
-                        .unwrap_or(CellType::new(DEFAULT_CELL_VALUE))
-                };
-                RecordedValue::Type(cell_type)
-            }
-            RecordTrigger::RuleOutcome => {
-                if accepted_keys.contains(&(x, y, rule_idx)) {
-                    RecordedValue::Applied
-                } else {
-                    RecordedValue::Missed
+    {
+        let mut w = state.mutate();
+        for (x, y, rule_idx, head) in memory_targets {
+            let Some(spec) = lookup_rule(&head_index, head, rule_idx).and_then(|r| r.memory.as_ref()) else {
+                continue;
+            };
+            let value = match spec.record_trigger {
+                RecordTrigger::NeighborType(dir) => {
+                    let (dx, dy) = arbitrator::direction_delta(dir);
+                    let nx = x as i32 + dx;
+                    let ny = y as i32 + dy;
+                    let cell_type = if nx < 0 || ny < 0 {
+                        CellType::new(DEFAULT_CELL_VALUE)
+                    } else {
+                        grid.get_cell(nx as usize, ny as usize)
+                            .map(|c| c.value.0)
+                            .unwrap_or(CellType::new(DEFAULT_CELL_VALUE))
+                    };
+                    RecordedValue::Type(cell_type)
                 }
+                RecordTrigger::RuleOutcome => {
+                    if accepted_keys.contains(&(x, y, rule_idx)) {
+                        RecordedValue::Applied
+                    } else {
+                        RecordedValue::Missed
+                    }
+                }
+            };
+            let window = spec.window;
+            let buf = w.memory_buffers_mut().entry((x, y, rule_idx)).or_default();
+            buf.push_back(value);
+            while buf.len() > window {
+                buf.pop_front();
             }
-        };
-        let window = spec.window;
-        let buf = memory_buffers.entry((x, y, rule_idx)).or_default();
-        buf.push_back(value);
-        while buf.len() > window {
-            buf.pop_front();
         }
     }
 
-    if accepted.is_empty() {
+    let outputs = if accepted.is_empty() {
         // См. комментарий выше — то же самое: тик "случился", даже если всё
         // отклонено арбитражем, время должно пройти.
         grid.advance_age();
-        return (Vec::new(), Vec::new());
+        Vec::new()
+    } else {
+        // Применение. `RuleStateWriter`, не `snapshot()`: `apply_rule_buffered`
+        // (внутри `apply_matches_with_cam`) читает `feedback_counters` для
+        // `feedback_override` И инкрементирует его -- единая атомарная
+        // операция для победителя (см. doc-комментарий `rule_state`'s
+        // модуля про единственное осознанное исключение).
+        //
+        // `&accepted`, не `accepted.clone()` (было раньше) -- `RuleMatch`
+        // (`Copy`, 13 байт) не требует владения для `apply_matches_with_cam`
+        // (см. её doc-комментарий): полная копия `Vec<RuleMatch>` на КАЖДЫЙ
+        // тик с принятыми матчами была не нужна вообще, `accepted` и так
+        // используется ниже (обновление бюджета активаций, `counts`, и
+        // собственный возврат функции) -- клон существовал только потому,
+        // что старая сигнатура требовала владения, а не потому, что данные
+        // реально нужно было дублировать.
+        let mut w = state.mutate();
+        let (feedback_counters, memory_buffers) = w.feedback_and_memory_mut();
+        let (regions, outputs) = apply_matches_with_cam(grid, &accepted, rule_index, rule_cache, &cam_positions, feedback_counters, memory_buffers, write_buffer, pattern_buffer);
+
+        // Старение
+        grid.advance_age();
+        reset_age_for_regions(grid, &regions);
+        outputs
+    };
+
+    // Обновление счётчиков обратной связи ДЛЯ ПРОИГРАВШИХ арбитраж матчей —
+    // ЗАЩЁЛКА: растёт на КАЖДЫЙ тик, где матч детектируется (независимо от
+    // исхода арбитража — считаются попытки, не победы), никогда не
+    // сбрасывается. Читается (арбитражем и apply) КАК ОНА БЫЛА на конец
+    // предыдущего тика — та же дисциплина, что уже соблюдает
+    // `starvation_counters`; переключение на `new_direction` вступает в
+    // силу СО СЛЕДУЮЩЕГО тика после того, как порог достигнут, не в ТОТ ЖЕ
+    // тик. GPU (`shader.wgsl`) зеркалит эту семантику без какой-либо
+    // "+1"-поправки — читает persistent-счётчик напрямую, ровно как уже
+    // делает `starvation_counters`.
+    //
+    // ВЫИГРАВШИЕ матчи (в `accepted_keys`) сюда НЕ входят — их инкремент
+    // уже сделан ВНУТРИ `applicator::apply_rule_buffered`, СРАЗУ после
+    // чтения счётчика для `feedback_override` и ДО вызова
+    // `apply_shift_buffered`. Это не то же самое место, что у голодания
+    // (которое обновляется единым проходом здесь, после арбитража) —
+    // критичная разница: `apply_shift_buffered` может РЕЛОЦИРОВАТЬ запись
+    // этого же матча на новую позицию (remove старого ключа + insert
+    // нового), так что единый пост-apply проход по СТАРЫМ позициям
+    // (`feedback_keys`, посчитанным ДО арбитража) создавал бы для КАЖДОГО
+    // выигравшего и сдвинувшегося матча ПОСТОРОННЮЮ свежую запись на уже
+    // покинутой позиции вместо инкремента РЕАЛЬНОЙ, уже перенесённой записи
+    // — защёлка никогда не достигала бы `timeout` (найдено эмпирически:
+    // маркер уезжал за край решётки, ни разу не переключившись). Матчи,
+    // проигравшие арбитраж, никогда не вызывают apply вообще — их позиция
+    // гарантированно НЕ релоцирована, инкремент по ней здесь безопасен.
+    {
+        let mut w = state.mutate();
+        for key in &feedback_keys {
+            if !accepted_keys.contains(key) {
+                let counter = w.feedback_counters_mut().entry(*key).or_insert(0);
+                *counter = counter.saturating_add(1);
+            }
+        }
     }
 
-    // Применение
-    let (regions, outputs) = apply_matches_with_cam(grid, accepted.clone(), rule_index, rule_cache, &cam_positions, feedback_counters, memory_buffers);
+    // Обновление бюджета активаций: инкремент для КАЖДОГО выигравшего матча,
+    // чьё правило использует `max_activations` — ключ `(head, rule_idx)` не
+    // привязан к позиции (см. её doc-комментарий), поэтому, в отличие от
+    // `feedback_keys`, нет проблемы релокации записи при сдвиге — можно
+    // просто пройти по уже посчитанному `accepted` напрямую, без отдельного
+    // pre-arbitration списка ключей.
+    if extension_flags.max_activations {
+        let mut w = state.mutate();
+        for m in &accepted {
+            if lookup_rule(&head_index, m.head, m.rule_idx).is_some_and(|r| r.max_activations.is_some()) {
+                let counter = w.activation_counters_mut().entry((m.head, m.rule_idx)).or_insert(0);
+                *counter = counter.saturating_add(1);
+            }
+        }
+    }
 
-    // Старение
-    grid.advance_age();
-    reset_age_for_regions(grid, &regions);
+    // "apply" здесь включает и Flush (5.5) -- `advance_age`/сбор output
+    // происходят ВНУТРИ ветки `accepted.is_empty()` выше, не отдельным
+    // блоком; текущая структура функции не даёт их вычленить без более
+    // рискованной переделки уже проверенного тик-пайплайна (см. doc-
+    // комментарий `TickPhaseTimings::apply`).
+    mark_phase!(apply);
+
+    if let Some(c) = counts.as_mut() {
+        **c = TickEventCounts {
+            accepted: accepted.len(),
+            rejected: candidate_count - accepted.len(),
+            starvation_events: starvation_candidate_count,
+            feedback_events: feedback_candidate_count,
+        };
+    }
 
     (accepted, outputs)
 }
@@ -1343,11 +1774,72 @@ fn compute_search_radius_cache(rule_index: &HashMap<CellType, Vec<Rule>>) -> Sea
 /// O(число матчей) работы всё равно платился безусловно. С этим кэшем три
 /// скана в `run_tick_with_cache` пропускаются целиком (`Vec::new()`), если
 /// соответствующий флаг `false`.
+/// Разбивка одного тика по фазам — см. [`Engine::run_tick_profiled`].
+/// Три поля, не пять (§5 спецификации описывает пять фаз: Input/Detect/
+/// Arbitrate/Apply/Flush): Input не проходит через `run_tick_with_cache`
+/// вообще (граничные буферы заполняются `push_input`/`Engine`'s own
+/// input-related кодом отдельно, до вызова тика), а Flush (сброс возраста,
+/// сбор output) в текущей структуре функции физически внутри той же ветки,
+/// что и Apply — вычленить без риска для уже проверенного тик-пайплайна не
+/// стал (см. комментарий на месте единственного `mark_phase!(apply)`).
+/// `detect` считается ДАЖЕ на тике, где совпадений вообще не нашлось (ранний
+/// выход после чистки осиротевших записей) — это тоже реальное время этой
+/// фазы, не повод его не засчитывать.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TickPhaseTimings {
+    pub detect: std::time::Duration,
+    pub arbitrate: std::time::Duration,
+    pub apply: std::time::Duration,
+}
+
+/// Счётчики событий одного тика — заполняется `run_tick_with_cache`, когда
+/// вызывающая сторона (см. [`Engine::enable_tick_logging`]) их запросила.
+/// Тот же принцип "нулевые накладные расходы, если не просили", что и у
+/// [`TickPhaseTimings`]: без записи (`None`) ни один из подсчётов ниже не
+/// выполняется — величины (`starving_keys.len()`/`feedback_keys.len()`/
+/// `matches.len()`) и так уже посчитаны на своём обычном пути, разница —
+/// только в том, копируются ли они куда-то ещё.
+#[derive(Debug, Clone, Copy, Default)]
+struct TickEventCounts {
+    accepted: usize,
+    rejected: usize,
+    starvation_events: usize,
+    feedback_events: usize,
+}
+
+/// Одна запись структурированного JSON-лога тиков (п.5, сессия 2026-08-09).
+///
+/// `accepted`/`rejected` — принятые и отклонённые арбитражем совпадения
+/// этого тика (`rejected` = обнаруженные структурным матчером кандидаты,
+/// которые арбитраж НЕ принял — необязательно "плохие", могут выиграть на
+/// следующем тике). `starvation_events`/`feedback_events` — количество
+/// кандидатов этого тика, чьё правило использует `Rule::starvation_after`/
+/// `Rule::feedback` соответственно (то есть "под наблюдением" этого
+/// механизма на этом тике, а не только "сработавшие" — сам факт наблюдения
+/// уже полезен для внешнего мониторинга долго голодающих или часто
+/// переключающихся правил).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TickLogEntry {
+    pub tick: u64,
+    pub accepted: usize,
+    pub rejected: usize,
+    pub starvation_events: usize,
+    pub feedback_events: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ExtensionFlags {
     starvation_after: bool,
     feedback: bool,
     memory: bool,
+    /// Хоть одно правило набора использует `Rule::max_activations`. НЕ
+    /// участвует в `extension_rule_indices` ниже — тот список только для
+    /// per-tick чистки ПОЗИЦИОННЫХ (`x, y, rule_idx`) осиротевших записей;
+    /// `activation_counters` ключуется `(head, rule_idx)` без позиции и не
+    /// устаревает от того, что клетка перестала совпадать (устаревание
+    /// покрыто отдельно — `Engine::invalidate_stale_extension_state`, при
+    /// смене состава правил, а не каждый тик).
+    max_activations: bool,
     /// Различные `rule_idx` (по ВСЕМ головам сразу, не по одной) среди
     /// правил, у которых задан `feedback`, `memory` ИЛИ `starvation_after` —
     /// используется ТОЛЬКО дешёвой чисткой осиротевших записей в
@@ -1375,6 +1867,7 @@ fn compute_extension_flags(rule_index: &HashMap<CellType, Vec<Rule>>) -> Extensi
             flags.starvation_after |= rule.starvation_after.is_some();
             flags.feedback |= rule.feedback.is_some();
             flags.memory |= rule.memory.is_some();
+            flags.max_activations |= rule.max_activations.is_some();
             if rule.feedback.is_some() || rule.memory.is_some() || rule.starvation_after.is_some() {
                 seen_indices.insert(idx);
             }

@@ -236,6 +236,11 @@ pub struct GpuRule {
     /// только при `shift_count >= 1`/`>= 2` соответственно.
     pub shift_broadcast0: u32,
     pub shift_broadcast1: u32,
+    /// `ShiftSpec::keep_source` соответствующего сдвига (1/0) — см.
+    /// doc-комментарий `GpuMatch::keep_age_mask` в `shader.wgsl`. Осмыслено
+    /// только при `shift_count >= 1`/`>= 2` соответственно.
+    pub shift_keep_source0: u32,
+    pub shift_keep_source1: u32,
     /// Число `changes` (≤ [`MAX_CHANGES`]).
     pub change_count: u32,
     pub change_dx0: i32,
@@ -415,6 +420,14 @@ pub struct GpuMatchLayout {
     pub y: u32,
     pub rule_idx: u32,
     pub cell_count: u32,
+    /// См. `shader.wgsl::GpuMatch::keep_age_mask`'s doc-комментарий. ДОЛЖНО
+    /// идти СРАЗУ после `cell_count` и ДО `cells`, ровно как в шейдере —
+    /// иначе `bytemuck::cast_slice` в `cpu_fallback_resolve` читает
+    /// `cells`/`values` со сдвигом на 4 байта относительно реального
+    /// GPU-буфера (найдено этим же багом при добавлении поля — забыл
+    /// продублировать сюда, `matches_readback_buf`'s parity-тест это
+    /// сразу поймал).
+    pub keep_age_mask: u32,
     pub cells: [u32; MAX_WRITE_CELLS],
     pub values: [u32; MAX_WRITE_CELLS],
     /// См. `shader.wgsl::GpuMatch::matched`'s doc-комментарий.
@@ -546,12 +559,18 @@ pub enum GpuUnsupportedReason {
     /// обычных сдвигов. Короткие broadcast-сдвиги (`steps` в пределах
     /// потолка) ПОДДЕРЖИВАЮТСЯ — см. `build_gpu_rule_table`.
     BroadcastPathTooLong { head: u8, rule_idx: usize, steps: i32 },
-    /// `ShiftSpec::keep_source` — вне подмножества: шейдер безусловно
-    /// очищает исходную клетку сдвига, пропустить эту очистку избирательно
-    /// для одних сдвигов и не для других сейчас негде (см. её
-    /// doc-комментарий в `types.rs`,
-    /// "излучение").
-    KeepSourceUnsupported { head: u8, rule_idx: usize },
+    /// `ShiftSpec::keep_source` + `Rule::feedback` ВМЕСТЕ — вне
+    /// GPU-подмножества (обычный, без `feedback`, `keep_source` теперь
+    /// ПОДДЕРЖИВАЕТСЯ, см. `GpuMatch::keep_age_mask` в `shader.wgsl`).
+    /// Причина: `update_feedback_relocate_pass` не портирован для случая,
+    /// когда источник НЕ освобождается — на CPU перенос счётчика вообще
+    /// пропускается при `keep_source`, а GPU-версия такого условия не
+    /// знает и релоцировала бы счётчик даже когда оригинал физически
+    /// остался на месте (найдено бы порчей данных, не крашем).
+    FeedbackKeepSourceUnsupported { head: u8, rule_idx: usize },
+    /// `ShiftSpec::keep_source` + `Rule::memory` ВМЕСТЕ — вне
+    /// GPU-подмножества, ТА ЖЕ причина, что и `FeedbackKeepSourceUnsupported`.
+    MemoryKeepSourceUnsupported { head: u8, rule_idx: usize },
     /// `Rule::feedback` + `ShiftSpec::broadcast` ВМЕСТЕ — вне GPU-подмножества
     /// (обычный, не-broadcast `feedback` ПОДДЕРЖИВАЕТСЯ, см.
     /// `GpuRuleTable::needs_feedback`). Причина: перенос persistent-счётчика
@@ -629,6 +648,15 @@ pub enum GpuUnsupportedReason {
     /// `FeedbackChangeCollidesWithShiftTarget`, только без "альтернативного"
     /// направления (у `memory` его просто нет).
     MemoryChangeCollidesWithShiftTarget { head: u8, rule_idx: usize },
+    /// `Rule::max_activations` — вне GPU-подмножества. Счётчик ключуется
+    /// `(head, rule_idx)`, БЕЗ позиции (см. её doc-комментарий в `types.rs`)
+    /// — персистентное состояние ВНЕ формы, для которой уже существует
+    /// GPU-буфер (`starvation_counters_buf`/`feedback_counters_buf` оба
+    /// индексированы по клетке решётки, `padded_idx`-совместимо; глобальный
+    /// счётчик на `rule_idx` потребовал бы отдельного, третьего вида
+    /// буфера и отдельного гейт-прохода в `detect_pass`). Не тронуто
+    /// намеренно — см. §13.4 спецификации.
+    MaxActivationsUnsupported { head: u8, rule_idx: usize },
 }
 
 /// Собрать `effective_pattern` ровно так же, как `matcher::build_group_data`
@@ -716,8 +744,8 @@ pub fn build_gpu_rule_table(
         let mut union_seen: FxHashSet<(i8, i8)> = FxHashSet::default();
 
         for (rule_idx, rule) in group.iter().enumerate() {
-            if rule.shifts.iter().flatten().any(|s| s.keep_source) {
-                return Err(GpuUnsupportedReason::KeepSourceUnsupported { head: head.0, rule_idx });
+            if rule.max_activations.is_some() {
+                return Err(GpuUnsupportedReason::MaxActivationsUnsupported { head: head.0, rule_idx });
             }
             if let Some(spec) = rule.recursion {
                 if rule.cam.is_some() {
@@ -738,10 +766,11 @@ pub fn build_gpu_rule_table(
                     return Err(GpuUnsupportedReason::MemoryWindowTooLarge { head: head.0, rule_idx, window: spec.window });
                 }
             }
-            // Флаг `broadcast` КАЖДОГО сдвига, в том же порядке/индексации,
-            // что `shift_deltas` — используется ниже и при заполнении
-            // `GpuRule::shift_broadcast0/1`.
+            // Флаг `broadcast`/`keep_source` КАЖДОГО сдвига, в том же
+            // порядке/индексации, что `shift_deltas` — используется ниже и
+            // при заполнении `GpuRule::shift_broadcast0/1`/`shift_keep_source0/1`.
             let shift_broadcasts: Vec<bool> = rule.shifts.iter().flatten().map(|s| s.broadcast).collect();
+            let shift_keep_sources: Vec<bool> = rule.shifts.iter().flatten().map(|s| s.keep_source).collect();
             let shift_deltas: Vec<(i32, i32)> = rule.shifts.iter().flatten().map(shift_delta).collect();
             if shift_deltas.len() > MAX_SHIFTS {
                 return Err(GpuUnsupportedReason::TooManyShifts { head: head.0, rule_idx, len: shift_deltas.len() });
@@ -758,6 +787,18 @@ pub fn build_gpu_rule_table(
                 }
                 if shift_broadcasts[0] {
                     return Err(GpuUnsupportedReason::FeedbackBroadcastUnsupported { head: head.0, rule_idx });
+                }
+                if shift_keep_sources[0] {
+                    // Перенос счётчика (`update_feedback_relocate_pass`) не
+                    // портирован для случая, когда источник НЕ освобождается
+                    // — на CPU перенос вообще пропускается при `keep_source`
+                    // (`applicator.rs`: "перенос — ТОЛЬКО когда источник
+                    // реально освобождается"), GPU-версия такого условия не
+                    // знает и релоцировала бы счётчик даже когда оригинал
+                    // физически остался на месте. Отдельная, более узкая
+                    // задача от `keep_age_mask` (тот отвечает только за
+                    // возраст клетки, не за feedback-счётчик).
+                    return Err(GpuUnsupportedReason::FeedbackKeepSourceUnsupported { head: head.0, rule_idx });
                 }
                 // Перенос счётчика (см. `FeedbackChangeCollidesWithShiftTarget`'s
                 // doc-комментарий) предполагает, что тип клетки на новой
@@ -785,6 +826,12 @@ pub fn build_gpu_rule_table(
                 }
                 if shift_deltas.len() == 1 && shift_broadcasts[0] {
                     return Err(GpuUnsupportedReason::MemoryBroadcastUnsupported { head: head.0, rule_idx });
+                }
+                if shift_deltas.len() == 1 && shift_keep_sources[0] {
+                    // Та же причина, что и `FeedbackKeepSourceUnsupported`
+                    // выше — перенос буфера памяти на GPU не портирован для
+                    // случая, когда источник не освобождается.
+                    return Err(GpuUnsupportedReason::MemoryKeepSourceUnsupported { head: head.0, rule_idx });
                 }
                 // Та же причина, что и `FeedbackChangeCollidesWithShiftTarget`
                 // выше — `memory` без "альтернативного" направления, только
@@ -955,6 +1002,10 @@ pub fn build_gpu_rule_table(
             for (i, &b) in shift_broadcasts.iter().enumerate() {
                 shift_broadcast_fields[i] = b;
             }
+            let mut shift_keep_source_fields = [false; MAX_SHIFTS];
+            for (i, &b) in shift_keep_sources.iter().enumerate() {
+                shift_keep_source_fields[i] = b;
+            }
 
             rules.push(GpuRule {
                 pattern_start,
@@ -979,6 +1030,8 @@ pub fn build_gpu_rule_table(
                 shift_dy1: shift_fields[1].1,
                 shift_broadcast0: shift_broadcast_fields[0] as u32,
                 shift_broadcast1: shift_broadcast_fields[1] as u32,
+                shift_keep_source0: shift_keep_source_fields[0] as u32,
+                shift_keep_source1: shift_keep_source_fields[1] as u32,
                 change_count: rule.changes.len() as u32,
                 change_dx0: change_fields[0].0,
                 change_dy0: change_fields[0].1,

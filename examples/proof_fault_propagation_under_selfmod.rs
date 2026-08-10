@@ -35,7 +35,7 @@ fn active_rule(steps: u16) -> HashMap<CellType, Vec<Rule>> {
     idx.insert(CellType(ACTIVE), vec![Rule {
         id: vec![CellType(ACTIVE)], pattern: vec![],
         shifts: vec![vec![ShiftSpec::new(Direction::Right, steps)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }]);
     idx
 }
@@ -72,10 +72,8 @@ fn main() {
         if t == SWITCH_TICK + 1 {
             // Самомодификация вступает в силу для СЛЕДУЮЩЕГО тика — меняем
             // правило в ОБЕИХ копиях (это факт эволюции программы, не порча).
-            reference.rule_index = active_rule(3);
-            reference.rebuild_rule_cache();
-            corrupted.rule_index = active_rule(3);
-            corrupted.rebuild_rule_cache();
+            reference.set_rule_index(active_rule(3));
+            corrupted.set_rule_index(active_rule(3));
         }
 
         let max_dist = (0..WIDTH)

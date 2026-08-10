@@ -106,7 +106,7 @@ fn v2_rule_strategy() -> impl Strategy<Value = Rule> {
                 overflow: OverflowAction::Discard,
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
             }
         })
         .prop_filter("rule must have at least one shift or change", |r| {
@@ -210,7 +210,7 @@ fn test_gpu_v2_matches_cpu_head_on_collision_scenario() {
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }
     }
 
@@ -270,7 +270,7 @@ fn test_gpu_v2_hybrid_fallback_resolves_long_conflict_chain() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -331,7 +331,7 @@ fn test_gpu_v2_cam_matches_cpu_single_and_conflicting_magnets() {
             overflow: OverflowAction::Discard,
             cam: Some(CamSearch { radius, target_type: CellType(TARGET) }),
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }
     }
 
@@ -415,7 +415,7 @@ fn test_gpu_v2_cam_two_level_conflict_chain_matches_cpu() {
             overflow: OverflowAction::Discard,
             cam: Some(CamSearch { radius: 3, target_type: CellType(target) }),
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }
     }
 
@@ -498,7 +498,7 @@ fn test_gpu_v2_tie_break_matches_cpu_rotating_conflict() {
             overflow: Default::default(),
             cam: None,
             tie_break,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }
     }
 
@@ -562,7 +562,7 @@ fn test_gpu_v2_broadcast_matches_cpu_single_no_conflict() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -621,7 +621,7 @@ fn test_gpu_v2_broadcast_matches_cpu_overlapping_paths_arbitrated() {
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         }
     }
 
@@ -703,7 +703,7 @@ fn test_gpu_v2_broadcast_matches_cpu_boundary_overflow_discard() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -755,6 +755,121 @@ fn test_gpu_v2_broadcast_matches_cpu_boundary_overflow_discard() {
 }
 
 // ──────────────────────────────────────────────────────────────
+// `ShiftSpec::keep_source` на GPU (см. `GpuMatch::keep_age_mask` в
+// `shader.wgsl`) — источник не очищается, и КРИТИЧНО, его возраст не
+// должен сбрасываться (в отличие от обычной клетки, выигравшей арбитраж).
+// Именно возраст источника, а не только значение — тот аспект, который
+// однажды уже разошёлся молча (несовпадение layout `GpuMatchLayout` на
+// CPU-стороне сдвинуло на 4 байта чтение `cells`/`values` при
+// CPU-fallback readback — этот тест, сравнивающий born_at на КАЖДОМ тике,
+// поймал бы это немедленно).
+// ──────────────────────────────────────────────────────────────
+
+/// Простой случай: одна клетка-маркер копирует себя вправо, не убывая у
+/// источника. Паттерн требует ПУСТОГО правого соседа — без этого гейта
+/// каждая созданная копия тоже начала бы сдвигаться в СЛЕДУЮЩЕМ тике,
+/// раздувая сравнение (не ошибка, просто ненужная сложность для теста,
+/// который проверяет именно возраст источника, а не рост цепочки — тот
+/// сценарий уже покрыт CPU-стороной, `test_max_activations_bounds_keep_source_growth`).
+#[test]
+fn test_gpu_v2_keep_source_matches_cpu_source_age_preserved() {
+    const MARKER: u8 = 7;
+    let rule = Rule {
+        id: vec![CellType(MARKER)],
+        pattern: vec![(0, 0, CellType(MARKER)), (1, 0, CellType(0))],
+        shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: true }]],
+        changes: vec![],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: OverflowAction::Discard,
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+    };
+    let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
+    rule_index.insert(CellType(MARKER), vec![rule]);
+
+    let width = 10;
+    let storage = VecStorage::new(width, 1);
+    let mut cpu_grid = Grid::new(storage, HashSet::new());
+    cpu_grid.set_cell(0, 0, Cell { value: CellValue::new(MARKER), born_at: 0 });
+    let initial = vec![(0usize, 0usize, Cell { value: CellValue::new(MARKER), born_at: 0 })];
+
+    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index).expect("plain keep_source is within the v2 subset");
+
+    for tick in 0..5 {
+        run_tick(&mut cpu_grid, &rule_index);
+        gpu_engine.run_tick();
+        let gpu_result = gpu_engine.read_grid();
+        for x in 0..width {
+            let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
+            let gpu_cell = gpu_result[x];
+            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
+            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} -- keep_source source must not reset age on GPU either");
+        }
+    }
+
+    // Ручная проверка (не только "GPU==CPU", а "оба верны"): x=0 (источник)
+    // обязан ОСТАТЬСЯ типом MARKER (не очищен) на протяжении ВСЕХ тиков, и
+    // его born_at обязан остаться 0 (никогда не тронут) -- если бы это было
+    // не так, CPU-сторона теста уже провалилась бы сама на себя.
+    let source = cpu_grid.get_cell(0, 0).copied().unwrap_or_default();
+    assert_eq!(source.value.0 .0, MARKER, "source must survive keep_source");
+    assert_eq!(source.born_at, 0, "source's age must never reset");
+}
+
+/// "Излучение" (`broadcast + keep_source` вместе, исходный мотивирующий
+/// случай для GPU-порта) — источник неподвижен, путь заполняется целиком,
+/// ни то ни другое не должно сбрасывать возраст источника.
+#[test]
+fn test_gpu_v2_emit_broadcast_plus_keep_source_matches_cpu() {
+    const EMITTER: u8 = 8;
+    let rule = Rule {
+        id: vec![CellType(EMITTER)],
+        pattern: vec![(0, 0, CellType(EMITTER))],
+        shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 3, broadcast: true, keep_source: true }]],
+        changes: vec![],
+        active_only: false,
+        priority: 10,
+        min_age: 0, // переизлучение на уже размеченный путь безвредно (то же значение поверх себя)
+        overflow: OverflowAction::Discard,
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+    };
+    let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
+    rule_index.insert(CellType(EMITTER), vec![rule]);
+
+    let width = 10;
+    let storage = VecStorage::new(width, 1);
+    let mut cpu_grid = Grid::new(storage, HashSet::new());
+    cpu_grid.set_cell(0, 0, Cell { value: CellValue::new(EMITTER), born_at: 0 });
+    let initial = vec![(0usize, 0usize, Cell { value: CellValue::new(EMITTER), born_at: 0 })];
+
+    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index).expect("emit (broadcast+keep_source) is within the v2 subset");
+
+    for tick in 0..3 {
+        run_tick(&mut cpu_grid, &rule_index);
+        gpu_engine.run_tick();
+        let gpu_result = gpu_engine.read_grid();
+        for x in 0..width {
+            let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
+            let gpu_cell = gpu_result[x];
+            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
+            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+        }
+    }
+
+    let source = cpu_grid.get_cell(0, 0).copied().unwrap_or_default();
+    assert_eq!(source.value.0 .0, EMITTER, "emitter must survive (keep_source)");
+    assert_eq!(source.born_at, 0, "emitter's age must never reset");
+    for x in 1..=3 {
+        assert_eq!(cpu_grid.get_cell(x, 0).copied().unwrap_or_default().value.0 .0, EMITTER, "path cell x={x} must be filled (broadcast)");
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
 // `Rule::recursion` на GPU (см. `gpu::rule_table::MAX_RECURSION_DEPTH`'s
 // doc-комментарий: каскад — чисто локальное, однопоточное вычисление,
 // безопасное на GPU в отличие от `feedback`/`memory`/`starvation_after`).
@@ -778,7 +893,7 @@ fn wall_fill_rule(min_age: u64, max_depth: u8) -> Rule {
         starvation_after: None,
         feedback: None,
         recursion: Some(RecursionSpec { max_depth, direction: Direction::Right }),
-        memory: None,
+        memory: None, max_activations: None,
     }
 }
 
@@ -916,7 +1031,7 @@ fn starvation_rules(low_threshold: u32) -> HashMap<CellType, Vec<Rule>> {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let rule_low = Rule {
         id: vec![CellType(1)],
@@ -932,7 +1047,7 @@ fn starvation_rules(low_threshold: u32) -> HashMap<CellType, Vec<Rule>> {
         starvation_after: Some(low_threshold),
         feedback: None,
         recursion: None,
-        memory: None,
+        memory: None, max_activations: None,
     };
     let mut idx = HashMap::new();
     idx.insert(CellType(1), vec![rule_high, rule_low]);
@@ -1072,7 +1187,7 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let rule_low = Rule {
         id: vec![CellType(HEAD)],
@@ -1088,7 +1203,7 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
         starvation_after: Some(1),
         feedback: None,
         recursion: None,
-        memory: None,
+        memory: None, max_activations: None,
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(HEAD), vec![rule_high, rule_low]);
@@ -1162,7 +1277,7 @@ fn feedback_mover_rule(timeout: u64) -> Rule {
         starvation_after: None,
         feedback: Some(cellaria::types::FeedbackSpec { timeout, new_direction: Direction::Down }),
         recursion: None,
-        memory: None,
+        memory: None, max_activations: None,
     }
 }
 
@@ -1209,15 +1324,15 @@ fn test_gpu_v2_feedback_switches_direction_after_timeout_matches_cpu() {
         }
     }
 
-    // Ручная проверка на CPU-эталоне (не просто "GPU совпал с CPU"): CPU
-    // сравнивает счётчик уже ПОСЛЕ инкремента за текущий тик (см.
-    // `applicator.rs:342-343` — защёлка растёт в `run_tick_with_cache`
-    // ДО apply, так что детекция ТЕКУЩЕГО тика тоже учитывается) —
-    // переключение срабатывает ровно на тике `t == TIMEOUT` (после
-    // TIMEOUT-1 тиков вправо), не на `TIMEOUT+1`. К моменту TOTAL_TICKS
-    // маркер должен быть в (TIMEOUT-1, TOTAL_TICKS - TIMEOUT + 1).
-    let expected_x = TIMEOUT as usize - 1;
-    let expected_y = TOTAL_TICKS as usize - TIMEOUT as usize + 1;
+    // Ручная проверка на CPU-эталоне (не просто "GPU совпал с CPU"): счётчик
+    // читается КАК ОН БЫЛ на начало тика (та же дисциплина, что и у
+    // `age`/`min_age`/`starvation_after` — инкремент в `run_tick_with_cache`
+    // стоит строго ПОСЛЕ apply, так что обнаружение ЭТИМ тиком видно только
+    // следующему тику). Тики 1..TIMEOUT читают counter=0..TIMEOUT-1 (все
+    // < TIMEOUT) -> Right; переключение первым видит тик TIMEOUT+1. К
+    // моменту TOTAL_TICKS маркер должен быть в (TIMEOUT, TOTAL_TICKS - TIMEOUT).
+    let expected_x = TIMEOUT as usize;
+    let expected_y = TOTAL_TICKS as usize - TIMEOUT as usize;
     assert_eq!(
         cpu_engine.grid().get_cell(expected_x, expected_y).map(|c| c.value.0 .0),
         Some(1),
@@ -1244,6 +1359,134 @@ fn test_gpu_v2_feedback_timeout_zero_switches_immediately() {
 
     assert_eq!(gpu_result[0].value.0 .0, 0, "source must be cleared after the shift");
     assert_eq!(gpu_result[width].value.0 .0, 1, "timeout=0 must switch to Down on tick 1, not Right");
+}
+
+fn feedback_mover_rule_priority(timeout: u64, priority: u32) -> Rule {
+    Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+        changes: vec![],
+        active_only: false,
+        priority,
+        min_age: 0,
+        overflow: OverflowAction::Discard,
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+        feedback: Some(cellaria::types::FeedbackSpec { timeout, new_direction: Direction::Down }),
+        recursion: None,
+        memory: None, max_activations: None,
+    }
+}
+
+/// Не двигается сама, каждый тик перезаписывает соседа СНИЗУ (относительное
+/// смещение `(0, 1)`) литералом `literal` — якорь остаётся ВНЕ траектории A
+/// (та едет по своей строке, B сидит строкой выше и целится ровно в клетку
+/// под собой) — используется как "проигрывающий" оппонент для теста ниже:
+/// голова `2`, ничем не очищается и не двигается, значит матчится КАЖДЫЙ тик
+/// заново (постоянный источник конкуренции за одну и ту же абсолютную
+/// клетку, без побочных коллизий с собственной позицией A на поздних тиках).
+fn contender_self_write_rule(priority: u32, literal: u8) -> Rule {
+    Rule {
+        id: vec![CellType(2)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(0, 1, ChangeValue::Literal(literal))],
+        active_only: false,
+        priority,
+        min_age: 0,
+        overflow: OverflowAction::Discard,
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None, max_activations: None,
+    }
+}
+
+/// Целевой репро для риска, описанного в `gpu/rule_table.rs`'s
+/// `FeedbackChangeCollidesWithShiftTarget`: перенос `feedback`-счётчика
+/// (`update_feedback_relocate_pass`) предполагает, что тип клетки на НОВОЙ
+/// позиции — снова собственная голова маркера, и это предположение может
+/// быть нарушено, если РЕАЛЬНО записанное там значение пришло не из
+/// собственного сдвига правила. Явная защита в коде покрывает только
+/// САМОколлизию (одно и то же правило, `changes` на том же смещении, что и
+/// собственный сдвиг) — случай ДВУХ РАЗНЫХ правил, реально контестирующих
+/// одну и ту же абсолютную клетку через нормальный раундовый арбитраж (не
+/// самоколлизия), явно защитой нигде не покрыт — этот тест проверяет его
+/// напрямую против CPU-эталона, а не рассуждением.
+///
+/// Голова `1` (A, в строке 1, `feedback`, сдвиг Right, ВЫСОКИЙ приоритет) и
+/// голова `2` (B, в строке 0 прямо НАД первой целевой клеткой A, self-write
+/// вниз через `changes`, НИЗКИЙ приоритет, никогда не двигается и не
+/// очищается — переигрывает каждый тик) обе целятся в одну и ту же
+/// абсолютную клетку на первом же тике. A обязана побеждать (выше
+/// приоритет) — если раундовый арбитраж и перенос счётчика работают
+/// корректно, GPU обязан побитово совпасть с CPU на каждом тике вообще (не
+/// только в клетке контеста), включая корректно перенесённый
+/// `feedback`-счётчик A — если бы перенос спутал слот A со слотом B (или
+/// каким-либо иным), поведение A (момент переключения на `Down`) разошлось
+/// бы с CPU-эталоном на одном из следующих тиков, что немедленно поймает
+/// per-tick сверка ниже.
+#[test]
+fn test_gpu_v2_feedback_relocate_survives_genuine_cross_rule_contention() {
+    const TIMEOUT: u64 = 4;
+    const TOTAL_TICKS: u32 = 8;
+    let width = 12;
+    let height = 8;
+
+    let mut rule_index = HashMap::new();
+    rule_index.insert(CellType(1), vec![feedback_mover_rule_priority(TIMEOUT, 20)]);
+    rule_index.insert(CellType(2), vec![contender_self_write_rule(5, 2)]);
+
+    // A в (2,1) целится Right в (3,1); B в (3,0) целится Down в ту же (3,1)
+    // -- genuine contention на первом же тике, A выигрывает (приоритет
+    // 20 > 5). B никогда не двигается и не очищается -- продолжает
+    // безобидно писать (3,1) на КАЖДОМ следующем тике тоже (A там уже нет
+    // после тика 1, реального конфликта больше не возникает, но сам факт
+    // повторного матчинга B каждый тик уже проверен GPU/CPU сверкой ниже).
+    let initial = vec![(2usize, 1usize, Cell::new(1)), (3usize, 0usize, Cell::new(2))];
+    let storage = VecStorage::new(width, height);
+    let mut grid = Grid::new(storage, HashSet::new());
+    grid.set_cell(2, 1, Cell::new(1));
+    grid.set_cell(3, 0, Cell::new(2));
+
+    let mut cpu_engine = Engine::new(grid, rule_index.clone());
+    let mut gpu_engine =
+        GpuEngine::new(width, height, &initial, &rule_index).expect("feedback vs a lower-priority contending self-write rule is within the v2 subset");
+
+    let mut switched_at_cpu: Option<u32> = None;
+    let mut switched_at_gpu: Option<u32> = None;
+
+    for tick in 1..=TOTAL_TICKS {
+        cpu_engine.run_tick();
+        gpu_engine.run_tick();
+        let gpu_result = gpu_engine.read_grid();
+
+        for y in 0..height {
+            for x in 0..width {
+                let cpu_cell = cpu_engine.grid().get_cell(x, y).copied().unwrap_or_default();
+                let gpu_cell = gpu_result[y * width + x];
+                assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x} y={y}");
+                assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} y={y}");
+            }
+        }
+
+        // A -- единственная голова `1` на решётке; "переключилась" = где-то
+        // на строке > 1 появилась голова `1` (Down уводит её из строки 1
+        // навсегда, Right держит её в строке 1).
+        if switched_at_cpu.is_none() && (0..width).any(|x| (2..height).any(|y| cpu_engine.grid().get_cell(x, y).map(|c| c.value.0 .0) == Some(1))) {
+            switched_at_cpu = Some(tick);
+        }
+        if switched_at_gpu.is_none() && (0..width).any(|x| (2..height).any(|y| gpu_result[y * width + x].value.0 .0 == 1)) {
+            switched_at_gpu = Some(tick);
+        }
+    }
+
+    assert!(switched_at_cpu.is_some(), "CPU sanity: A must switch to Down within TOTAL_TICKS ticks (TIMEOUT={TIMEOUT})");
+    assert_eq!(switched_at_cpu, switched_at_gpu, "switch tick must match between CPU and GPU -- a corrupted feedback counter would desync this");
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1289,7 +1532,7 @@ fn memory_neighbor_type_mover_rule(window: usize) -> Rule {
             window,
             record_trigger: RecordTrigger::NeighborType(Direction::Up),
             match_pattern: vec![RecordedValue::Type(CellType(0)); window],
-        }),
+        }), max_activations: None,
     }
 }
 
@@ -1377,7 +1620,7 @@ fn test_gpu_v2_memory_rule_outcome_gate_oscillates_matches_cpu() {
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::RuleOutcome, match_pattern: vec![RecordedValue::Missed] }),
+        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::RuleOutcome, match_pattern: vec![RecordedValue::Missed] }), max_activations: None,
     };
     let mut rule_index = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -1451,7 +1694,7 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None,
+        memory: None, max_activations: None,
     };
     let rule_low = Rule {
         id: vec![CellType(1)],
@@ -1471,7 +1714,7 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Down),
             match_pattern: vec![RecordedValue::Type(CellType(7))],
-        }),
+        }), max_activations: None,
     };
     let beacon7 = Rule {
         id: vec![CellType(7)],
@@ -1487,7 +1730,7 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None,
+        memory: None, max_activations: None,
     };
     let beacon8 = Rule {
         id: vec![CellType(8)],
@@ -1503,7 +1746,7 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None,
+        memory: None, max_activations: None,
     };
     let mut idx = HashMap::new();
     idx.insert(CellType(1), vec![rule_high, rule_low]);
@@ -1614,7 +1857,7 @@ fn feedback_plus_memory_rules(feedback_timeout: u64, memory_window: usize) -> Ha
             window: memory_window,
             record_trigger: RecordTrigger::NeighborType(Direction::Down),
             match_pattern: vec![RecordedValue::Type(CellType(7)); memory_window],
-        }),
+        }), max_activations: None,
     };
     let beacon7 = Rule {
         id: vec![CellType(7)],
@@ -1630,7 +1873,7 @@ fn feedback_plus_memory_rules(feedback_timeout: u64, memory_window: usize) -> Ha
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None,
+        memory: None, max_activations: None,
     };
     let beacon8 = Rule {
         id: vec![CellType(8)],
@@ -1646,7 +1889,7 @@ fn feedback_plus_memory_rules(feedback_timeout: u64, memory_window: usize) -> Ha
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None,
+        memory: None, max_activations: None,
     };
     let mut idx = HashMap::new();
     idx.insert(CellType(1), vec![marker]);

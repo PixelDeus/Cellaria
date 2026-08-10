@@ -85,7 +85,7 @@ fn emit_rule_front_gated(direction: Direction) -> HashMap<CellType, Vec<Rule>> {
             starvation_after: None,
             feedback: None,
             recursion: None,
-            memory: None,
+            memory: None, max_activations: None,
         }],
     );
     idx
@@ -113,7 +113,7 @@ fn plain_eraser_rule() -> HashMap<CellType, Vec<Rule>> {
             starvation_after: None,
             feedback: None,
             recursion: None,
-            memory: None,
+            memory: None, max_activations: None,
         }],
     );
     idx

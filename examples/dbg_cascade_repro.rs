@@ -25,7 +25,7 @@ fn emit_rule(direction: Direction) -> HashMap<CellType, Vec<Rule>> {
             starvation_after: None,
             feedback: None,
             recursion: None,
-            memory: None,
+            memory: None, max_activations: None,
         }],
     );
     idx

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc fc3b0739d4d9c3dcaab24d9994fb9d589fa17b1565526196f83a1ed644948eeb # shrinks to rules = [Rule { id: [CellType(1)], pattern: [(0, 0, CellType(1))], shifts: [], changes: [(0, 0, Ref(1))], active_only: false, priority: 0, min_age: 0, overflow: Discard, cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None }], (width, height, cells) = (4, 4, [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0]), advance_ticks = 0
+cc e4500d00dc2b4fab8b97a81db82b5b05bb8f0694bf16f9e19b99530cabd65202 # shrinks to rules = [Rule { id: [CellType(4)], pattern: [(0, 0, CellType(4))], shifts: [], changes: [(0, 0, Ref(0))], active_only: false, priority: 0, min_age: 0, overflow: Discard, cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None }, Rule { id: [CellType(2)], pattern: [(0, 0, CellType(2))], shifts: [], changes: [], active_only: false, priority: 1, min_age: 0, overflow: Discard, cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None }], (width, height, cells) = (4, 4, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4, 0]), advance_ticks = 0

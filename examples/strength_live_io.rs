@@ -42,7 +42,7 @@ fn main() {
         overflow: OverflowAction::Write(0), // 0 = пронести исходное значение как есть
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(PACKET), vec![rule]);

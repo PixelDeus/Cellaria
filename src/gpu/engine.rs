@@ -346,6 +346,12 @@ pub struct GpuEngine {
     /// relocate), см. `ArbitratedPipeline::p_update_memory_push`'s
     /// doc-комментарий.
     needs_memory: bool,
+    /// Число claim/resolve-раундов на тик — см. doc-комментарий [`ROUNDS`]
+    /// у модуля. По умолчанию (`GpuEngine::new`) равно `ROUNDS`; настраивается
+    /// через `GpuEngine::with_rounds` (п.1, сессия 2026-08-09) для конфигов
+    /// с заведомо короткими/длинными цепочками конфликтов, где
+    /// экспериментально измеренный компромисс "16 — общий случай" не подходит.
+    rounds: u32,
 }
 
 impl GpuEngine {
@@ -358,11 +364,29 @@ impl GpuEngine {
         initial_cells: &[(usize, usize, Cell)],
         rule_index: &HashMap<CellType, Vec<Rule>>,
     ) -> Result<Self, GpuUnsupportedReason> {
-        let table = build_gpu_rule_table(rule_index)?;
-        Ok(pollster::block_on(Self::init(width, height, initial_cells, &table)))
+        Self::with_rounds(width, height, initial_cells, rule_index, ROUNDS)
     }
 
-    async fn init(width: usize, height: usize, initial_cells: &[(usize, usize, Cell)], table: &GpuRuleTable) -> Self {
+    /// Как [`GpuEngine::new`], но с явным числом claim/resolve-раундов на
+    /// тик вместо дефолтного [`ROUNDS`] — см. doc-комментарий поля `rounds`.
+    pub fn with_rounds(
+        width: usize,
+        height: usize,
+        initial_cells: &[(usize, usize, Cell)],
+        rule_index: &HashMap<CellType, Vec<Rule>>,
+        rounds: u32,
+    ) -> Result<Self, GpuUnsupportedReason> {
+        let table = build_gpu_rule_table(rule_index)?;
+        Ok(pollster::block_on(Self::init(width, height, initial_cells, &table, rounds)))
+    }
+
+    async fn init(
+        width: usize,
+        height: usize,
+        initial_cells: &[(usize, usize, Cell)],
+        table: &GpuRuleTable,
+        rounds: u32,
+    ) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
@@ -476,6 +500,7 @@ impl GpuEngine {
             needs_starvation: table.needs_starvation,
             needs_feedback: table.needs_feedback,
             needs_memory: table.needs_memory,
+            rounds,
         }
     }
 
@@ -864,7 +889,7 @@ impl GpuEngine {
                     pass.set_pipeline(&p.p_detect);
                     pass.dispatch_workgroups(wg_matches, 1, 1);
 
-                    for _ in 0..ROUNDS {
+                    for _ in 0..self.rounds {
                         pass.set_pipeline(&p.p_clear_claims);
                         pass.dispatch_workgroups(wg_padded_cells, 1, 1);
                         pass.set_pipeline(&p.p_claim);
@@ -1126,6 +1151,24 @@ impl GpuEngine {
                 locked[c as usize] = 1;
             }
             state_writes.push((state_offset, 1)); // ACCEPTED
+            // ИЗВЕСТНОЕ, задокументированное ограничение (не забытый баг):
+            // `mat.keep_age_mask` (см. её doc-комментарий у `GpuMatchLayout` и
+            // `apply_pass`'s использование в `shader.wgsl`) здесь НЕ
+            // учитывается — каждая клетка получает `target_born_at`
+            // безусловно, даже если это клетка-источник `keep_source`-сдвига,
+            // которой возраст сбрасываться не должен. В отличие от
+            // `apply_pass` (обычный, сходящийся за раунды путь), у этой
+            // функции нет дешёвого доступа к ТЕКУЩЕМУ `born_at` целевой
+            // клетки без дополнительного readback решётки — а это редкий
+            // путь (длинные несходящиеся конфликтные цепочки), для которого
+            // цена лишнего readback ради этого узкого случая не оправдана.
+            // Практическое следствие: `keep_source`-правило, чей матч попал
+            // именно в CPU-добор (не в обычный сходящийся путь), в этом
+            // единственном тике получит сброшенный возраст источника —
+            // расхождение с CPU, того же класса, что и `starvation_after`+
+            // `tie_break` на GPU (см. специф. §13.4) — не исправлено по той
+            // же причине: редкий случай, явно задокументирован, а не тихо
+            // сломан.
             for k in 0..cell_count {
                 let c = mat.cells[k] as i64;
                 let py = c / padded_width as i64;

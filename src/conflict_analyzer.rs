@@ -249,26 +249,93 @@ pub enum CompositionVerdict {
 }
 
 // ============================================================================
+// Отчёт о конфликтах для набора правил конфига (п.4, сессия 2026-08-09)
+// ============================================================================
+
+/// Одна потенциально конфликтующая пара правил, в человекочитаемом виде —
+/// голова + локальный индекс внутри `rule_index[head]`, а не сырой плоский
+/// индекс из `ConflictGraph` (который зависит от порядка обхода `HashMap`
+/// при флэттенинге и сам по себе ничего не говорит вызывающему коду).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictingPair {
+    pub head_a: CellType,
+    pub rule_idx_a: usize,
+    pub head_b: CellType,
+    pub rule_idx_b: usize,
+}
+
+/// Отчёт о статическом анализе конфликтов набора правил, загруженного из
+/// конфига. Строится поверх уже существующего `ConflictGraph` — та же
+/// свёртка `rule_index` в плоский `Vec<Rule>`, что и `compute_conflict_partners`
+/// в `engine/mod.rs`, здесь просто дополнительно сохраняет позицию внутри
+/// `rule_index[head]`, чтобы отчёт можно было напечатать по головам, а не
+/// по непрозрачным плоским индексам.
+#[derive(Debug, Clone)]
+pub struct ConflictReport {
+    pub conflicts: Vec<ConflictingPair>,
+}
+
+impl ConflictReport {
+    /// Конфликтов не найдено — арбитраж для этого набора правил не нужен
+    /// (см. теорему в шапке модуля).
+    pub fn is_conflict_free(&self) -> bool {
+        self.conflicts.is_empty()
+    }
+}
+
+/// Проанализировать набор правил конфига на предмет потенциальных конфликтов.
+///
+/// Не выполняет ввод-вывод и ничего не печатает — чистая функция над уже
+/// загруженным `rule_index`, как и остальной анализатор. Решение о том,
+/// печатать ли отчёт (и как) — на вызывающей стороне (например, `main.rs`).
+pub fn analyze_conflicts(rule_index: &HashMap<CellType, Vec<Rule>>) -> ConflictReport {
+    let mut rules: Vec<Rule> = Vec::new();
+    let mut origin_of_rule: Vec<(CellType, usize)> = Vec::new();
+    for (&head, rs) in rule_index {
+        for (local_idx, r) in rs.iter().enumerate() {
+            rules.push(r.clone());
+            origin_of_rule.push((head, local_idx));
+        }
+    }
+    let graph = ConflictGraph::build(&rules);
+    let conflicts = graph
+        .potential_conflicts()
+        .iter()
+        .map(|&(i, j)| {
+            let (head_a, rule_idx_a) = origin_of_rule[i];
+            let (head_b, rule_idx_b) = origin_of_rule[j];
+            ConflictingPair { head_a, rule_idx_a, head_b, rule_idx_b }
+        })
+        .collect();
+    ConflictReport { conflicts }
+}
+
+// ============================================================================
 // Кэш предвычисленных данных для правил (RuleDataCache)
 // ============================================================================
 
-/// Тип кэша: (голова id правила, позиция в rule_index[head]) → предвычисленные данные.
-///
-/// Ключ по одному `rule_id` недостаточен: несколько правил могут иметь
-/// одинаковый `id` (паттерн недетерминированного выбора, см.
-/// `test_nondeterministic_same_priority`), и тогда кэш по id молча вернул бы
-/// данные первого из них для любого правила с этим id. `rule_idx` (позиция
-/// правила в отсортированном по приоритету `Vec` для данной головы) делает
-/// ключ однозначным.
-pub type RuleDataCache = HashMap<(crate::types::CellType, usize), RuleData>;
+/// Массив по голове (`CellType` оборачивает `u8` — ровно 256 значений, см.
+/// `engine::HeadRuleIndex`, тот же приём, тем же поводом: этот кэш читается
+/// на КАЖДЫЙ матч в нескольких горячих местах, `get_rule_data`, и раньше был
+/// `HashMap<(CellType, usize), RuleData>` — тот самый "ещё не закрытый
+/// follow-up", отмеченный при переводе `rule_index` (сессия 2026-08-09).
+/// `Some(Vec<RuleData>)` под индексом головы — та же форма, что и у
+/// `rule_index: HashMap<CellType, Vec<Rule>>`, `rule_idx` — позиция в этом
+/// `Vec` (см. её прежний doc-комментарий про недетерминированный выбор при
+/// одинаковом `id` — причина, по которой один `rule_idx` обязателен, не
+/// изменилась). В отличие от `engine::HeadRuleIndex` (эфемерный, строится
+/// заново на каждый вызов горячей функции, заимствует у параметра) — этот
+/// кэш ВЛАДЕЕТ данными и живёт персистентно на `Engine::rule_cache`,
+/// перестраивается только при изменении состава правил
+/// (`Engine::rebuild_rule_cache`), не каждый тик — самоссылающейся
+/// структуры здесь нет и не могло бы быть.
+pub type RuleDataCache = [Option<Vec<RuleData>>; 256];
 
 /// Построить кэш RuleData из rule_index.
 pub fn build_rule_data_cache(rule_index: &HashMap<crate::types::CellType, Vec<Rule>>) -> RuleDataCache {
-    let mut cache = RuleDataCache::new();
+    let mut cache: RuleDataCache = std::array::from_fn(|_| None);
     for (&head_type, rules) in rule_index {
-        for (rule_idx, rule) in rules.iter().enumerate() {
-            cache.insert((head_type, rule_idx), compute_rule_data(rule));
-        }
+        cache[head_type.0 as usize] = Some(rules.iter().map(compute_rule_data).collect());
     }
     cache
 }
@@ -279,7 +346,7 @@ pub fn get_rule_data<'a>(
     head_type: crate::types::CellType,
     rule_idx: usize,
 ) -> Option<&'a RuleData> {
-    cache.get(&(head_type, rule_idx))
+    cache[head_type.0 as usize].as_ref().and_then(|rules| rules.get(rule_idx))
 }
 
 // ============================================================================

@@ -38,7 +38,7 @@ fn test_run_tick() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -79,7 +79,7 @@ fn test_shift_right() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -124,7 +124,7 @@ fn test_shift_with_change() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -178,7 +178,7 @@ fn test_overflow_discard() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -214,7 +214,7 @@ fn test_overflow_write() {
         overflow: OverflowAction::Write(99),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -255,7 +255,7 @@ fn test_overflow_write_literal_zero_fallback() {
         overflow: OverflowAction::WriteLiteral(0),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -296,7 +296,7 @@ fn test_overflow_write_literal_zero_boundary() {
         overflow: OverflowAction::WriteLiteral(0),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -337,7 +337,7 @@ fn test_guarded_self_modification_accepts_safe_and_rejects_unsafe() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }]);
     let mut engine = Engine::new(grid, rule_index);
     engine.enable_guarded_self_modification();
@@ -353,14 +353,14 @@ fn test_guarded_self_modification_accepts_safe_and_rejects_unsafe() {
     // Безопасный пакет: новый id=50, меняет свою же клетку — не пересекается
     // ни с чем. [priority, id_len, id_byte, dx, dy, value, terminator]
     inject(&mut engine, &[10, 1, 50, 0, 0, 77, 0xFF]);
-    assert!(engine.rule_index.contains_key(&CellType(50)));
+    assert!(engine.rule_index().contains_key(&CellType(50)));
     assert_eq!(engine.rejected_self_modifications, 0);
 
     // Опасный пакет: id=1, та же голова и та же (0,0) цель записи, что у
     // модуля A — доказуемый конфликт, должен быть отклонён.
     inject(&mut engine, &[10, 1, 1, 0, 0, 99, 0xFF]);
     assert_eq!(engine.rejected_self_modifications, 1);
-    let a_rule = &engine.rule_index[&CellType(1)];
+    let a_rule = &engine.rule_index()[&CellType(1)];
     assert_eq!(a_rule.len(), 1);
     assert_eq!(a_rule[0].changes, vec![(0, 0, ChangeValue::Literal(3))]);
 }
@@ -389,7 +389,7 @@ fn test_self_modification_extending_existing_head_preserves_original() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![original.clone()]));
     engine.enable_self_modification();
@@ -400,7 +400,7 @@ fn test_self_modification_extending_existing_head_preserves_original() {
     }
     engine.run_tick();
 
-    let rules = &engine.rule_index[&CellType(1)];
+    let rules = &engine.rule_index()[&CellType(1)];
     assert!(rules.contains(&original), "original rule must survive the merge");
     assert!(
         rules.iter().any(|r| r.changes == vec![(0, 0, ChangeValue::Literal(77))]),
@@ -427,11 +427,11 @@ fn test_self_modification_remove_rule_actually_removes() {
     };
 
     inject(&mut engine, &[10, 1, 50, 0xFF]);
-    assert!(engine.rule_index.contains_key(&CellType(50)));
+    assert!(engine.rule_index().contains_key(&CellType(50)));
 
     inject(&mut engine, &[0xF0, 1, 50, 0xFF]); // RemoveRule(50): [OP_REMOVE, id_len, id, terminator]
     assert!(
-        !engine.rule_index.contains_key(&CellType(50)),
+        !engine.rule_index().contains_key(&CellType(50)),
         "RemoveRule must actually take effect in rule_index, not just in RuleStore's internal state"
     );
 }
@@ -461,10 +461,9 @@ fn test_self_modification_preserves_rule_added_after_construction() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
-    engine.rule_index.insert(CellType(1), vec![original.clone()]);
-    engine.rebuild_rule_cache();
+    engine.set_rules_for_head(CellType(1), vec![original.clone()]);
     engine.enable_self_modification();
 
     let buf = engine.grid_mut().get_boundary_mut(0, 0).unwrap();
@@ -473,7 +472,7 @@ fn test_self_modification_preserves_rule_added_after_construction() {
     }
     engine.run_tick();
 
-    let rules = &engine.rule_index[&CellType(1)];
+    let rules = &engine.rule_index()[&CellType(1)];
     assert!(rules.contains(&original), "rule added after Engine::new must survive a self-mod extension");
     assert!(rules.iter().any(|r| r.changes == vec![(0, 0, ChangeValue::Literal(77))]));
 }
@@ -507,7 +506,7 @@ fn test_guarded_self_modification_on_chunk_storage() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }]);
     let mut engine = Engine::new(grid, rule_index);
     engine.enable_guarded_self_modification();
@@ -521,12 +520,12 @@ fn test_guarded_self_modification_on_chunk_storage() {
     };
 
     inject(&mut engine, &[10, 1, 50, 0, 0, 77, 0xFF]);
-    assert!(engine.rule_index.contains_key(&CellType(50)));
+    assert!(engine.rule_index().contains_key(&CellType(50)));
     assert_eq!(engine.rejected_self_modifications, 0);
 
     inject(&mut engine, &[10, 1, 1, 0, 0, 99, 0xFF]);
     assert_eq!(engine.rejected_self_modifications, 1);
-    let a_rule = &engine.rule_index[&CellType(1)];
+    let a_rule = &engine.rule_index()[&CellType(1)];
     assert_eq!(a_rule.len(), 1);
     assert_eq!(a_rule[0].changes, vec![(0, 0, ChangeValue::Literal(3))]);
 }
@@ -563,9 +562,9 @@ fn test_guarded_self_modification_catches_conflict_within_same_batch() {
     }
     engine.run_tick();
 
-    assert!(engine.rule_index.contains_key(&CellType(10)), "the first-processed rule should install");
+    assert!(engine.rule_index().contains_key(&CellType(10)), "the first-processed rule should install");
     assert!(
-        !engine.rule_index.contains_key(&CellType(11)),
+        !engine.rule_index().contains_key(&CellType(11)),
         "the second rule conflicts with the first (already accepted this same batch) and must be rejected"
     );
     assert_eq!(engine.rejected_self_modifications, 1);
@@ -639,7 +638,7 @@ fn test_detect_termination_active() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -664,7 +663,7 @@ fn test_apply_match() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -708,7 +707,7 @@ fn test_run_tick_simple() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -753,7 +752,7 @@ fn test_io_boundary() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -837,7 +836,7 @@ fn test_2d_pattern_match() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let mut grid = make_grid(3, 3);
@@ -903,7 +902,7 @@ fn test_pattern_packing_9_16_17_cells() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut grid9 = make_grid(5, 5);
     for y in 1..=3 {
@@ -943,7 +942,7 @@ fn test_pattern_packing_9_16_17_cells() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut grid16 = make_grid(6, 6);
     for y in 0..4 {
@@ -972,7 +971,7 @@ fn test_pattern_packing_9_16_17_cells() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut grid17 = make_grid(7, 6);
     for y in 0..4 {
@@ -1024,7 +1023,7 @@ fn test_nondeterministic_same_priority() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_b = Rule {
@@ -1046,7 +1045,7 @@ fn test_nondeterministic_same_priority() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule_a, rule_b]);
@@ -1091,7 +1090,7 @@ fn test_same_id_resolves_actually_matched_rule() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     // Ниже приоритет, второй в отсортированном Vec, но именно оно
@@ -1112,7 +1111,7 @@ fn test_same_id_resolves_actually_matched_rule() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     let rule_index = make_rule_index(vec![rule_hi, rule_lo]);
@@ -1215,7 +1214,7 @@ fn test_gol_block_still_life() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
 
@@ -1246,14 +1245,14 @@ fn test_gol_beacon_period2() {
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(2))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let flip_back = Rule {
         id: vec![CellType(2)],
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![flip, flip_back]);
 
@@ -1289,7 +1288,7 @@ fn test_wireworld_corner() {
         pattern: vec![],
         shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: false }]],
         changes: vec![],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![shift_right]);
     run_tick_ca(&mut grid, &ri);
@@ -1319,7 +1318,7 @@ fn test_wireworld_split() {
             (1, 0, ChangeValue::Literal(1)),
             (0, 1, ChangeValue::Literal(1)),
         ],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![split]);
     run_tick_ca(&mut grid, &ri);
@@ -1343,7 +1342,7 @@ fn test_wave_collision() {
         pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(2))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(0)), (1, 0, ChangeValue::Literal(0))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![collide]);
     run_tick_ca(&mut grid, &ri);
@@ -1376,7 +1375,7 @@ fn test_wave_obstacle() {
         pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(9))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![blocked]);
     run_tick_ca(&mut grid, &ri);
@@ -1412,7 +1411,7 @@ fn test_conv_full_pass() {
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(99))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         });
     }
     let ri = make_rule_index(rules);
@@ -1444,7 +1443,7 @@ fn test_physics_elastic() {
         pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(2))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(2)), (1, 0, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![exchange]);
     run_tick_ca(&mut grid, &ri);
@@ -1475,7 +1474,7 @@ fn test_physics_gravity() {
         pattern: vec![(0, 0, CellType(1)), (0, 1, CellType(0))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(0)), (0, 1, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![fall]);
     run_tick_ca(&mut grid, &ri);
@@ -1514,7 +1513,7 @@ fn test_replication_2d() {
             (0, 1, ChangeValue::Literal(1)),
             (0, -1, ChangeValue::Literal(1)),
         ],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![replicate]);
 
@@ -1558,7 +1557,7 @@ fn magnet_rule(radius: u8, priority: u32) -> Rule {
         overflow: Default::default(),
         cam: Some(CamSearch { radius, target_type: CellType(TARGET) }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }
 }
 
@@ -1673,7 +1672,7 @@ fn magnet_rule_typed(id_type: u8, radius: u8, priority: u32) -> Rule {
         overflow: Default::default(),
         cam: Some(CamSearch { radius, target_type: CellType(TARGET) }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }
 }
 
@@ -1692,6 +1691,7 @@ fn magnet_recursion_rule(id_type: u8, radius: u8, priority: u32, direction: Dire
         starvation_after: None, feedback: None,
         recursion: Some(RecursionSpec { max_depth, direction }),
         memory: None,
+        max_activations: None,
     }
 }
 
@@ -1817,7 +1817,7 @@ fn test_broadcast_shift_fills_entire_path() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1848,7 +1848,7 @@ fn test_ordinary_shift_skips_intermediate_cells_unlike_broadcast() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1879,7 +1879,7 @@ fn test_broadcast_shift_stops_at_grid_boundary() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1915,7 +1915,7 @@ fn test_emit_keeps_source_and_fills_entire_path() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1947,7 +1947,7 @@ fn test_point_emit_copies_to_target_without_clearing_source() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1973,7 +1973,7 @@ fn emit_chain_rule(id_type: u8, direction: Direction, front_gated: bool) -> Rule
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }
 }
 
@@ -2048,7 +2048,7 @@ fn test_emit_source_age_is_not_reset() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -2103,7 +2103,7 @@ fn test_emit_broadcast_writeliteral_overflow_overwrites_last_path_cell() {
         overflow: OverflowAction::WriteLiteral(77),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -2148,7 +2148,7 @@ fn test_emit_broadcast_overflow_source_coincidence_parity_with_non_keep_source()
             overflow: OverflowAction::WriteLiteral(99),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         };
         let ri = make_rule_index(vec![rule]);
         let mut engine = Engine::new(grid, ri);
@@ -2193,7 +2193,7 @@ fn test_point_emit_overflow_write_zero_carries_own_value_at_boundary() {
             overflow: OverflowAction::Write(0), // 0 == "carry own value", not literal 0
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         };
         let ri = make_rule_index(vec![rule]);
         let mut engine = Engine::new(grid, ri);
@@ -2241,7 +2241,7 @@ fn test_emit_broadcast_overflow_source_coincidence_written_cells_bookkeeping() {
         overflow: OverflowAction::WriteLiteral(99),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -2290,7 +2290,7 @@ fn test_timer_via_min_age_is_already_expressible() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -2330,7 +2330,7 @@ fn test_timer_via_self_change_counting_chain_is_already_expressible() {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         });
     }
     let ri = make_rule_index(rules);
@@ -2364,7 +2364,7 @@ fn make_tie_break_rules(tie_break_a: u32, tie_break_b: u32) -> HashMap<CellType,
         overflow: Default::default(),
         cam: None,
         tie_break: tie_break_a,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let rule_b = Rule {
         id: vec![CellType(1)],
@@ -2377,7 +2377,7 @@ fn make_tie_break_rules(tie_break_a: u32, tie_break_b: u32) -> HashMap<CellType,
         overflow: Default::default(),
         cam: None,
         tie_break: tie_break_b,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     make_rule_index(vec![rule_a, rule_b])
 }
@@ -2449,7 +2449,7 @@ fn make_starvation_rules(low_starvation_after: Option<u32>) -> HashMap<CellType,
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let rule_low = Rule {
         id: vec![CellType(1)],
@@ -2462,7 +2462,7 @@ fn make_starvation_rules(low_starvation_after: Option<u32>) -> HashMap<CellType,
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: low_starvation_after, feedback: None, recursion: None, memory: None,
+        starvation_after: low_starvation_after, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     make_rule_index(vec![rule_high, rule_low])
 }
@@ -2582,6 +2582,585 @@ fn test_starvation_counter_resets_after_match_disappears_and_reappears() {
     assert_eq!(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0), Some(200), "тик 7: LOW обязан выиграть -- ровно K=3 проигрыша подряд С НУЛЯ после возвращения матча");
 }
 
+/// Регрессия: `rule_idx` -- позиция в списке правил головы, не стабильный id
+/// (см. `Engine::last_rebuilt_rule_index`'s doc-комментарий). Если прямая
+/// правка `rule_index` заменяет правило на другое, занимающее ТУ ЖЕ позицию
+/// у той же головы, новое правило не должно наследовать `starvation_counters`
+/// старого -- иначе оно может выиграть арбитраж на первом же тике своего
+/// существования, ничего в реальности не "выстрадав".
+///
+/// Порог у НОВОГО правила намеренно 1 (не то же K=5, что у старого) --
+/// проверяем не просто "счётчик не тот", а конкретно наблюдаемое поведение:
+/// если унаследованный счётчик (3) >= нового порога (1), баг дал бы победу
+/// LOW немедленно на первом тике после замены. С фиксом -- только на втором.
+#[test]
+fn test_rebuild_rule_cache_clears_stale_starvation_counter_on_rule_idx_reuse() {
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let mut engine = Engine::new(grid, make_starvation_rules(Some(5)));
+
+    // Тики 1-3: LOW (rule_idx 1 для головы CellType(1)) проигрывает трижды,
+    // счётчик 0->1->2->3, порог 5 ещё не достигнут -- HIGH побеждает все три раза.
+    for tick in 1..=3 {
+        engine.run_tick();
+        assert_eq!(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0), Some(100), "тик {tick}: HIGH должен побеждать (старый LOW ещё не достиг K=5)");
+    }
+    assert_eq!(engine.state.snapshot().starvation_counters().get(&(0, 0, 1)), Some(&3), "счётчик старого LOW должен быть 3 перед заменой правила");
+
+    // Прямая замена rule_idx=1 у головы 1 на ДРУГОЕ правило с НИЗКИМ порогом
+    // (K=1) -- тот же паттерн `strength_live_rules.rs`, что уже используется
+    // в других тестах самомодификации/прямой правки: мутировать `rule_index`
+    // и вызвать `rebuild_rule_cache()`.
+    let new_low = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(1, 0, ChangeValue::Literal(201))],
+        active_only: false,
+        priority: 5,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: Some(1), feedback: None, recursion: None, memory: None, max_activations: None,
+    };
+    let mut low_head_rules = engine.rule_index().get(&CellType(1)).unwrap().clone();
+    low_head_rules[1] = new_low;
+    engine.set_rules_for_head(CellType(1), low_head_rules);
+
+    assert_eq!(
+        engine.state.snapshot().starvation_counters().get(&(0, 0, 1)),
+        None,
+        "rebuild_rule_cache должен был очистить унаследованный счётчик старого правила на переиспользованном rule_idx"
+    );
+
+    // Тик 4 (первый после замены): без фикса счётчик 3 >= нового порога 1,
+    // NEW LOW выиграл бы немедленно (201). С фиксом счётчик 0 < 1 -- HIGH
+    // побеждает, это первый "настоящий" проигрыш нового правила.
+    engine.run_tick();
+    assert_eq!(
+        engine.grid().get_cell(1, 0).map(|c| c.value.0 .0),
+        Some(100),
+        "тик 4: HIGH должен победить -- новое правило не должно унаследовать счётчик 3 от старого"
+    );
+
+    // Тик 5: ровно один проигрыш нового правила с нуля >= его порога 1 --
+    // теперь оно обязано выиграть.
+    engine.run_tick();
+    assert_eq!(
+        engine.grid().get_cell(1, 0).map(|c| c.value.0 .0),
+        Some(201),
+        "тик 5: новое LOW обязано выиграть -- ровно 1 проигрыш подряд С НУЛЯ после замены правила"
+    );
+}
+
+/// Регрессия: `tie_break`-победа НЕ должна сбрасывать `starvation_counters`
+/// так же, как решительная (priority/age) победа -- иначе правило,
+/// побеждающее только жребием, может НИКОГДА не накопить `starvation_after`,
+/// даже суммарно проигрывая чаще, чем выигрывая (реальный найденный класс
+/// бага, не гипотеза -- см. `arbitrator::TieBreakDecidedWins`).
+///
+/// LOW (priority=5, tie_break=0, starvation_after=10) конкурирует с PARTNER
+/// (priority=5, tie_break=8, без starvation_after) за одну и ту же клетку
+/// -- РАВНЫЙ priority у обоих, так что победитель решается исключительно
+/// `tie_break_rotated = (tie_break + generation) % 16` (`TIE_BREAK_MODULUS`).
+/// При этой паре tie_break-значений победитель чередуется БЛОКАМИ по 8
+/// тиков (арифметика по модулю 16, см. комментарий внутри теста) -- PARTNER
+/// побеждает generation 0-7 и 16-23, LOW побеждает generation 8-15.
+///
+/// Старая (баговая) семантика сбрасывала бы счётчик LOW в 0 на КАЖДОЙ из 8
+/// побед generation 8-15 -- следующий блок проигрышей (16-23) успевает
+/// накопить не больше 8 ПОДРЯД, порог 10 никогда не достигается, счётчик
+/// вечно колеблется 0<->8, LOW голодает НАВСЕГДА, несмотря на
+/// `starvation_after`. Новая семантика не трогает счётчик на tie_break-
+/// победах -- накопленные 8 проигрышей из первого блока переживают блок
+/// побед LOW, и всего 2 дополнительных проигрыша во втором блоке (generation
+/// 16, 17) добивают счётчик до 10, форсируя гарантированную победу на
+/// generation 18 -- СРЕДИ блока, который иначе (без гарантии) выиграл бы
+/// PARTNER.
+#[test]
+fn test_starvation_after_ignores_tie_break_decided_wins() {
+    const K: u32 = 10;
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let rule_low = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(1, 0, ChangeValue::Literal(200))],
+        active_only: false,
+        priority: 5,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: Some(K), feedback: None, recursion: None, memory: None, max_activations: None,
+    };
+    let rule_partner = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(1, 0, ChangeValue::Literal(100))],
+        active_only: false,
+        priority: 5,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 8,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+    };
+    let mut engine = Engine::new(grid, make_rule_index(vec![rule_low, rule_partner]));
+
+    // Generation 0-7 (тики 1-8): PARTNER побеждает все 8 раз -- LOW теряет
+    // 8 раз подряд, счётчик 0->8.
+    for tick in 1..=8 {
+        engine.run_tick();
+        assert_eq!(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0), Some(100), "тик {tick}: PARTNER должен побеждать (generation 0-7)");
+    }
+    assert_eq!(engine.state.snapshot().starvation_counters().get(&(0, 0, 0)), Some(&8), "счётчик LOW должен быть 8 после первого блока проигрышей");
+
+    // Generation 8-15 (тики 9-16): LOW побеждает все 8 раз через tie_break
+    // (priority РАВНЫ -- не forced-победа, `starvation_counters` ещё не
+    // достиг K=10). Счётчик должен остаться 8 -- НЕ сброситься.
+    for tick in 9..=16 {
+        engine.run_tick();
+        assert_eq!(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0), Some(200), "тик {tick}: LOW должен побеждать через tie_break (generation 8-15)");
+    }
+    assert_eq!(
+        engine.state.snapshot().starvation_counters().get(&(0, 0, 0)),
+        Some(&8),
+        "счётчик LOW НЕ должен был сброситься -- эти 8 побед решены tie_break, не priority/age"
+    );
+
+    // Generation 16-17 (тики 17-18): PARTNER снова побеждает -- 2
+    // дополнительных проигрыша добивают счётчик LOW до 8+2=10=K.
+    engine.run_tick(); // generation 16 -> тик 17
+    assert_eq!(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0), Some(100), "тик 17: PARTNER побеждает (generation 16, счётчик LOW ещё 8<10)");
+    engine.run_tick(); // generation 17 -> тик 18, счётчик после тика: 8+1+1=10
+    assert_eq!(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0), Some(100), "тик 18: PARTNER побеждает (generation 17, счётчик LOW ещё 9<10)");
+    assert_eq!(engine.state.snapshot().starvation_counters().get(&(0, 0, 0)), Some(&10), "счётчик LOW должен достичь K=10 после этого проигрыша");
+
+    // Тик 19 (generation 18): счётчик 10>=10 -- LOW ОБЯЗАН выиграть форсированно,
+    // хотя generation 18 -- часть блока (16-23), который по чистому tie_break
+    // отдал бы победу PARTNER (см. арифметику в doc-комментарии теста).
+    engine.run_tick();
+    assert_eq!(
+        engine.grid().get_cell(1, 0).map(|c| c.value.0 .0),
+        Some(200),
+        "тик 19: LOW обязан выиграть форсированно -- без фикса счётчик никогда бы не накопился до K=10 (вечно колебался бы 0<->8)"
+    );
+    assert_eq!(engine.state.snapshot().starvation_counters().get(&(0, 0, 0)), None, "форсированная победа -- решительная (priority override), счётчик должен сброситься");
+}
+
+/// `Engine::enable_input_recording`/`Engine::replay` — отладочный сценарий
+/// "нашли расхождение на позднем тике, хотим продолжить с более раннего
+/// снимка, не пересчитывая всё руками": движок с ГРАНИЧНЫМ ВВОДОМ (не
+/// только с изменением решётки изнутри — именно `push_input` и есть то,
+/// что `input_log`/`replay` обязаны воспроизвести, в отличие от
+/// `EngineSnapshot`, который сам по себе видит только СОСТОЯНИЕ, а не
+/// историю того, как решётка до него дошла).
+///
+/// Проверка: движок A работает НЕПРЕРЫВНО (push_input вперемешку с
+/// run_tick, как в реальном использовании) до тика 10. Отдельно — снимок и
+/// `input_log`, снятые НА тике 5 (до того, как все входные события
+/// случились). `Engine::replay(снимок, log, 10)` обязан дать РОВНО то же
+/// состояние решётки на тике 10, что и непрерывный прогон A — не
+/// приблизительно похожее, а побитово идентичное, включая эффект
+/// граничного ввода, случившегося ПОСЛЕ снимка.
+#[test]
+fn test_input_recording_and_replay_reproduces_continuous_run() {
+    const INPUT_CHANNEL: u32 = 0;
+    const MARKER: u8 = 5;
+
+    // Правило: маркер ДВИЖЕТСЯ вправо на 1 клетку каждый тик (обычный
+    // сдвиг, источник очищается). Намеренно НЕ "клетка появилась и
+    // осталась навсегда" (та версия НЕ различает "вошёл на тике 0" от
+    // "вошёл на тике 1" уже через пару тиков — эффект насыщается и
+    // ошибка на 1 тик перестаёт быть видна) -- позиция движущегося
+    // маркера на позднем тике НАПРЯМУЮ кодирует, сколько тиков он уже
+    // движется, то есть КОГДА именно он появился, что и делает тест
+    // чувствительным к точному тайминга push_input относительно run_tick.
+    fn make_index() -> HashMap<CellType, Vec<Rule>> {
+        let mut idx = HashMap::new();
+        idx.insert(
+            CellType(MARKER),
+            vec![Rule {
+                id: vec![CellType(MARKER)],
+                pattern: vec![],
+                shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+                changes: vec![],
+                active_only: false,
+                priority: 10,
+                min_age: 0,
+                overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            }],
+        );
+        idx
+    }
+
+    fn make_engine_with_input_boundary() -> Engine<VecStorage> {
+        let mut grid = make_grid(20, 1);
+        let mut input_buf = BoundaryBuffer::new();
+        input_buf.direction = "input".to_string();
+        grid.set_boundary(0, 0, input_buf);
+        Engine::new(grid, make_index())
+    }
+
+    // Движок A: непрерывный прогон "как в реальности" -- push_input
+    // вперемешку с run_tick на РАЗНЫХ тиках (не все сразу в начале).
+    // `apply_input()` -- ОТДЕЛЬНЫЙ шаг от `run_tick()` (см. её
+    // doc-комментарий: перенос значения из очереди на решётку — это
+    // `apply_input`, не часть `run_tick`), вызывается КАЖДЫЙ тик
+    // безусловно — канонический паттерн, см. `examples/strength_live_io.rs`.
+    let mut engine_a = make_engine_with_input_boundary();
+    engine_a.enable_input_recording();
+    engine_a.push_input(INPUT_CHANNEL, MARKER); // тик 0: заходит перед run_tick #1
+    for _ in 1..=3 {
+        engine_a.apply_input();
+        engine_a.run_tick();
+    }
+    engine_a.push_input(INPUT_CHANNEL, MARKER); // тик 3: второй маркер входит позже
+    for _ in 4..=5 {
+        engine_a.apply_input();
+        engine_a.run_tick();
+    }
+
+    // Снимок И журнал СЕЙЧАС (тик 5) -- журнал уже содержит оба события
+    // (0 и 3), это НЕ "снимок без истории", а полноценная точка возврата.
+    let snapshot_at_5 = engine_a.snapshot();
+    let log_at_5: Vec<InputEvent> = engine_a.input_log().unwrap().to_vec();
+    // Проверка самого механизма записи (не только сквозного результата
+    // реплея): `tick` каждого события обязан быть поколением НА МОМЕНТ
+    // вызова push_input (0 и 3), не номером тика, на котором его заметили,
+    // и не порядковым номером вызова.
+    assert_eq!(
+        log_at_5,
+        vec![
+            InputEvent { tick: 0, channel: INPUT_CHANNEL, value: MARKER },
+            InputEvent { tick: 3, channel: INPUT_CHANNEL, value: MARKER },
+        ],
+        "input_log должен точно отразить (tick, channel, value) обоих вызовов push_input"
+    );
+
+    // Движок A продолжает жить ДАЛЬШЕ, с ЕЩЁ одним вводом уже ПОСЛЕ снимка.
+    engine_a.push_input(INPUT_CHANNEL, MARKER); // тик 5
+    for _ in 6..=10 {
+        engine_a.apply_input();
+        engine_a.run_tick();
+    }
+
+    // Реплей должен знать и про событие ПОСЛЕ снимка (тик 5) -- добавляем
+    // его в копию журнала, снятого на тике 5, ровно как это сделал бы
+    // человек, продолжающий писать в тот же лог-файл.
+    let mut log_for_replay = log_at_5;
+    log_for_replay.push(InputEvent { tick: 5, channel: INPUT_CHANNEL, value: MARKER });
+
+    let replayed = Engine::replay(snapshot_at_5, &log_for_replay, 10);
+
+    for x in 0..20 {
+        assert_eq!(
+            engine_a.grid().get_cell(x, 0),
+            replayed.grid().get_cell(x, 0),
+            "x={x}: реплей от снимка тика 5 + журнал обязан совпасть с непрерывным прогоном на тике 10"
+        );
+    }
+    assert_eq!(engine_a.grid().generation(), replayed.grid().generation(), "поколение должно совпасть");
+}
+
+/// `Engine::snapshot()`/`Engine::from_snapshot()` — реальный serde-раунд-трип
+/// (сериализация в текст и обратно, не просто "поля совпали в памяти") на
+/// движке с накопленным `starvation_counters` (проверяет, что персистентное
+/// состояние расширений переживает сохранение, не только `grid`/`rule_index`).
+///
+/// `Engine::run_tick_profiled()` не должен менять НАБЛЮДАЕМОЕ поведение —
+/// два одинаково построенных движка, один прогнанный через `run_tick()`,
+/// другой через `run_tick_profiled()`, обязаны дать побитово идентичный
+/// результат. Инструментирование само по себе не должно быть источником
+/// расхождения (макрос `mark_phase!` добавляет только чтение времени и
+/// запись в отдельную структуру, но это ровно тот класс правки, которую
+/// стоит перепроверить явно, не полагаясь на "не должно было ничего
+/// сломать").
+#[test]
+fn test_run_tick_profiled_matches_run_tick_behavior() {
+    let mut plain = Engine::new(make_grid(3, 1), make_starvation_rules(Some(3)));
+    plain.grid_mut().set_cell(0, 0, Cell::new(1));
+    let mut profiled = Engine::new(make_grid(3, 1), make_starvation_rules(Some(3)));
+    profiled.grid_mut().set_cell(0, 0, Cell::new(1));
+
+    for tick in 1..=8 {
+        plain.run_tick();
+        profiled.run_tick_profiled();
+        for x in 0..3 {
+            assert_eq!(plain.grid().get_cell(x, 0), profiled.grid().get_cell(x, 0), "тик {tick}: run_tick_profiled разошёлся с run_tick при x={x}");
+        }
+    }
+}
+
+/// Разбивка по фазам реально что-то измеряет — не все три поля остаются
+/// нулевыми на тике с реальными совпадениями и конкуренцией в арбитраже
+/// (два правила на одну голову — `arbitrate`-фаза должна что-то делать, не
+/// вырождаться в no-op). Не проверяет КОНКРЕТНЫЕ значения (таймингы
+/// недетерминированы по своей природе) — только что механизм в принципе
+/// считает, а не всегда возвращает `Duration::ZERO` из-за какой-нибудь
+/// перепутанной ветки `if let`.
+#[test]
+fn test_run_tick_profiled_reports_nonzero_phase_timings() {
+    let mut engine = Engine::new(make_grid(3, 1), make_starvation_rules(Some(3)));
+    engine.grid_mut().set_cell(0, 0, Cell::new(1));
+
+    let (_, _, timings) = engine.run_tick_profiled();
+    assert!(timings.detect > std::time::Duration::ZERO, "detect должен занять измеримое время на тике с реальными совпадениями");
+    assert!(timings.arbitrate > std::time::Duration::ZERO, "arbitrate должен занять измеримое время при конкуренции двух правил");
+    assert!(timings.apply > std::time::Duration::ZERO, "apply должен занять измеримое время, когда есть принятые совпадения");
+}
+
+/// `Engine::enable_tick_logging`/`tick_log` (п.5, сессия 2026-08-09) —
+/// счётчики отражают реальную конкуренцию правил, а не всегда нулевые
+/// значения из-за перепутанной ветки: HIGH и LOW конкурируют за одну и ту
+/// же клетку каждый тик (ровно как в `test_without_starvation_guard_low_priority_never_wins`),
+/// так что на КАЖДОМ тике ожидается ровно один принятый и один отклонённый
+/// кандидат, и ровно один кандидат "под наблюдением" starvation (только у
+/// LOW есть `starvation_after`, у HIGH — нет). Также проверяет реальный
+/// serde_json-раунд-трип (не просто "поля выглядят разумно в памяти") —
+/// пятый пункт списка сессии явно назван "структурированное JSON-логирование".
+#[test]
+fn test_tick_logging_records_accepted_rejected_and_starvation_counts() {
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let mut engine = Engine::new(grid, make_starvation_rules(Some(3)));
+    engine.enable_tick_logging();
+
+    for _ in 0..5 {
+        engine.run_tick();
+    }
+
+    let log = engine.tick_log().expect("tick_log должен быть Some после enable_tick_logging");
+    assert_eq!(log.len(), 5, "по одной записи на каждый вызов run_tick");
+    for (i, entry) in log.iter().enumerate() {
+        assert_eq!(entry.tick, i as u64, "tick должен быть generation ДО этого тика");
+        assert_eq!(entry.accepted, 1, "ровно один победитель на клетку в каждом тике: {:?}", entry);
+        assert_eq!(entry.rejected, 1, "ровно один проигравший (тот же матч, что и без защиты): {:?}", entry);
+        assert_eq!(entry.starvation_events, 1, "только LOW использует starvation_after: {:?}", entry);
+        assert_eq!(entry.feedback_events, 0, "ни одно правило этого набора не использует feedback: {:?}", entry);
+    }
+
+    let json = serde_json::to_string(log).expect("TickLogEntry обязан сериализоваться в JSON без нестроковых ключей");
+    let restored: Vec<TickLogEntry> = serde_json::from_str(&json).expect("обратная десериализация обязана пройти");
+    assert_eq!(restored, log, "серде-раунд-трип обязан вернуть побитово тот же лог");
+}
+
+/// `Engine::snapshot()`/`Engine::from_snapshot()` — реальный serde-раунд-трип
+/// (сериализация в текст и обратно, не просто "поля совпали в памяти") на
+/// движке с накопленным `starvation_counters` (проверяет, что персистентное
+/// состояние расширений переживает сохранение, не только `grid`/`rule_index`).
+///
+/// `serde_yaml`, НЕ `serde_json` — намеренно: JSON требует строковые ключи
+/// объектов, а `rule_index` (ключ `CellType`), `grid.boundaries` (ключ
+/// `(usize,usize)`) и все четыре карты `RuleStateStore` (ключи
+/// `(u32,u32,usize)`/`(CellType,usize)`) — все с НЕ-строковыми ключами.
+/// `serde_json::to_string` падает на этом с "key must be a string" —
+/// найдено этим же тестом при первой попытке. YAML такого ограничения не
+/// имеет. См. doc-комментарий `EngineSnapshot` — то же самое верно для
+/// ЛЮБОГО формата, который выберет пользователь.
+///
+/// Самая сильная проверка из возможных: ОБА движка (оригинал, продолживший
+/// работу, и восстановленный из снимка) прогоняются ДАЛЬШЕ на одинаковое
+/// число тиков и сверяются побитово каждый тик — не "поля после восстановления
+/// выглядят разумно", а "восстановленный движок ведёт себя ИДЕНТИЧНО тому, каким
+/// был бы оригинал, не будь снимка вообще".
+#[test]
+fn test_engine_snapshot_yaml_roundtrip_matches_original_execution() {
+    const K: u32 = 5;
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let mut engine = Engine::new(grid, make_starvation_rules(Some(K)));
+
+    // Копим состояние: 3 проигрыша LOW (starvation_counters ещё не 0) —
+    // именно то персистентное состояние, которое просто пересборка кэшей
+    // из rule_index (как делает `Engine::new`) не восстановила бы.
+    for _ in 1..=3 {
+        engine.run_tick();
+    }
+    assert_eq!(engine.state.snapshot().starvation_counters().get(&(0, 0, 1)), Some(&3), "счётчик LOW должен быть 3 перед снимком");
+
+    let snapshot = engine.snapshot();
+    let yaml = serde_yaml::to_string(&snapshot).expect("snapshot must serialize to YAML");
+    let restored_snapshot: EngineSnapshot<VecStorage> = serde_yaml::from_str(&yaml).expect("snapshot must deserialize back from YAML");
+    let mut restored = Engine::from_snapshot(restored_snapshot);
+
+    assert_eq!(
+        restored.state.snapshot().starvation_counters().get(&(0, 0, 1)),
+        Some(&3),
+        "восстановленный движок должен видеть тот же счётчик голодания, что был на момент снимка"
+    );
+    assert_eq!(restored.grid().get_cell(0, 0), engine.grid().get_cell(0, 0), "содержимое решётки должно совпасть после восстановления");
+
+    // Тики 4-5: если бы счётчик НЕ восстановился (например, тихо обнулился),
+    // LOW выиграл бы только на тике 7 (K=5 проигрышей С НУЛЯ), а не на тике 6
+    // (K=5 проигрышей, ПРОДОЛЖАЯ уже накопленные 3) — тест ловит именно эту
+    // разницу, не просто "оба движка не падают".
+    for tick in 4..=7 {
+        engine.run_tick();
+        restored.run_tick();
+        assert_eq!(
+            engine.grid().get_cell(1, 0),
+            restored.grid().get_cell(1, 0),
+            "тик {tick}: оригинал и восстановленный из снимка движок обязаны совпасть побитово"
+        );
+    }
+    // Явная проверка ожидаемого исхода (не только "оба совпали друг с
+    // другом", а "оба сделали то, что математически обязаны были") — K=5,
+    // 3 накоплено до снимка, ровно 2 новых проигрыша (тики 4-5) добивают до
+    // 5, форсированная победа на тике 6, счётчик сбрасывается, тик 7 снова
+    // HIGH.
+    assert_eq!(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0), Some(100), "тик 7: HIGH снова побеждает после форсированной победы LOW на тике 6");
+}
+
+/// `Rule::max_activations` — правило с бюджетом 3 побеждает ровно 3 раза,
+/// затем гейт закрывается НАВСЕГДА (не сбрасывается, не открывается заново).
+/// Проверка не просто "значение перестало обновляться" (неотличимо от "и не
+/// пыталось") — между тиком 3 и тиком 4 клетка (1,0) сбрасывается НАПРЯМУЮ
+/// (в обход правил) в 0, и тик 4 обязан оставить её 0 -- если бы гейт был
+/// всё ещё открыт, правило переписало бы её обратно в 200.
+#[test]
+fn test_max_activations_gate_closes_permanently_after_budget() {
+    const BUDGET: u32 = 3;
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let rule = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![(1, 0, ChangeValue::Literal(200))],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
+        max_activations: Some(BUDGET),
+    };
+    let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
+
+    for tick in 1..=3 {
+        engine.run_tick();
+        assert_eq!(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0), Some(200), "тик {tick}: правило ещё в пределах бюджета, обязано сработать");
+    }
+    assert_eq!(engine.state.snapshot().activation_counters().get(&(CellType(1), 0)), Some(&BUDGET), "счётчик активаций должен достичь бюджета ровно после 3-го срабатывания");
+
+    // Клетка (1,0) сбрасывается НАПРЯМУЮ, в обход правил -- честная проверка
+    // "гейт закрыт", а не просто "значение совпало со старым".
+    engine.grid_mut().set_cell(1, 0, Cell::new(0));
+
+    for tick in 4..=10 {
+        engine.run_tick();
+        assert_eq!(
+            engine.grid().get_cell(1, 0).map(|c| c.value.0 .0),
+            Some(0),
+            "тик {tick}: бюджет исчерпан НАВСЕГДА -- правило не должно сработать снова, даже спустя много тиков"
+        );
+    }
+}
+
+/// Мотивирующий случай: `ShiftSpec::keep_source` без ограничения может
+/// копировать головку неограниченно (источник никогда не убывает). Правило
+/// требует ПУСТОГО соседа справа перед копированием (иначе бы каждая копия
+/// провоцировала переоценку у ВСЕХ предыдущих позиций тоже — паттерн-гейт,
+/// не свойство `max_activations`) — это делает рост линейным и предсказуемым
+/// (одна новая копия за тик), значит после бюджета=3 итоговое число маркеров
+/// НАВСЕГДА ограничено 1 (исходный) + 3 (копии) = 4, сколько бы тиков ни
+/// прошло дальше -- глобальный (не по позиции) счётчик режет рост у ЛЮБОЙ
+/// клетки, унаследовавшей тот же `rule_idx`, а не только у первой.
+#[test]
+fn test_max_activations_bounds_keep_source_growth() {
+    const BUDGET: u32 = 3;
+    const MARKER: u8 = 7;
+    let mut grid = make_grid(20, 1);
+    grid.set_cell(0, 0, Cell::new(MARKER));
+    let rule = Rule {
+        id: vec![CellType(MARKER)],
+        pattern: vec![(0, 0, CellType(MARKER)), (1, 0, CellType(0))],
+        shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: true }]],
+        changes: vec![],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
+        max_activations: Some(BUDGET),
+    };
+    let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
+
+    for _ in 0..15 {
+        engine.run_tick();
+    }
+
+    let marker_count = (0..20).filter(|&x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0) == Some(MARKER)).count();
+    assert_eq!(
+        marker_count,
+        1 + BUDGET as usize,
+        "после исчерпания бюджета общее число маркеров обязано остаться ровно 1 (исходный) + BUDGET (копии), несмотря на 15 прогнанных тиков"
+    );
+}
+
+/// Регрессия: `activation_counters` — та же проблема переиспользования
+/// `rule_idx`, что и `starvation_counters` (см.
+/// `test_rebuild_rule_cache_clears_stale_starvation_counter_on_rule_idx_reuse`),
+/// только с ключом `(head, rule_idx)` вместо `(x, y, rule_idx)` — не нужен
+/// grid-лукап вообще, достаточно совпадения `head`.
+#[test]
+fn test_rebuild_rule_cache_clears_stale_activation_counter_on_rule_idx_reuse() {
+    let mut grid = make_grid(1, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let old_rule = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
+        max_activations: Some(1),
+    };
+    let mut engine = Engine::new(grid, make_rule_index(vec![old_rule]));
+    engine.run_tick();
+    assert_eq!(engine.state.snapshot().activation_counters().get(&(CellType(1), 0)), Some(&1), "старое правило должно было накопить 1 активацию");
+
+    let new_rule = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![],
+        active_only: false,
+        priority: 20,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None,
+        max_activations: Some(1),
+    };
+    let mut head_1_rules = engine.rule_index().get(&CellType(1)).unwrap().clone();
+    head_1_rules[0] = new_rule;
+    engine.set_rules_for_head(CellType(1), head_1_rules);
+
+    assert_eq!(
+        engine.state.snapshot().activation_counters().get(&(CellType(1), 0)),
+        None,
+        "rebuild_rule_cache должен был очистить унаследованный счётчик активаций на переиспользованном rule_idx"
+    );
+}
+
 /// Block G, п.3 ("грубость повторной проверки min_age"): регрессионный тест
 /// на РЕАЛЬНЫЙ механизм, который эту "грубость" устраняет —
 /// `min_age_gated_types` в `SearchRadiusCache` заставляет
@@ -2615,7 +3194,7 @@ fn test_min_age_gated_cell_matures_exactly_on_time_when_isolated_on_sparse_grid(
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -2667,6 +3246,7 @@ fn test_feedback_latches_new_direction_after_timeout_and_stays() {
         feedback: Some(FeedbackSpec { timeout: TIMEOUT, new_direction: Direction::Up }),
         recursion: None,
         memory: None,
+        max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -2681,18 +3261,37 @@ fn test_feedback_latches_new_direction_after_timeout_and_stays() {
         panic!("маркер не найден на решётке");
     }
 
-    // Тик 1: counter 0->1 (1 < TIMEOUT=3) -> обычное направление (Right).
+    // Счётчик читается КАК ОН БЫЛ на начало тика (та же дисциплина, что и
+    // у `age`/`min_age`/`starvation_after` — обнаружение ЭТИМ тиком не
+    // засчитывается для решения ЭТОГО же тика, инкремент виден только со
+    // СЛЕДУЮЩЕГО). При TIMEOUT=3: тики 1,2,3 читают counter=0,1,2
+    // (все < 3) -> Right; счётчик становится 3 только ПОСЛЕ apply тика 3.
+    // Тик 4 первым читает counter=3 (>= 3) -> переключение на Up.
+
+    // Счётчик читается КАК ОН БЫЛ на начало тика (та же дисциплина, что и
+    // у `age`/`min_age`/`starvation_after` — обнаружение ЭТИМ тиком не
+    // засчитывается для решения ЭТОГО же тика, инкремент виден только со
+    // СЛЕДУЮЩЕГО). При TIMEOUT=3: тики 1,2,3 читают counter=0,1,2
+    // (все < 3) -> Right; счётчик становится 3 только ПОСЛЕ apply тика 3.
+    // Тик 4 первым читает counter=3 (>= 3) -> переключение на Up.
+
+    // Тик 1: counter (на начало тика) = 0 < 3 -> Right.
     engine.run_tick();
-    assert_eq!(find_marker(&engine), (3, 2), "тик 1: должен ехать East (счётчик ещё не достиг timeout)");
-    // Тик 2: counter 1->2 (2 < 3) -> всё ещё Right.
+    assert_eq!(find_marker(&engine), (3, 2), "тик 1: должен ехать East (счётчик на начало тика = 0)");
+    // Тик 2: counter = 1 < 3 -> всё ещё Right.
     engine.run_tick();
-    assert_eq!(find_marker(&engine), (4, 2), "тик 2: должен ехать East (счётчик ещё не достиг timeout)");
-    // Тик 3: counter 2->3 (3 >= 3) -> защёлка сработала, едет Up.
+    assert_eq!(find_marker(&engine), (4, 2), "тик 2: должен ехать East (счётчик на начало тика = 1)");
+    // Тик 3: counter = 2 < 3 -> ВСЁ ЕЩЁ Right (это тик, ПОСЛЕ которого
+    // счётчик станет 3 — само пересечение порога видно только следующему
+    // тику, не этому).
     engine.run_tick();
-    assert_eq!(find_marker(&engine), (4, 1), "тик 3: должен ПЕРЕКЛЮЧИТЬСЯ на North ровно на пороговом тике");
-    // Тик 4: защёлка не сбрасывается — по-прежнему Up, не East.
+    assert_eq!(find_marker(&engine), (5, 2), "тик 3: должен ехать East (счётчик на начало тика = 2, ещё не пересёк порог)");
+    // Тик 4: counter (на начало тика) = 3 >= 3 -> защёлка сработала, едет Up.
     engine.run_tick();
-    assert_eq!(find_marker(&engine), (4, 0), "тик 4: защёлка не должна сбрасываться — маркер продолжает ехать North");
+    assert_eq!(find_marker(&engine), (5, 1), "тик 4: должен ПЕРЕКЛЮЧИТЬСЯ на North — первый тик, читающий уже пересечённый порог");
+    // Тик 5: защёлка не сбрасывается — по-прежнему Up, не East.
+    engine.run_tick();
+    assert_eq!(find_marker(&engine), (5, 0), "тик 5: защёлка не должна сбрасываться — маркер продолжает ехать North");
 }
 
 /// Найден при аудите GPU-порта `feedback` (см. память сессии,
@@ -2700,23 +3299,30 @@ fn test_feedback_latches_new_direction_after_timeout_and_stays() {
 /// (вызывается ИЗНУТРИ арбитража) и `applicator::apply_rule_buffered`
 /// (вызывается ПОСЛЕ) ОБА читают `feedback_counters`, чтобы решить, какое
 /// направление (декларированное или `new_direction`) реально становится
-/// affected-cells/фактической записью — но раньше инкремент счётчика стоял
+/// affected-cells/фактической записью — раньше инкремент счётчика стоял
 /// МЕЖДУ этими двумя чтениями, так что на тике, где счётчик матча
 /// ПЕРЕСЕКАЕТ `timeout` ИМЕННО на этом тике, арбитраж резервировал/проверял
-/// конфликты для ОДНОГО направления (старое значение), а apply реально
-/// писал в ДРУГОЕ (новое, уже защёлкнутое значение) — цель, которую
-/// арбитраж НИКОГДА не проверял на конфликт с другими матчами.
+/// конфликты для ОДНОГО направления, а apply реально писал в ДРУГОЕ — цель,
+/// которую арбитраж НИКОГДА не проверял на конфликт с другими матчами.
 ///
-/// Этот тест НАРОЧНО ставит конкурента ИМЕННО на клетку `new_direction`
-/// (Down), но НЕ на клетку декларированного направления (Right) — так что
-/// баг проявляется ТОЛЬКО если действительно происходит рассинхронизация
+/// ВАЖНО (переработано после повторного аудита, см. память сессии): счётчик
+/// ОБЯЗАН читаться КАК ОН БЫЛ на начало тика — обнаружение ЭТИМ тиком не
+/// засчитывается для решения ЭТОГО же тика (та же дисциплина, что и у
+/// `age`/`min_age`/`starvation_after`). При `TIMEOUT=1` порог пересекается
+/// НЕ на первом тике (тик 1 читает counter=0 < 1 — ещё Right), а становится
+/// видимым НАЧИНАЯ со второго (тик 2 читает counter=1 >= 1 — переключение).
+/// Маркер сначала едет Right (тик 1: (0,0)->(1,0)), ЗАТЕМ на тике 2
+/// пытается переключиться на Down из своей НОВОЙ позиции (1,0)->(1,1) —
+/// конкурент стоит именно там, а не на исходной Down-цели (0,1), которая
+/// маркеру больше не актуальна после переезда.
+///
+/// Конкурент стоит ИМЕННО на клетке `new_direction`-цели ВТОРОГО тика (не
+/// Right-цели) — так что баг проявляется ТОЛЬКО при реальной рассинхронизации
 /// между "что видел арбитраж" и "что реально написал apply": маркер обязан
-/// либо (а) выиграть у конкурента и переехать Down, либо (б) остаться
-/// нетронутым на месте (если бы решил ехать Right и там был бы конфликт —
-/// но Right здесь ничем не занят, так что (б) означало бы "решил ехать
-/// Right и просто уехал бы" — тест ловит ИМЕННО невозможный третий исход:
-/// маркер тихо ИСЧЕЗАЕТ (source-clear проходит, но целевая запись
-/// проигрывает необнаруженную гонку с конкурентом).
+/// либо (а) выиграть у конкурента и переехать Down, либо (б) остаться на
+/// месте (не эта ветка — Right ничем не занят). Тест ловит ИМЕННО
+/// невозможный третий исход: маркер тихо ИСЧЕЗАЕТ (source-clear проходит,
+/// целевая запись проигрывает необнаруженную гонку с конкурентом).
 #[test]
 fn test_feedback_counter_crossing_threshold_this_tick_matches_arbitration_and_apply() {
     const MARKER2: u8 = 98;
@@ -2725,7 +3331,7 @@ fn test_feedback_counter_crossing_threshold_this_tick_matches_arbitration_and_ap
 
     let mut grid = make_grid(3, 3);
     grid.set_cell(0, 0, Cell::new(MARKER2));
-    grid.set_cell(0, 1, Cell::new(COMPETITOR)); // на клетке Down-цели, НЕ Right-цели
+    grid.set_cell(1, 1, Cell::new(COMPETITOR)); // Down-цель ВТОРОГО тика (маркер к тому моменту уже на (1,0))
 
     let marker_rule = Rule {
         id: vec![CellType(MARKER2)],
@@ -2742,6 +3348,7 @@ fn test_feedback_counter_crossing_threshold_this_tick_matches_arbitration_and_ap
         feedback: Some(FeedbackSpec { timeout: TIMEOUT, new_direction: Direction::Down }),
         recursion: None,
         memory: None,
+        max_activations: None,
     };
     let competitor_rule = Rule {
         id: vec![CellType(COMPETITOR)],
@@ -2758,22 +3365,30 @@ fn test_feedback_counter_crossing_threshold_this_tick_matches_arbitration_and_ap
         feedback: None,
         recursion: None,
         memory: None,
+        max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![marker_rule, competitor_rule]));
 
-    // TIMEOUT=1: счётчик пересекает порог РОВНО на первом тике (0 -> 1,
-    // 1 >= 1) — именно тот случай, где старый (сломанный) порядок
-    // рассинхронизировал арбитраж и apply.
+    // Тик 1: counter (на начало тика) = 0 < TIMEOUT=1 -> Right, (0,0)->(1,0).
     engine.run_tick();
+    let after_tick1: Vec<(usize, usize)> = (0..3)
+        .flat_map(|y| (0..3).map(move |x| (x, y)))
+        .filter(|&(x, y)| engine.grid().get_cell(x, y).map(|c| c.value.0 .0) == Some(MARKER2))
+        .collect();
+    assert_eq!(after_tick1, vec![(1, 0)], "тик 1: маркер едет Right (счётчик на начало тика = 0, ещё не пересёк порог)");
 
+    // Тик 2: counter (на начало тика) = 1 >= TIMEOUT=1 -> переключение на
+    // Down, ИМЕННО тот тик, где рассинхронизация арбитража/apply могла бы
+    // проявиться (счётчик пересёк порог ПОСЛЕ тика 1, впервые виден тику 2).
+    engine.run_tick();
     let marker_positions: Vec<(usize, usize)> = (0..3)
         .flat_map(|y| (0..3).map(move |x| (x, y)))
         .filter(|&(x, y)| engine.grid().get_cell(x, y).map(|c| c.value.0 .0) == Some(MARKER2))
         .collect();
     assert_eq!(
         marker_positions,
-        vec![(0, 1)],
-        "маркер обязан ПОБЕДИТЬ конкурента и переехать Down (приоритет 10 > 1) — если он вместо этого исчез (пустой список), арбитраж и apply разошлись во мнениях о направлении"
+        vec![(1, 1)],
+        "тик 2: маркер обязан ПОБЕДИТЬ конкурента и переехать Down (приоритет 10 > 1) — если он вместо этого исчез (пустой список), арбитраж и apply разошлись во мнениях о направлении"
     );
 }
 
@@ -2810,6 +3425,7 @@ fn test_recursion_cascades_multiple_cells_in_one_tick() {
         feedback: None,
         recursion: Some(RecursionSpec { max_depth: MAX_DEPTH, direction: Direction::Right }),
         memory: None,
+        max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -2856,6 +3472,7 @@ fn test_recursion_conflict_only_visible_via_cascade_depth_union() {
         feedback: None,
         recursion: Some(RecursionSpec { max_depth: 2, direction: Direction::Right }),
         memory: None,
+        max_activations: None,
     };
     // Правило B: пишет в (0,0) относительно себя. Размещённое (в терминах
     // относительного офсета, который перебирает `ConflictGraph::build`) на
@@ -2875,6 +3492,7 @@ fn test_recursion_conflict_only_visible_via_cascade_depth_union() {
         feedback: None,
         recursion: None,
         memory: None,
+        max_activations: None,
     };
 
     let graph = crate::ConflictGraph::build(&[rule_a, rule_b]);
@@ -2927,7 +3545,7 @@ fn test_memory_neighbor_type_gate_opens_exactly_after_matching_sequence() {
                 RecordedValue::Type(CellType(MEM_NEIGH_B)),
                 RecordedValue::Type(CellType(MEM_NEIGH_A)),
             ],
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -2994,7 +3612,7 @@ fn test_memory_rule_outcome_gate_fires_on_exact_mixed_sequence() {
             window: 3,
             record_trigger: RecordTrigger::RuleOutcome,
             match_pattern: vec![RecordedValue::Missed, RecordedValue::Applied, RecordedValue::Missed],
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3012,7 +3630,7 @@ fn test_memory_rule_outcome_gate_fires_on_exact_mixed_sequence() {
     // RuleOutcome-гейта, стоящее отдельного документирования (см.
     // `paper/paper4.md`), а не то, что этот тест обязан воспроизводить
     // "с нуля" через `run_tick`.
-    engine.memory_buffers.insert(
+    engine.state.mutate().memory_buffers_mut().insert(
         (0, 0, 0),
         VecDeque::from(vec![RecordedValue::Missed, RecordedValue::Applied, RecordedValue::Missed]),
     );
@@ -3057,11 +3675,11 @@ fn test_memory_rule_outcome_gate_rejects_reordered_sequence_with_same_multiset()
             window: 3,
             record_trigger: RecordTrigger::RuleOutcome,
             match_pattern: vec![RecordedValue::Missed, RecordedValue::Applied, RecordedValue::Missed],
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
-    engine.memory_buffers.insert(
+    engine.state.mutate().memory_buffers_mut().insert(
         (0, 0, 0),
         VecDeque::from(vec![RecordedValue::Missed, RecordedValue::Missed, RecordedValue::Applied]),
     );
@@ -3119,7 +3737,7 @@ fn test_emit_preserves_feedback_and_memory_state_at_source_across_ticks() {
             // bootstrap deadlock в `test_memory_rule_outcome_gate_fires_on_exact_mixed_sequence`):
             // однородный [Missed, Missed] естественно накопится, пока гейт закрыт.
             match_pattern: vec![RecordedValue::Missed, RecordedValue::Missed],
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3143,18 +3761,18 @@ fn test_emit_preserves_feedback_and_memory_state_at_source_across_ticks() {
     // Белый ящик: состояние ОБОИХ расширений должно жить у ИСТОЧНИКА
     // (0,0,0), не быть перенесено (и тем более не потеряно) на цель (1,0,0).
     assert_eq!(
-        engine.feedback_counters.get(&(0, 0, 0)),
+        engine.state.snapshot().feedback_counters().get(&(0, 0, 0)),
         Some(&1),
         "счётчик feedback ДОЛЖЕН пережить 3 тика на позиции источника — \
 без фикса keep_source он был бы (ошибочно) перенесён на (1,0) при первом же реальном применении"
     );
     assert_eq!(
-        engine.memory_buffers.get(&(0, 0, 0)),
+        engine.state.snapshot().memory_buffers().get(&(0, 0, 0)),
         Some(&VecDeque::from(vec![RecordedValue::Missed, RecordedValue::Applied])),
         "буфер memory ДОЛЖЕН остаться у источника и корректно обновиться на Applied после тика 3"
     );
     assert!(
-        engine.feedback_counters.get(&(1, 0, 0)).is_none() && engine.memory_buffers.get(&(1, 0, 0)).is_none(),
+        engine.state.snapshot().feedback_counters().get(&(1, 0, 0)).is_none() && engine.state.snapshot().memory_buffers().get(&(1, 0, 0)).is_none(),
         "у ЦЕЛИ излучения НЕ должно быть состояния — это независимая свежая копия, не наследующая историю оригинала"
     );
 }
@@ -3193,14 +3811,14 @@ fn test_memory_gate_closed_excludes_from_starvation_accounting() {
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(WANTED_B))], // недостижимо — сосед всегда NEVER_A
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
     for tick in 1..=5 {
         engine.run_tick();
         assert!(
-            engine.starvation_counters.get(&(0, 0, 0)).is_none(),
+            engine.state.snapshot().starvation_counters().get(&(0, 0, 0)).is_none(),
             "тик {tick}: счётчик голодания НЕ должен даже появиться в карте — гейт memory \
 исключает матч из арбитража КАЖДЫЙ тик, значит он никогда по-настоящему не 'проигрывал'"
         );
@@ -3240,7 +3858,7 @@ fn test_cam_magnet_respects_memory_gate() {
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(GATE_NEIGHBOR_VALUE))],
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3312,7 +3930,7 @@ fn test_emit_memory_neighbor_type_copy_gets_independent_buffer_own_position() {
             window: 3,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(TYPE_A)), RecordedValue::Type(CellType(TYPE_B)), RecordedValue::Type(CellType(TYPE_A))],
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3320,14 +3938,14 @@ fn test_emit_memory_neighbor_type_copy_gets_independent_buffer_own_position() {
     // буфер = [A] (сосед на тик 1).
     engine.run_tick();
     assert_eq!(engine.grid().get_cell(2, 0).map(|c| c.value.0 .0), Some(0), "тик 1: гейт закрыт, эмиссии не было");
-    assert_eq!(engine.memory_buffers.get(&(0, 0, 0)), Some(&VecDeque::from(vec![RecordedValue::Type(CellType(TYPE_A))])));
+    assert_eq!(engine.state.snapshot().memory_buffers().get(&(0, 0, 0)), Some(&VecDeque::from(vec![RecordedValue::Type(CellType(TYPE_A))])));
 
     // Тик 2: сосед -> B. Буфер [A] не полон -> гейт закрыт. После тика [A,B].
     engine.grid_mut().set_cell(1, 0, Cell::new(TYPE_B));
     engine.run_tick();
     assert_eq!(engine.grid().get_cell(2, 0).map(|c| c.value.0 .0), Some(0), "тик 2: гейт всё ещё закрыт");
     assert_eq!(
-        engine.memory_buffers.get(&(0, 0, 0)),
+        engine.state.snapshot().memory_buffers().get(&(0, 0, 0)),
         Some(&VecDeque::from(vec![RecordedValue::Type(CellType(TYPE_A)), RecordedValue::Type(CellType(TYPE_B))]))
     );
 
@@ -3339,7 +3957,7 @@ fn test_emit_memory_neighbor_type_copy_gets_independent_buffer_own_position() {
     engine.run_tick();
     assert_eq!(engine.grid().get_cell(2, 0).map(|c| c.value.0 .0), Some(0), "тик 3: гейт всё ещё закрыт (буфер заполнится только к концу тика)");
     assert_eq!(
-        engine.memory_buffers.get(&(0, 0, 0)),
+        engine.state.snapshot().memory_buffers().get(&(0, 0, 0)),
         Some(&VecDeque::from(vec![
             RecordedValue::Type(CellType(TYPE_A)),
             RecordedValue::Type(CellType(TYPE_B)),
@@ -3357,7 +3975,7 @@ fn test_emit_memory_neighbor_type_copy_gets_independent_buffer_own_position() {
     assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(WATCHER), "тик 4: источник ДОЛЖЕН сохранить значение (keep_source)");
     assert_eq!(engine.grid().get_cell(2, 0).map(|c| c.value.0 .0), Some(WATCHER), "тик 4: копия должна была появиться в (2,0)");
     assert_eq!(
-        engine.memory_buffers.get(&(0, 0, 0)),
+        engine.state.snapshot().memory_buffers().get(&(0, 0, 0)),
         Some(&VecDeque::from(vec![
             RecordedValue::Type(CellType(TYPE_B)),
             RecordedValue::Type(CellType(TYPE_A)),
@@ -3368,7 +3986,7 @@ fn test_emit_memory_neighbor_type_copy_gets_independent_buffer_own_position() {
     // Копия физически появилась только к КОНЦУ тика 4 (в write_buffer) — она
     // ещё НЕ была продетектирована как отдельный матч на этом тике (детект
     // читает pre-tick срез), поэтому у неё пока не должно быть записи вовсе.
-    assert!(engine.memory_buffers.get(&(2, 0, 0)).is_none(), "тик 4: у копии не должно быть записи ДО того, как она хоть раз реально продетектирована");
+    assert!(engine.state.snapshot().memory_buffers().get(&(2, 0, 0)).is_none(), "тик 4: у копии не должно быть записи ДО того, как она хоть раз реально продетектирована");
 
     // Перед тиком 5: выставляем РАЗНЫХ соседей источнику (D — заведомо не
     // A/B/C) и копии (C — константа, гейт копии никогда не откроется).
@@ -3381,12 +3999,12 @@ fn test_emit_memory_neighbor_type_copy_gets_independent_buffer_own_position() {
     // НИЧЕГО от истории источника (которая на этот момент [A,B,D] — старое
     // [B,A,B] минус A, плюс D).
     assert_eq!(
-        engine.memory_buffers.get(&(2, 0, 0)),
+        engine.state.snapshot().memory_buffers().get(&(2, 0, 0)),
         Some(&VecDeque::from(vec![RecordedValue::Type(CellType(TYPE_C))])),
         "тик 5: буфер копии должен быть СВЕЖИМ (только что увиденное значение), не унаследованным от источника"
     );
     assert_eq!(
-        engine.memory_buffers.get(&(0, 0, 0)),
+        engine.state.snapshot().memory_buffers().get(&(0, 0, 0)),
         Some(&VecDeque::from(vec![
             RecordedValue::Type(CellType(TYPE_A)),
             RecordedValue::Type(CellType(TYPE_B)),
@@ -3406,12 +4024,12 @@ fn test_emit_memory_neighbor_type_copy_gets_independent_buffer_own_position() {
     engine.run_tick(); // тик 6
     engine.run_tick(); // тик 7
     assert_eq!(
-        engine.memory_buffers.get(&(2, 0, 0)),
+        engine.state.snapshot().memory_buffers().get(&(2, 0, 0)),
         Some(&VecDeque::from(vec![RecordedValue::Type(CellType(TYPE_C)), RecordedValue::Type(CellType(TYPE_C)), RecordedValue::Type(CellType(TYPE_C))])),
         "тик 7: буфер копии — три одинаковых наблюдения СВОЕГО соседа, копия жива и наблюдает независимо"
     );
     assert_eq!(
-        engine.memory_buffers.get(&(0, 0, 0)),
+        engine.state.snapshot().memory_buffers().get(&(0, 0, 0)),
         Some(&VecDeque::from(vec![RecordedValue::Type(CellType(TYPE_D)), RecordedValue::Type(CellType(TYPE_D)), RecordedValue::Type(CellType(TYPE_D))])),
         "тик 7: источник продолжает копить свой буфер (D) независимо от копии — суммарно 7 тиков, не 3"
     );
@@ -3420,7 +4038,7 @@ fn test_emit_memory_neighbor_type_copy_gets_independent_buffer_own_position() {
 
     // Ровно ДВЕ живые записи в карте — источник и копия, никаких лишних или
     // фантомных ключей не появилось за 7 тиков активной эмиссии.
-    assert_eq!(engine.memory_buffers.len(), 2, "в карте должно быть ровно 2 записи: источник (0,0,0) и копия (2,0,0)");
+    assert_eq!(engine.state.snapshot().memory_buffers().len(), 2, "в карте должно быть ровно 2 записи: источник (0,0,0) и копия (2,0,0)");
 }
 
 /// (3): бывшая "осиротевшая запись" в `Engine::memory_buffers` — ТЕПЕРЬ
@@ -3472,19 +4090,19 @@ fn test_memory_buffer_entry_pruned_after_match_stops_existing() {
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::NeighborType(Direction::Right), match_pattern: vec![RecordedValue::Type(CellType(NEIGH_OK))] }),
+        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::NeighborType(Direction::Right), match_pattern: vec![RecordedValue::Type(CellType(NEIGH_OK))] }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
     // Тик 1: буфер пуст -> гейт закрыт -> буфер после тика = [NEIGH_OK].
     engine.run_tick();
-    assert_eq!(engine.memory_buffers.get(&(0, 0, 0)), Some(&VecDeque::from(vec![RecordedValue::Type(CellType(NEIGH_OK))])));
+    assert_eq!(engine.state.snapshot().memory_buffers().get(&(0, 0, 0)), Some(&VecDeque::from(vec![RecordedValue::Type(CellType(NEIGH_OK))])));
 
     // Тик 2: гейт открыт (буфер [NEIGH_OK] == match_pattern) -> эмиссия
     // применяется, источник (0,0) остаётся WATCHER (keep_source).
     engine.run_tick();
     assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(WATCHER));
-    assert!(engine.memory_buffers.contains_key(&(0, 0, 0)), "запись источника должна существовать после того, как он реально совпал");
+    assert!(engine.state.snapshot().memory_buffers().contains_key(&(0, 0, 0)), "запись источника должна существовать после того, как он реально совпал");
 
     // Внешнее событие: (0,0) перестаёт быть WATCHER (имитирует проигрыш
     // конфликта другому правилу/оверрайд извне — сам механизм конфликта тут
@@ -3498,7 +4116,7 @@ fn test_memory_buffer_entry_pruned_after_match_stops_existing() {
     // совпадает) — запись ДОЛЖНА быть вычищена уже на ЭТОМ тике.
     engine.run_tick();
     assert!(
-        engine.memory_buffers.get(&(0, 0, 0)).is_none(),
+        engine.state.snapshot().memory_buffers().get(&(0, 0, 0)).is_none(),
         "запись ДОЛЖНА быть вычищена сразу же, как только позиция перестала матчиться — фикс осиротевших записей"
     );
 
@@ -3506,8 +4124,8 @@ fn test_memory_buffer_entry_pruned_after_match_stops_existing() {
     for _ in 0..5 {
         engine.run_tick();
     }
-    assert!(engine.memory_buffers.get(&(0, 0, 0)).is_none(), "запись не должна появиться вновь сама по себе");
-    assert_eq!(engine.memory_buffers.len(), 0, "карта должна быть полностью пуста — никаких фантомных остатков");
+    assert!(engine.state.snapshot().memory_buffers().get(&(0, 0, 0)).is_none(), "запись не должна появиться вновь сама по себе");
+    assert_eq!(engine.state.snapshot().memory_buffers().len(), 0, "карта должна быть полностью пуста — никаких фантомных остатков");
 }
 
 /// Точность момента чистки: запись НЕ должна пропасть раньше срока (пока
@@ -3547,7 +4165,7 @@ fn test_memory_buffer_entry_pruned_exactly_on_tick_match_stops_existing() {
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(NEVER_MATCHES))],
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3558,7 +4176,7 @@ fn test_memory_buffer_entry_pruned_exactly_on_tick_match_stops_existing() {
     for tick in 1..=3 {
         engine.run_tick();
         assert!(
-            engine.memory_buffers.contains_key(&(0, 0, 0)),
+            engine.state.snapshot().memory_buffers().contains_key(&(0, 0, 0)),
             "тик {tick}: клетка всё ещё матчится — запись НЕ должна быть удалена"
         );
     }
@@ -3570,16 +4188,16 @@ fn test_memory_buffer_entry_pruned_exactly_on_tick_match_stops_existing() {
     // запись ДОЛЖНА исчезнуть именно теперь ("не слишком поздно").
     engine.run_tick();
     assert!(
-        engine.memory_buffers.get(&(0, 0, 0)).is_none(),
+        engine.state.snapshot().memory_buffers().get(&(0, 0, 0)).is_none(),
         "тик 4: клетка перестала матчиться — запись должна быть вычищена ИМЕННО на этом тике"
     );
 
     // Тики 5..7: остаётся вычищенной.
     for tick in 5..=7 {
         engine.run_tick();
-        assert!(engine.memory_buffers.get(&(0, 0, 0)).is_none(), "тик {tick}: запись не должна вернуться сама по себе");
+        assert!(engine.state.snapshot().memory_buffers().get(&(0, 0, 0)).is_none(), "тик {tick}: запись не должна вернуться сама по себе");
     }
-    assert_eq!(engine.memory_buffers.len(), 0, "карта должна быть полностью пуста");
+    assert_eq!(engine.state.snapshot().memory_buffers().len(), 0, "карта должна быть полностью пуста");
 }
 
 /// Тот же класс фикса, что и у `memory_buffers` (см.
@@ -3617,23 +4235,24 @@ fn test_feedback_counter_pruned_after_match_stops_existing() {
         feedback: Some(FeedbackSpec { timeout: 1000, new_direction: Direction::Up }),
         recursion: None,
         memory: None,
+        max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
     engine.run_tick();
-    assert_eq!(engine.feedback_counters.get(&(0, 0, 0)), Some(&1), "тик 1: счётчик должен вырасти на 1");
+    assert_eq!(engine.state.snapshot().feedback_counters().get(&(0, 0, 0)), Some(&1), "тик 1: счётчик должен вырасти на 1");
     engine.run_tick();
-    assert_eq!(engine.feedback_counters.get(&(0, 0, 0)), Some(&2), "тик 2: счётчик продолжает расти");
+    assert_eq!(engine.state.snapshot().feedback_counters().get(&(0, 0, 0)), Some(&2), "тик 2: счётчик продолжает расти");
 
     // Внешнее событие: клетка перестаёт быть WATCHER.
     engine.grid_mut().set_cell(0, 0, Cell::new(UNRELATED));
     engine.run_tick();
 
     assert!(
-        engine.feedback_counters.get(&(0, 0, 0)).is_none(),
+        engine.state.snapshot().feedback_counters().get(&(0, 0, 0)).is_none(),
         "запись ДОЛЖНА быть вычищена ровно на тике, следующем за тем, когда клетка перестала матчиться — тот же фикс, что и у memory_buffers"
     );
-    assert_eq!(engine.feedback_counters.len(), 0, "карта должна быть полностью пуста");
+    assert_eq!(engine.state.snapshot().feedback_counters().len(), 0, "карта должна быть полностью пуста");
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -3684,7 +4303,7 @@ fn test_memory_gate_does_not_track_immature_cell_before_min_age() {
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(NEIGH))],
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3696,7 +4315,7 @@ fn test_memory_gate_does_not_track_immature_cell_before_min_age() {
     for tick in 1..=THRESHOLD {
         engine.run_tick();
         assert!(
-            engine.memory_buffers.get(&(0, 0, 0)).is_none(),
+            engine.state.snapshot().memory_buffers().get(&(0, 0, 0)).is_none(),
             "тик {tick}: незрелая клетка (age < min_age) НЕ должна быть memory-gate-tracked -- \
 если бы была, буфер начал бы копиться раньше, чем клетке формально разрешено матчиться"
         );
@@ -3712,7 +4331,7 @@ fn test_memory_gate_does_not_track_immature_cell_before_min_age() {
     // начать заполняться РОВНО с этого тика, не раньше.
     engine.run_tick();
     assert_eq!(
-        engine.memory_buffers.get(&(0, 0, 0)),
+        engine.state.snapshot().memory_buffers().get(&(0, 0, 0)),
         Some(&VecDeque::from(vec![RecordedValue::Type(CellType(NEIGH))])),
         "тик {}: клетка только что созрела (age == min_age) -- обязана начать отслеживаться именно теперь",
         THRESHOLD + 1
@@ -3770,6 +4389,7 @@ fn test_keep_source_emit_target_never_inherits_source_age_for_min_age() {
         feedback: None,
         recursion: None,
         memory: None,
+        max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3869,6 +4489,7 @@ fn test_recursion_with_min_age_blocks_cascade_at_too_young_cell() {
         feedback: None,
         recursion: Some(RecursionSpec { max_depth: MAX_DEPTH, direction: Direction::Right }),
         memory: None,
+        max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3949,7 +4570,7 @@ fn test_memory_neighbor_type_plus_recursion_cascade_level_gate_primes_across_tic
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Up),
             match_pattern: vec![RecordedValue::Type(CellType(MEM_RECUR_MARKER))],
-        }),
+        }), max_activations: None,
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -4000,4 +4621,186 @@ fn test_memory_neighbor_type_plus_recursion_cascade_level_gate_primes_across_tic
     // top-level матч (x=2 уже RFILLED) с уже заполненным с тика 3 буфером.
     engine.run_tick();
     assert_eq!(engine.grid().get_cell(3, WALL_ROW).map(|c| c.value.0 .0), Some(RFILLED), "тик 4: x=3 обязана сработать -- её буфер заполнен с тика 3");
+}
+
+/// Тот же класс стресс-теста, что нашёл реальный баг boundary-vs-core для
+/// `recursion` (см. CHANGELOG `[0.7.0] / Fixed`, `property_arbitration.rs`'s
+/// `test_arbitrate_spatial_matches_centralized_recursion_dense_overlapping_writes`),
+/// теперь для `cam` — единственного другого расширения с affected-регионом,
+/// физически способным дотянуться дальше одной клетки от анкора.
+/// `CamPositions` — `pub(crate)`, недоступен из `tests/` (внешние
+/// интеграционные тесты) — поэтому здесь, не в `property_arbitration.rs`.
+///
+/// `cam`, БЕЗ `recursion`, использует ТОЧНЫЙ (не консервативный disk)
+/// affected-регион — `[found, magnet]`, ровно 2 клетки (см.
+/// `get_match_affected_cells`'s doc-комментарий) — принципиально другой
+/// путь вычисления, чем у `recursion` (union дисков всех уровней,
+/// консервативный `write_cells`). `reach` для band-margin по-прежнему
+/// берётся из `RuleData::bbox`, построенного из КОНСЕРВАТИВНОГО
+/// `cam_disc_cells(radius)` — теоретически должен оставаться корректной
+/// верхней границей для точного `found`, раз поиск физически не может
+/// найти цель дальше `radius` от анкора, но это НЕ проверялось эмпирически
+/// ни разу до этого теста.
+///
+/// `radius=1`, `cam_positions` подставлены вручную (не через реальный
+/// поиск по решётке) так, что anchor `x`'s найденная цель == anchor
+/// `x+1`'s собственная позиция — гарантированная, точная 2-клеточная
+/// коллизия для КАЖДОЙ соседней пары анкоров, той же плотности, что и
+/// recursion-репро (что и должно максимально стрессировать границы полос).
+#[test]
+fn test_arbitrate_spatial_matches_centralized_cam_dense_overlapping_writes() {
+    let rule = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![],
+        changes: vec![],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: Some(CamSearch { radius: 1, target_type: CellType(2) }),
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+    };
+    let rule_index = make_rule_index(vec![rule]);
+    let rule_cache = crate::conflict_analyzer::build_rule_data_cache(&rule_index);
+
+    let reach: i32 = rule_cache
+        .iter()
+        .filter_map(|opt| opt.as_ref())
+        .flat_map(|rules| rules.iter())
+        .map(|data| {
+            let (min_x, max_x, min_y, max_y) = data.bbox;
+            min_x.unsigned_abs().max(max_x.unsigned_abs()).max(min_y.unsigned_abs()).max(max_y.unsigned_abs()) as i32
+        })
+        .max()
+        .unwrap_or(0);
+    assert_eq!(reach, 1, "cam radius=1, без recursion -- reach обязан быть ровно 1");
+
+    // >SPATIAL_THRESHOLD=4096 -- иначе arbitrate_spatial_with_cam падает
+    // сразу в centralized fallback и весь тест становится вакуумным
+    // (найдено экспериментально: 3000 анкоров × 1 rule_idx = 3000 < 4096,
+    // тест проходил, но band-split вообще не запускался).
+    const N_ANCHORS: u32 = 4500;
+    let mut matches: Vec<RuleMatch> = Vec::new();
+    let mut cam_positions: crate::engine::matcher::CamPositions = Default::default();
+    for x in 0..N_ANCHORS {
+        let m = RuleMatch { x, y: 0, head: CellType(1), rule_idx: 0 };
+        // Anchor x находит цель РОВНО на позиции anchor x+1 -- гарантированная
+        // 2-клеточная коллизия с соседом (found=x+1 совпадает с anchor(x+1)'s
+        // собственной клеткой), не зависящая от реального содержимого решётки.
+        cam_positions.insert((m.x, m.y, m.rule_idx), (x + 1, 0));
+        matches.push(m);
+    }
+
+    let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(2654435761) % 7;
+
+    let (centralized, _) =
+        arbitrate_with_cam(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), &cam_positions, 0, &Default::default(), &Default::default(), get_age);
+    let (spatial, _) = arbitrate_spatial_with_cam(
+        matches,
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        reach,
+        &cam_positions,
+        0,
+        &Default::default(),
+        &Default::default(),
+        get_age,
+    );
+
+    let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+    let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+
+    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+    assert_eq!(centralized_set, spatial_set, "плотная цепочка cam-матчей (found соседа == anchor соседа) не должна расходиться с централизованным арбитражем");
+}
+
+/// Тот же класс стресс-теста для `feedback` — единственное расширение с
+/// СОБСТВЕННОЙ (не через общий `rule_data.write_cells`) веткой в
+/// `get_match_affected_cells` (см. её doc-комментарий): точные
+/// `feedback_normal_write_cells`/`feedback_alt_write_cells`, выбираемые по
+/// состоянию `FeedbackCounters` (защёлкнулся или нет), а не консервативный
+/// union. `reach`/`bbox` строятся из UNION обоих направлений
+/// (`compute_rule_data`, `conflict_analyzer.rs:483`) — теоретически
+/// корректная верхняя граница для КАЖДОГО из точных направлений по
+/// отдельности, но это не проверялось эмпирически на плотном масштабе ни
+/// разу. `FeedbackCounters` — `pub(crate)`, тест внутренний.
+#[test]
+fn test_arbitrate_spatial_matches_centralized_feedback_dense_overlapping_writes() {
+    let rule = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![],
+        shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+        changes: vec![],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+        feedback: Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down }),
+        recursion: None,
+        memory: None,
+        max_activations: None,
+    };
+    let rule_index = make_rule_index(vec![rule]);
+    let rule_cache = crate::conflict_analyzer::build_rule_data_cache(&rule_index);
+
+    let reach: i32 = rule_cache
+        .iter()
+        .filter_map(|opt| opt.as_ref())
+        .flat_map(|rules| rules.iter())
+        .map(|data| {
+            let (min_x, max_x, min_y, max_y) = data.bbox;
+            min_x.unsigned_abs().max(max_x.unsigned_abs()).max(min_y.unsigned_abs()).max(max_y.unsigned_abs()) as i32
+        })
+        .max()
+        .unwrap_or(0);
+    assert_eq!(reach, 1, "declared Right + alt Down, оба на 1 клетку -- reach обязан быть ровно 1");
+
+    // >SPATIAL_THRESHOLD=4096. Все матчи НЕ защёлкнуты (feedback_counters
+    // пуст, ниже timeout=5) -- используют "нормальное" направление (Right),
+    // ту же плотную геометрию, что и обычный сдвиг, но идущую через
+    // ОТДЕЛЬНУЮ feedback-ветку get_match_affected_cells, не общий путь.
+    const N_ANCHORS: u32 = 4500;
+    let mut matches: Vec<RuleMatch> = Vec::new();
+    for x in 0..N_ANCHORS {
+        matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx: 0 });
+    }
+
+    let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(2654435761) % 7;
+    let feedback_counters: crate::engine::arbitrator::FeedbackCounters = Default::default();
+
+    let (centralized, _) = arbitrate_with_cam(
+        matches.clone(),
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        &Default::default(),
+        0,
+        &Default::default(),
+        &feedback_counters,
+        get_age,
+    );
+    let (spatial, _) = arbitrate_spatial_with_cam(
+        matches,
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        reach,
+        &Default::default(),
+        0,
+        &Default::default(),
+        &feedback_counters,
+        get_age,
+    );
+
+    let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+    let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+
+    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+    assert_eq!(centralized_set, spatial_set, "плотная упаковка feedback-матчей (не защёлкнуты) не должна расходиться с централизованным арбитражем");
 }

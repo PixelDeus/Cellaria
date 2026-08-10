@@ -60,7 +60,7 @@ fn make_rule(id: Vec<CellType>, priority: u32, changes: Vec<(i32, i32, crate::ty
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     }
 }
 
@@ -277,7 +277,7 @@ fn test_integration_self_modification() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     // 3) Правило 2: id=[9], priority=5,
@@ -292,7 +292,7 @@ fn test_integration_self_modification() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
 
     // 4) RuleStore с правилом 1
@@ -512,7 +512,7 @@ fn test_broadcast_shift_roundtrip_via_serializer() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let packet = serialize_add_rule(&rule).expect("broadcast shift should serialize");
     // No `cam`, priority doesn't collide with any op-code -> stays in the
@@ -557,7 +557,7 @@ fn test_change_ref_roundtrip_via_serializer() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let packet = serialize_add_rule(&rule).expect("Ref change should serialize");
     assert_eq!(packet[0], 11, "Ref alone stays in the plain AddRule format");
@@ -595,7 +595,7 @@ fn test_cam_roundtrip_via_serializer_uses_extended_format() {
         overflow: Default::default(),
         cam: Some(crate::types::CamSearch { radius: 5, target_type: CellType(2) }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let packet = serialize_add_rule(&rule).expect("cam rule should serialize");
     assert_eq!(packet[0], OP_ADD_EXT, "cam requires the AddRuleExtended op-code");
@@ -666,6 +666,7 @@ fn test_recursion_roundtrip_via_serializer_uses_extended_format() {
         feedback: None,
         recursion: Some(crate::types::RecursionSpec { max_depth: 5, direction: crate::types::Direction::Right }),
         memory: None,
+        max_activations: None,
     };
     let packet = serialize_add_rule(&rule).expect("recursion rule should serialize");
     assert_eq!(packet[0], OP_ADD_EXT, "recursion requires the AddRuleExtended op-code");
@@ -761,6 +762,7 @@ fn test_serializer_rejects_recursion_with_shifts() {
         feedback: None,
         recursion: Some(crate::types::RecursionSpec { max_depth: 2, direction: crate::types::Direction::Right }),
         memory: None,
+        max_activations: None,
     };
     let result = serialize_add_rule(&rule);
     assert!(result.is_err(), "recursion + shifts must be rejected by the serializer, matching the deserializer's own check");
@@ -783,6 +785,7 @@ fn test_serializer_rejects_recursion_max_depth_255() {
         feedback: None,
         recursion: Some(crate::types::RecursionSpec { max_depth: 255, direction: crate::types::Direction::Right }),
         memory: None,
+        max_activations: None,
     };
     let result = serialize_add_rule(&rule);
     assert!(result.is_err(), "recursion max_depth of 255 is unreachable (terminator collision) and must be rejected");
@@ -815,6 +818,7 @@ fn test_add_rule_extended_recursion_end_to_end_through_self_modification_pipelin
         feedback: None,
         recursion: Some(crate::types::RecursionSpec { max_depth: 2, direction: crate::types::Direction::Right }),
         memory: None,
+        max_activations: None,
     };
     let packet = serialize_add_rule(&rule).expect("recursion rule should serialize");
     if let Some(buf) = grid.get_boundary_mut(0, 0) {
@@ -855,7 +859,7 @@ fn test_serializer_rejects_cam_with_shifts() {
         overflow: Default::default(),
         cam: Some(crate::types::CamSearch { radius: 5, target_type: CellType(2) }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     assert!(serialize_add_rule(&rule).is_err(), "cam + shifts must be rejected by the serializer too, not just the parser");
 }
@@ -880,7 +884,7 @@ fn test_serializer_auto_switches_to_extended_format_for_reserved_priorities() {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
         };
         let packet = serialize_add_rule(&rule).unwrap();
         assert_eq!(packet[0], OP_ADD_EXT, "priority {reserved_priority} must be carried via AddRuleExtended, not as the packet's first byte");
@@ -968,7 +972,7 @@ fn test_add_rule_extended_end_to_end_through_self_modification_pipeline() {
         overflow: Default::default(),
         cam: Some(crate::types::CamSearch { radius: 2, target_type: CellType(3) }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
     };
     let packet_bytes = serialize_add_rule(&rule).unwrap();
 
