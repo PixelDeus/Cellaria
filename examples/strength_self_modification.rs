@@ -70,7 +70,7 @@ fn main() {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
             }],
         );
     }

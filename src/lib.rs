@@ -119,6 +119,7 @@ mod fast_hash;
 mod grid;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+pub mod layered;
 pub mod render;
 pub mod tm_translator;
 pub mod rule_store;
@@ -131,6 +132,7 @@ pub use conflict_analyzer::ConflictGraph;
 pub use engine::{run_tick, Engine, TerminationVerdict, CompositionVerdict};
 pub use error::CellariaError;
 pub use grid::{Grid, SimpleGrid};
+pub use layered::LayeredEngine;
 pub use render::{render_grid, render_grid_json};
 pub use rule_store::RuleStore;
 pub use storage::{ChunkStorage, GridStorage, VecStorage};

@@ -142,6 +142,7 @@ pub fn arbitrate(
         0,
         &StarvationCounters::default(),
         &FeedbackCounters::default(),
+        &[],
         get_cell_age,
     )
     .0
@@ -185,6 +186,13 @@ pub(crate) fn arbitrate_with_cam(
     generation: u32,
     starvation_counters: &StarvationCounters,
     feedback_counters: &FeedbackCounters,
+    // Клетки, УЖЕ окончательно занятые кем-то ВНЕ этого вызова (см.
+    // doc-комментарий `reserved_cells` в `arbitrate_spatial_with_cam` про
+    // единственного реального потребителя — `safe_accepted` в финальном
+    // merge-проходе). Пусто (`&[]`) для ВСЕХ остальных вызовов — нулевая
+    // цена (один лишний пустой цикл `for` по пустому срезу), сигнатура и
+    // поведение для них не меняются.
+    reserved: &[(i32, i32)],
     get_cell_age: impl Fn(usize, usize) -> u32,
 ) -> (Vec<RuleMatch>, TieBreakDecidedWins) {
     if all_matches.is_empty() {
@@ -295,38 +303,58 @@ pub(crate) fn arbitrate_with_cam(
     // -1.7% (шум, не выигрыш — измерено A/B на CA-сценарии "пробка",
     // 89700 матчей, интерливинг old/new/new против погрешности прогрева).
     // Не тот lookup доминирует в стоимости цикла — оставлено как есть.
-    let sorted: Vec<(RuleMatch, u32, u32)> = KEYED_BUF.with_borrow_mut(|keyed| {
-        keyed.clear();
-        keyed.extend(all_matches.iter().map(|m| {
-            let (priority, tie_break, rule_id) = resolve_sort_fields(m, &head_index, starvation_counters);
-            let age = get_cell_age(m.x as usize, m.y as usize);
-            // Вращаем ОДИН раз здесь (decorate-sort-undecorate), не внутри
-            // компаратора сортировки — тот вызывается O(n log n) раз, а
-            // повёрнутое значение матча не меняется в течение ОДНОГО вызова
-            // arbitrate (одно и то же generation для всех матчей тика).
-            let tie_break_rotated = tie_break.wrapping_add(generation) % TIE_BREAK_MODULUS;
+    // РЕАЛЬНЫЙ БАГ, найден 2026-08-11 при замере плотной производительности
+    // на масштабе ~1M клеток (`__investigate_city_scale_dense_perf`):
+    // "RefCell already borrowed" panic — `keyed.par_sort_unstable_by` ниже
+    // раньше вызывался ВНУТРИ `KEYED_BUF.with_borrow_mut(...)`, держа
+    // заимствование на всё время параллельной сортировки. rayon's
+    // work-stealing может увести ТОТ ЖЕ OS-поток на ДРУГОЙ вызов
+    // `arbitrate_with_cam` (соседняя полоса ИЛИ вообще другой тест/движок,
+    // делящий один и тот же глобальный rayon-пул) ПОКА исходный вызов ещё
+    // не вернулся из сортировки (ждёт свои подзадачи через `join`) —
+    // второй вызов пытается занять ТОТ ЖЕ `RefCell` на ТОМ ЖЕ потоке и
+    // падает. Раньше не проявлялось: `PARALLEL_SORT_THRESHOLD=1024`
+    // редко превышался per-полосным числом матчей до сегодняшнего замера
+    // на 1000×1000. Фикс: заимствование берётся ТОЛЬКО на мгновенный
+    // `take`/возврат (`std::mem::take`/присваивание) — сама сортировка
+    // (и вообще весь текст функции) выполняется на ЛОКАЛЬНОЙ переменной,
+    // без удержания `RefCell`-заимствования, значит reentrancy через
+    // work-stealing больше не видит "уже занято".
+    let mut keyed: Vec<KeyedEntry> = KEYED_BUF.with_borrow_mut(std::mem::take);
+    keyed.clear();
+    keyed.extend(all_matches.iter().map(|m| {
+        let (priority, tie_break, rule_id) = resolve_sort_fields(m, &head_index, starvation_counters);
+        let age = get_cell_age(m.x as usize, m.y as usize);
+        // Вращаем ОДИН раз здесь (decorate-sort-undecorate), не внутри
+        // компаратора сортировки — тот вызывается O(n log n) раз, а
+        // повёрнутое значение матча не меняется в течение ОДНОГО вызова
+        // arbitrate (одно и то же generation для всех матчей тика).
+        let tie_break_rotated = tie_break.wrapping_add(generation) % TIE_BREAK_MODULUS;
+        (
             (
-                (
-                    Reverse(priority),
-                    Reverse(age),
-                    Reverse(tie_break_rotated),
-                    Reverse(rule_id),
-                    Reverse(m.x),
-                    Reverse(m.y),
-                    Reverse(m.rule_idx),
-                ),
-                *m,
-                priority,
-                age,
-            )
-        }));
-        if keyed.len() >= PARALLEL_SORT_THRESHOLD {
-            keyed.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        } else {
-            keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        }
-        keyed.drain(..).map(|(_, m, priority, age)| (m, priority, age)).collect()
-    });
+                Reverse(priority),
+                Reverse(age),
+                Reverse(tie_break_rotated),
+                Reverse(rule_id),
+                Reverse(m.x),
+                Reverse(m.y),
+                Reverse(m.rule_idx),
+            ),
+            *m,
+            priority,
+            age,
+        )
+    }));
+    if keyed.len() >= PARALLEL_SORT_THRESHOLD {
+        keyed.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    } else {
+        keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    }
+    let sorted: Vec<(RuleMatch, u32, u32)> = keyed.drain(..).map(|(_, m, priority, age)| (m, priority, age)).collect();
+    // Возвращаем (теперь снова пустой, но с сохранённой capacity) буфер в
+    // thread_local для следующего вызова -- та же персистентность, что и
+    // раньше, просто без удержания заимствования во время сортировки.
+    KEYED_BUF.with_borrow_mut(|slot| *slot = keyed);
 
     // Оба буфера ниже — из `thread_local!` (см. её doc-комментарий и
     // doc-комментарий `used_cells` выше про то, почему не поле `Engine`).
@@ -335,6 +363,18 @@ pub(crate) fn arbitrate_with_cam(
     // безопасен по построению, а не по соглашению).
     USED_CELLS_BUF.with_borrow_mut(|used_cells| {
         used_cells.clear();
+        // `reserved` -- клетки, окончательно занятые ВНЕ этого вызова (см.
+        // doc-комментарий параметра). `usize::MAX` как индекс-заглушка:
+        // ниже единственное место, читающее это значение, использует
+        // `.get(...)` (не прямую индексацию `accepted_priority_age[..]`) --
+        // `usize::MAX` гарантированно вне диапазона (`accepted` физически
+        // не может вырасти настолько), так что сравнение всегда `None ==
+        // Some(..)` -- `false`, конфликт с резервом никогда не попадает в
+        // `tie_break_decided` (и корректно не должен: резерв — не часть
+        // ЭТОГО раунда арбитража, тай-брейку сравнивать не с чем).
+        for &coord in reserved {
+            used_cells.insert(coord, usize::MAX);
+        }
         AFFECTED_BUF.with_borrow_mut(|affected| {
             for (m, priority, age) in sorted {
                 // Получаем предвычисленные affected cells из кэша
@@ -350,7 +390,7 @@ pub(crate) fn arbitrate_with_cam(
                 for coord in affected.iter() {
                     if let Some(&owner_idx) = used_cells.get(coord) {
                         conflict = true;
-                        if accepted_priority_age[owner_idx] == (priority, age) {
+                        if accepted_priority_age.get(owner_idx) == Some(&(priority, age)) {
                             tie_break_decided.insert(owner_idx);
                         }
                     }
@@ -454,7 +494,7 @@ pub(crate) fn arbitrate_spatial_with_cam(
     get_cell_age: impl Fn(usize, usize) -> u32 + Sync,
 ) -> (Vec<RuleMatch>, TieBreakDecidedWins) {
     if all_matches.len() < SPATIAL_THRESHOLD || reach <= 0 {
-        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, get_cell_age);
+        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &[], get_cell_age);
     }
 
     let margin = (2 * reach) as u32;
@@ -468,7 +508,7 @@ pub(crate) fn arbitrate_spatial_with_cam(
     let num_bands = rayon::current_num_threads().min(max_bands_by_spread).max(1);
 
     if num_bands < 2 {
-        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, get_cell_age);
+        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &[], get_cell_age);
     }
 
     let band_width = (spread / num_bands as u32).max(1);
@@ -497,6 +537,12 @@ pub(crate) fn arbitrate_spatial_with_cam(
     let safe_margin = margin + reach as u32;
 
     let mut core_by_band: Vec<Vec<RuleMatch>> = (0..num_bands).map(|_| Vec::new()).collect();
+    // Подмножество `core_by_band` внутри at-risk зоны (dist < safe_margin
+    // от какой-либо границы) — ИСХОДНЫЕ кандидаты (и будущие победители, и
+    // будущие локальные проигравшие), не результат арбитража. См.
+    // doc-комментарий у бага #2 ниже про то, зачем это нужно ОТДЕЛЬНО от
+    // `accepted`, который вернёт арбитраж каждой полосы.
+    let mut at_risk_zone_by_band: Vec<Vec<RuleMatch>> = (0..num_bands).map(|_| Vec::new()).collect();
     let mut boundary: Vec<RuleMatch> = Vec::new();
 
     for m in all_matches {
@@ -508,6 +554,9 @@ pub(crate) fn arbitrate_spatial_with_cam(
         let dist_left = m.x - start;
         let dist_right = (end - 1).saturating_sub(m.x);
         if dist_left >= margin && dist_right >= margin {
+            if dist_left < safe_margin || dist_right < safe_margin {
+                at_risk_zone_by_band[band].push(m);
+            }
             core_by_band[band].push(m);
         } else {
             boundary.push(m);
@@ -522,13 +571,15 @@ pub(crate) fn arbitrate_spatial_with_cam(
     // отдельности, а не просто сплющить в общий Vec. Слияние — уже ОДНИМ
     // потоком, после `.collect()`: `TieBreakDecidedWins` полос не
     // пересекаются по построению (Lemma 6), так что порядок слияния не важен.
+    // `&[]` (нет резервов) -- на этом этапе `safe_accepted` ещё не
+    // вычислен, резервировать пока нечего.
     let band_results: Vec<(Vec<RuleMatch>, TieBreakDecidedWins)> = core_by_band
         .into_par_iter()
         .map(|band_matches| {
             if band_matches.is_empty() {
                 (Vec::new(), FxHashSet::default())
             } else {
-                arbitrate_with_cam(band_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &get_cell_age)
+                arbitrate_with_cam(band_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &[], &get_cell_age)
             }
         })
         .collect();
@@ -579,17 +630,61 @@ pub(crate) fn arbitrate_spatial_with_cam(
     // boundary-vs-at_risk_accepted и boundary-vs-boundary, ровно то, чего
     // не хватало.
     //
-    // Остаточный теоретический риск (не закрыт этим фикс: если
-    // at_risk-победитель полосы ПРОИГРЫВАЕТ boundary-конкуренту в финальном
-    // проходе, а внутри его же полосы БЫЛ более слабый кандидат на ТУ ЖЕ
-    // клетку, отвергнутый на этапе локального арбитража полосы — этот
-    // более слабый кандидат уже не переигрывается, хотя в истинном
-    // централизованном порядке мог бы унаследовать клетку. Не воспроизведён
-    // ни на одном property-тесте этой сессии (включая специально
-    // построенный recursion-репро) — но и не доказан невозможным аналитически.
+    // (`at_risk_accepted` — переменная ИЗ ЭТОЙ, уже исторической версии
+    // фикса, в текущем коде ниже её нет — см. фикс бага #2 сразу дальше,
+    // заменивший её на `at_risk_zone_by_band`.)
+    //
+    // РЕАЛЬНЫЙ БАГ #2, найден 2026-08-1X целенаправленным тестом
+    // (`test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_rejected_weaker_candidate`,
+    // сконструированным именно под остаточный риск, задокументированный
+    // выше при фиксе бага #1 -- и подтвердившимся: не гипотетический.
+    // Раньше в `at_risk_accepted` шли только ПОБЕДИТЕЛИ этапа локального
+    // арбитража полосы (`accepted`, отфильтрованный по позиции). Если
+    // такой победитель (W) проигрывал boundary-конкуренту (B) в финальном
+    // merge-проходе — W отклонялся ЦЕЛИКОМ (греди, не частично), но более
+    // слабый кандидат ТОЙ ЖЕ клетки (L), отвергнутый W ещё на этапе
+    // локального арбитража полосы, уже не участвовал в финальном проходе
+    // вообще -- он не пережил в `accepted`, значит физически не мог
+    // попасть в `at_risk_accepted`. Централизованный арбитраж той же
+    // тройки (порядок B > W > L): B принят, W отклонён (клетка B занята),
+    // L ПРОВЕРЯЕТСЯ НЕЗАВИСИМО -- его клетка так и осталась свободной (W
+    // её не забирал, будучи отклонён целиком) -- L принят. Расхождение
+    // реально: spatial теряет L, centralized его находит.
+    //
+    // Фикс: в финальный merge-проход идут не `accepted`-победители полосы,
+    // а `at_risk_zone_by_band` -- ИСХОДНЫЕ кандидаты at-risk зоны (и
+    // победители, и локально отклонённые), собранные ЕЩЁ НА ЭТАПЕ
+    // классификации (см. правку выше), ДО первого арбитража полос. Первый
+    // (per-полосный) арбитраж по-прежнему нужен ЦЕЛИКОМ (safe+at_risk
+    // вместе) -- он остаётся ЕДИНСТВЕННЫМ источником `safe_accepted`
+    // (глубокие победители, никогда не пересматриваются) и корректно
+    // решает safe-vs-at_risk конфликты ВНУТРИ полосы (та же причина, что и
+    // у бага #1's фикса -- разделять ДО арбитража нельзя). Но его решение
+    // для at_risk-зоны теперь ПОЛНОСТЬЮ ПересматривАется в merge-проходе:
+    // включая и W, и L, тем же детерминированным тотальным порядком, что
+    // при централизованном арбитраже -- если B побеждает W, L получает
+    // честный шанс на освободившуюся клетку, ровно как должно быть.
+    //
+    // Опасность: at_risk-зона МОЖЕТ физически пересекаться с safe-зоной
+    // ТОЙ ЖЕ полосы (несмотря на название "safe") -- at_risk-матч на
+    // dist=margin (граница at_risk-зоны) с reach=K может писать вплоть до
+    // margin+K = safe_margin, то есть ровно на первую "safe" клетку.
+    // Значит если at_risk-матч (L) проиграл ИМЕННО safe-матчу (не другому
+    // at_risk) на этапе первого (per-полосного) арбитража -- его клетка
+    // уже НАВСЕГДА, законно занята (safe_accepted никогда не
+    // пересматривается), а слепое повторное участие L в merge-проходе БЕЗ
+    // учёта этого могло бы дать L повторно "выиграть" уже занятую клетку
+    // -- двойная запись. Фикс от этого не через отслеживание "кто именно
+    // отклонил L" (это потребовало бы нового, более дорогого API у
+    // `arbitrate_with_cam`, платящего накладными расходами на КАЖДЫЙ
+    // вызов, включая горячий путь), а проще и дешевле: `safe_accepted`'s
+    // клетки передаются в merge-проход как `reserved` (см. её
+    // doc-комментарий у `arbitrate_with_cam`) -- любой at_risk/boundary
+    // кандидат, пытающийся занять зарезервированную клетку, корректно
+    // отклоняется тем же механизмом, что и обычный конфликт, без
+    // необходимости знать, КЕМ именно она была занята.
     let mut safe_accepted: Vec<RuleMatch> = Vec::new();
     let mut safe_tie_break_decided: TieBreakDecidedWins = FxHashSet::default();
-    let mut at_risk_accepted: Vec<RuleMatch> = Vec::new();
     for (band, (accepted, tbd)) in band_results.into_iter().enumerate() {
         let (start, end) = band_range(band);
         let mut band_safe_keys: TieBreakDecidedWins = FxHashSet::default();
@@ -599,17 +694,37 @@ pub(crate) fn arbitrate_spatial_with_cam(
             if dist_left >= safe_margin && dist_right >= safe_margin {
                 band_safe_keys.insert((m.x, m.y, m.rule_idx));
                 safe_accepted.push(m);
-            } else {
-                at_risk_accepted.push(m);
             }
+            // at_risk-победители этого раунда сюда НЕ идут -- они (вместе
+            // с их локальными проигравшими) заново, целиком
+            // переарбитрируются ниже, из `at_risk_zone_by_band`, не
+            // отсюда (см. комментарий бага #2 выше).
         }
         safe_tie_break_decided.extend(tbd.into_iter().filter(|key| band_safe_keys.contains(key)));
     }
 
+    // `reserved` для merge-прохода -- клетки `safe_accepted`, вычисленные
+    // тем же способом (`get_match_affected_cells`), что и внутри
+    // `arbitrate_with_cam` (см. её doc-комментарий и bug#2 выше про то,
+    // зачем это нужно). `head_index` строится здесь ЗАНОВО (не переиспользуется
+    // из внутренних вызовов `arbitrate_with_cam` -- у него нет публичного
+    // доступа наружу) -- цена пропорциональна числу РАЗЛИЧНЫХ голов правил,
+    // не числу матчей, и платится ОДИН раз на весь вызов
+    // `arbitrate_spatial_with_cam`, не на каждый матч.
+    let head_index = build_head_index(rule_index);
+    let mut reserved_cells: Vec<(i32, i32)> = Vec::new();
+    let mut reserved_scratch: Vec<(i32, i32)> = Vec::new();
+    for m in &safe_accepted {
+        get_match_affected_cells(m, &head_index, rule_cache, bounds, cam_positions, feedback_counters, &mut reserved_scratch);
+        reserved_cells.extend(reserved_scratch.iter().copied());
+    }
+
     let mut merge_candidates = boundary;
-    merge_candidates.extend(at_risk_accepted);
+    for band_matches in at_risk_zone_by_band {
+        merge_candidates.extend(band_matches);
+    }
     let (merge_accepted, merge_tie_break_decided) =
-        arbitrate_with_cam(merge_candidates, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, get_cell_age);
+        arbitrate_with_cam(merge_candidates, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &reserved_cells, get_cell_age);
 
     let mut result = safe_accepted;
     result.extend(merge_accepted);

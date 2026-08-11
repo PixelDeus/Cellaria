@@ -106,7 +106,7 @@ fn v2_rule_strategy() -> impl Strategy<Value = Rule> {
                 overflow: OverflowAction::Discard,
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
             }
         })
         .prop_filter("rule must have at least one shift or change", |r| {
@@ -210,7 +210,7 @@ fn test_gpu_v2_matches_cpu_head_on_collision_scenario() {
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }
     }
 
@@ -270,7 +270,7 @@ fn test_gpu_v2_hybrid_fallback_resolves_long_conflict_chain() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -331,7 +331,7 @@ fn test_gpu_v2_cam_matches_cpu_single_and_conflicting_magnets() {
             overflow: OverflowAction::Discard,
             cam: Some(CamSearch { radius, target_type: CellType(TARGET) }),
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }
     }
 
@@ -415,7 +415,7 @@ fn test_gpu_v2_cam_two_level_conflict_chain_matches_cpu() {
             overflow: OverflowAction::Discard,
             cam: Some(CamSearch { radius: 3, target_type: CellType(target) }),
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }
     }
 
@@ -498,7 +498,7 @@ fn test_gpu_v2_tie_break_matches_cpu_rotating_conflict() {
             overflow: Default::default(),
             cam: None,
             tie_break,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }
     }
 
@@ -562,7 +562,7 @@ fn test_gpu_v2_broadcast_matches_cpu_single_no_conflict() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -621,7 +621,7 @@ fn test_gpu_v2_broadcast_matches_cpu_overlapping_paths_arbitrated() {
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }
     }
 
@@ -703,7 +703,7 @@ fn test_gpu_v2_broadcast_matches_cpu_boundary_overflow_discard() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -785,7 +785,7 @@ fn test_gpu_v2_keep_source_matches_cpu_source_age_preserved() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(MARKER), vec![rule]);
@@ -836,7 +836,7 @@ fn test_gpu_v2_emit_broadcast_plus_keep_source_matches_cpu() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(EMITTER), vec![rule]);
@@ -893,7 +893,7 @@ fn wall_fill_rule(min_age: u64, max_depth: u8) -> Rule {
         starvation_after: None,
         feedback: None,
         recursion: Some(RecursionSpec { max_depth, direction: Direction::Right }),
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1031,7 +1031,7 @@ fn starvation_rules(low_threshold: u32) -> HashMap<CellType, Vec<Rule>> {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let rule_low = Rule {
         id: vec![CellType(1)],
@@ -1047,7 +1047,7 @@ fn starvation_rules(low_threshold: u32) -> HashMap<CellType, Vec<Rule>> {
         starvation_after: Some(low_threshold),
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut idx = HashMap::new();
     idx.insert(CellType(1), vec![rule_high, rule_low]);
@@ -1187,7 +1187,7 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let rule_low = Rule {
         id: vec![CellType(HEAD)],
@@ -1203,7 +1203,7 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
         starvation_after: Some(1),
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(HEAD), vec![rule_high, rule_low]);
@@ -1277,7 +1277,7 @@ fn feedback_mover_rule(timeout: u64) -> Rule {
         starvation_after: None,
         feedback: Some(cellaria::types::FeedbackSpec { timeout, new_direction: Direction::Down }),
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1376,7 +1376,7 @@ fn feedback_mover_rule_priority(timeout: u64, priority: u32) -> Rule {
         starvation_after: None,
         feedback: Some(cellaria::types::FeedbackSpec { timeout, new_direction: Direction::Down }),
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1402,7 +1402,7 @@ fn contender_self_write_rule(priority: u32, literal: u8) -> Rule {
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1532,7 +1532,7 @@ fn memory_neighbor_type_mover_rule(window: usize) -> Rule {
             window,
             record_trigger: RecordTrigger::NeighborType(Direction::Up),
             match_pattern: vec![RecordedValue::Type(CellType(0)); window],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1620,7 +1620,7 @@ fn test_gpu_v2_memory_rule_outcome_gate_oscillates_matches_cpu() {
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::RuleOutcome, match_pattern: vec![RecordedValue::Missed] }), max_activations: None,
+        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::RuleOutcome, match_pattern: vec![RecordedValue::Missed] }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut rule_index = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -1694,7 +1694,7 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let rule_low = Rule {
         id: vec![CellType(1)],
@@ -1714,7 +1714,7 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Down),
             match_pattern: vec![RecordedValue::Type(CellType(7))],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let beacon7 = Rule {
         id: vec![CellType(7)],
@@ -1730,7 +1730,7 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let beacon8 = Rule {
         id: vec![CellType(8)],
@@ -1746,7 +1746,7 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut idx = HashMap::new();
     idx.insert(CellType(1), vec![rule_high, rule_low]);
@@ -1857,7 +1857,7 @@ fn feedback_plus_memory_rules(feedback_timeout: u64, memory_window: usize) -> Ha
             window: memory_window,
             record_trigger: RecordTrigger::NeighborType(Direction::Down),
             match_pattern: vec![RecordedValue::Type(CellType(7)); memory_window],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let beacon7 = Rule {
         id: vec![CellType(7)],
@@ -1873,7 +1873,7 @@ fn feedback_plus_memory_rules(feedback_timeout: u64, memory_window: usize) -> Ha
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let beacon8 = Rule {
         id: vec![CellType(8)],
@@ -1889,7 +1889,7 @@ fn feedback_plus_memory_rules(feedback_timeout: u64, memory_window: usize) -> Ha
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None,
+        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut idx = HashMap::new();
     idx.insert(CellType(1), vec![marker]);

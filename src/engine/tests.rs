@@ -38,7 +38,7 @@ fn test_run_tick() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -79,7 +79,7 @@ fn test_shift_right() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -124,7 +124,7 @@ fn test_shift_with_change() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -178,7 +178,7 @@ fn test_overflow_discard() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -214,7 +214,7 @@ fn test_overflow_write() {
         overflow: OverflowAction::Write(99),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -255,7 +255,7 @@ fn test_overflow_write_literal_zero_fallback() {
         overflow: OverflowAction::WriteLiteral(0),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -296,7 +296,7 @@ fn test_overflow_write_literal_zero_boundary() {
         overflow: OverflowAction::WriteLiteral(0),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -337,7 +337,7 @@ fn test_guarded_self_modification_accepts_safe_and_rejects_unsafe() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }]);
     let mut engine = Engine::new(grid, rule_index);
     engine.enable_guarded_self_modification();
@@ -389,7 +389,7 @@ fn test_self_modification_extending_existing_head_preserves_original() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![original.clone()]));
     engine.enable_self_modification();
@@ -461,7 +461,7 @@ fn test_self_modification_preserves_rule_added_after_construction() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     engine.set_rules_for_head(CellType(1), vec![original.clone()]);
     engine.enable_self_modification();
@@ -506,7 +506,7 @@ fn test_guarded_self_modification_on_chunk_storage() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }]);
     let mut engine = Engine::new(grid, rule_index);
     engine.enable_guarded_self_modification();
@@ -638,7 +638,7 @@ fn test_detect_termination_active() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -663,7 +663,7 @@ fn test_apply_match() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -707,7 +707,7 @@ fn test_run_tick_simple() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -752,7 +752,7 @@ fn test_io_boundary() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule]);
@@ -836,7 +836,7 @@ fn test_2d_pattern_match() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let mut grid = make_grid(3, 3);
@@ -902,7 +902,7 @@ fn test_pattern_packing_9_16_17_cells() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut grid9 = make_grid(5, 5);
     for y in 1..=3 {
@@ -942,7 +942,7 @@ fn test_pattern_packing_9_16_17_cells() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut grid16 = make_grid(6, 6);
     for y in 0..4 {
@@ -971,7 +971,7 @@ fn test_pattern_packing_9_16_17_cells() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut grid17 = make_grid(7, 6);
     for y in 0..4 {
@@ -1023,7 +1023,7 @@ fn test_nondeterministic_same_priority() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_b = Rule {
@@ -1045,7 +1045,7 @@ fn test_nondeterministic_same_priority() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule_a, rule_b]);
@@ -1090,7 +1090,7 @@ fn test_same_id_resolves_actually_matched_rule() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     // Ниже приоритет, второй в отсортированном Vec, но именно оно
@@ -1111,7 +1111,7 @@ fn test_same_id_resolves_actually_matched_rule() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let rule_index = make_rule_index(vec![rule_hi, rule_lo]);
@@ -1214,7 +1214,7 @@ fn test_gol_block_still_life() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
 
@@ -1245,14 +1245,14 @@ fn test_gol_beacon_period2() {
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(2))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let flip_back = Rule {
         id: vec![CellType(2)],
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![flip, flip_back]);
 
@@ -1288,7 +1288,7 @@ fn test_wireworld_corner() {
         pattern: vec![],
         shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: false }]],
         changes: vec![],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![shift_right]);
     run_tick_ca(&mut grid, &ri);
@@ -1318,7 +1318,7 @@ fn test_wireworld_split() {
             (1, 0, ChangeValue::Literal(1)),
             (0, 1, ChangeValue::Literal(1)),
         ],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![split]);
     run_tick_ca(&mut grid, &ri);
@@ -1342,7 +1342,7 @@ fn test_wave_collision() {
         pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(2))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(0)), (1, 0, ChangeValue::Literal(0))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![collide]);
     run_tick_ca(&mut grid, &ri);
@@ -1375,7 +1375,7 @@ fn test_wave_obstacle() {
         pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(9))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![blocked]);
     run_tick_ca(&mut grid, &ri);
@@ -1411,7 +1411,7 @@ fn test_conv_full_pass() {
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(99))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         });
     }
     let ri = make_rule_index(rules);
@@ -1443,7 +1443,7 @@ fn test_physics_elastic() {
         pattern: vec![(0, 0, CellType(1)), (1, 0, CellType(2))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(2)), (1, 0, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![exchange]);
     run_tick_ca(&mut grid, &ri);
@@ -1474,7 +1474,7 @@ fn test_physics_gravity() {
         pattern: vec![(0, 0, CellType(1)), (0, 1, CellType(0))],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(0)), (0, 1, ChangeValue::Literal(1))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![fall]);
     run_tick_ca(&mut grid, &ri);
@@ -1513,7 +1513,7 @@ fn test_replication_2d() {
             (0, 1, ChangeValue::Literal(1)),
             (0, -1, ChangeValue::Literal(1)),
         ],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![replicate]);
 
@@ -1557,7 +1557,7 @@ fn magnet_rule(radius: u8, priority: u32) -> Rule {
         overflow: Default::default(),
         cam: Some(CamSearch { radius, target_type: CellType(TARGET) }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1672,7 +1672,7 @@ fn magnet_rule_typed(id_type: u8, radius: u8, priority: u32) -> Rule {
         overflow: Default::default(),
         cam: Some(CamSearch { radius, target_type: CellType(TARGET) }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1691,7 +1691,7 @@ fn magnet_recursion_rule(id_type: u8, radius: u8, priority: u32, direction: Dire
         starvation_after: None, feedback: None,
         recursion: Some(RecursionSpec { max_depth, direction }),
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1817,7 +1817,7 @@ fn test_broadcast_shift_fills_entire_path() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1848,7 +1848,7 @@ fn test_ordinary_shift_skips_intermediate_cells_unlike_broadcast() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1879,7 +1879,7 @@ fn test_broadcast_shift_stops_at_grid_boundary() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1915,7 +1915,7 @@ fn test_emit_keeps_source_and_fills_entire_path() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1947,7 +1947,7 @@ fn test_point_emit_copies_to_target_without_clearing_source() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -1973,7 +1973,7 @@ fn emit_chain_rule(id_type: u8, direction: Direction, front_gated: bool) -> Rule
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -2048,7 +2048,7 @@ fn test_emit_source_age_is_not_reset() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -2103,7 +2103,7 @@ fn test_emit_broadcast_writeliteral_overflow_overwrites_last_path_cell() {
         overflow: OverflowAction::WriteLiteral(77),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -2148,7 +2148,7 @@ fn test_emit_broadcast_overflow_source_coincidence_parity_with_non_keep_source()
             overflow: OverflowAction::WriteLiteral(99),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         };
         let ri = make_rule_index(vec![rule]);
         let mut engine = Engine::new(grid, ri);
@@ -2193,7 +2193,7 @@ fn test_point_emit_overflow_write_zero_carries_own_value_at_boundary() {
             overflow: OverflowAction::Write(0), // 0 == "carry own value", not literal 0
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         };
         let ri = make_rule_index(vec![rule]);
         let mut engine = Engine::new(grid, ri);
@@ -2241,7 +2241,7 @@ fn test_emit_broadcast_overflow_source_coincidence_written_cells_bookkeeping() {
         overflow: OverflowAction::WriteLiteral(99),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -2290,7 +2290,7 @@ fn test_timer_via_min_age_is_already_expressible() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let ri = make_rule_index(vec![rule]);
     let mut engine = Engine::new(grid, ri);
@@ -2330,7 +2330,7 @@ fn test_timer_via_self_change_counting_chain_is_already_expressible() {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         });
     }
     let ri = make_rule_index(rules);
@@ -2364,7 +2364,7 @@ fn make_tie_break_rules(tie_break_a: u32, tie_break_b: u32) -> HashMap<CellType,
         overflow: Default::default(),
         cam: None,
         tie_break: tie_break_a,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let rule_b = Rule {
         id: vec![CellType(1)],
@@ -2377,7 +2377,7 @@ fn make_tie_break_rules(tie_break_a: u32, tie_break_b: u32) -> HashMap<CellType,
         overflow: Default::default(),
         cam: None,
         tie_break: tie_break_b,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     make_rule_index(vec![rule_a, rule_b])
 }
@@ -2449,7 +2449,7 @@ fn make_starvation_rules(low_starvation_after: Option<u32>) -> HashMap<CellType,
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let rule_low = Rule {
         id: vec![CellType(1)],
@@ -2462,7 +2462,7 @@ fn make_starvation_rules(low_starvation_after: Option<u32>) -> HashMap<CellType,
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: low_starvation_after, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: low_starvation_after, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     make_rule_index(vec![rule_high, rule_low])
 }
@@ -2622,7 +2622,7 @@ fn test_rebuild_rule_cache_clears_stale_starvation_counter_on_rule_idx_reuse() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: Some(1), feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: Some(1), feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut low_head_rules = engine.rule_index().get(&CellType(1)).unwrap().clone();
     low_head_rules[1] = new_low;
@@ -2694,7 +2694,7 @@ fn test_starvation_after_ignores_tie_break_decided_wins() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: Some(K), feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: Some(K), feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let rule_partner = Rule {
         id: vec![CellType(1)],
@@ -2707,7 +2707,7 @@ fn test_starvation_after_ignores_tie_break_decided_wins() {
         overflow: Default::default(),
         cam: None,
         tie_break: 8,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule_low, rule_partner]));
 
@@ -2795,7 +2795,7 @@ fn test_input_recording_and_replay_reproduces_continuous_run() {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
             }],
         );
         idx
@@ -3019,6 +3019,175 @@ fn test_engine_snapshot_yaml_roundtrip_matches_original_execution() {
     assert_eq!(engine.grid().get_cell(1, 0).map(|c| c.value.0 .0), Some(100), "тик 7: HIGH снова побеждает после форсированной победы LOW на тике 6");
 }
 
+/// РЕАЛЬНЫЙ БАГ, найден 2026-08-11 при подготовке модели к 1.0:
+/// `ChangeValue` раньше был `#[serde(untagged)]` — `Literal(u8)` и
+/// `Ref(usize)` оба сериализуются как ГОЛОЕ число, неразличимо. При
+/// десериализации `Ref(3)` тихо возвращался как `Literal(3)`. Это молча
+/// ломало ЛЮБОЕ правило с `Ref` в `changes` после
+/// `Engine::snapshot()`/`from_snapshot()` (и `replay()`, который тоже идёт
+/// через снимок) — не только изолированный round-trip самого типа
+/// (следующая половина этого теста), но и ЦЕЛЫЙ движок: правило "скопируй
+/// значение из паттерна" превращалось в "запиши литерал, равный индексу
+/// ссылки", без единой ошибки. Ни один существующий property/snapshot-тест
+/// этого не ловил — все они гоняли `changes: vec![]` (пустой), ни разу не
+/// строили правило с `Ref` в `changes` для проверки именно через снимок.
+#[test]
+fn test_change_value_ref_survives_serde_roundtrip_and_snapshot_restore() {
+    // Изолированная проверка самого типа -- не через Engine, просто
+    // serde_yaml round-trip.
+    let original = ChangeValue::Ref(3);
+    let yaml = serde_yaml::to_string(&original).expect("ChangeValue must serialize");
+    let restored: ChangeValue = serde_yaml::from_str(&yaml).expect("ChangeValue must deserialize");
+    assert_eq!(restored, original, "ChangeValue::Ref must survive a raw serde_yaml round-trip without collapsing into Literal");
+
+    // Сквозная проверка через реальный Engine::snapshot/from_snapshot:
+    // правило "скопируй значение из pattern[0] в (1,0)" — паттерн матчит
+    // (0,0)=1 и запоминает его значение (совпадающее с самим собой, но
+    // важно НЕ значение шаблона, а то, что реально стоит в решётке — здесь
+    // это то же самое 1, различие проявится через сам факт, что после
+    // восстановления правило продолжает копировать, а не начинает писать
+    // литерал "0" -- индекс ссылки).
+    let rule = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![(0, 0, CellType(1))],
+        shifts: vec![],
+        changes: vec![(1, 0, ChangeValue::Ref(0))],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+    };
+    let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
+    rule_index.insert(CellType(1), vec![rule]);
+
+    let mut grid = make_grid(2, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let engine = Engine::new(grid, rule_index);
+
+    let snapshot = engine.snapshot();
+    let yaml = serde_yaml::to_string(&snapshot).expect("snapshot must serialize");
+    let restored_snapshot: EngineSnapshot<VecStorage> = serde_yaml::from_str(&yaml).expect("snapshot must deserialize");
+    let mut restored = Engine::from_snapshot(restored_snapshot);
+
+    restored.run_tick();
+    assert_eq!(
+        restored.grid().get_cell(1, 0).map(|c| c.value.0 .0),
+        Some(1),
+        "after snapshot/restore, ChangeValue::Ref(0) must still COPY pattern[0]'s value (1) -- \
+         if it silently collapsed to Literal, this cell would read Some(0) (the ref index) instead"
+    );
+}
+
+/// `ChangeValue::Add`/`Sub` — конец-в-конец через реальный `Engine`, не
+/// изолированный юнит-тест резолвера: правило матчит (0,0)=1, помнит его
+/// значение через `pattern`, и пишет `pattern[0] + 10` в саму же клетку.
+///
+/// **Честное ограничение, а не забытый случай:** это ОДНО применение, не
+/// накопление тик за тиком одним и тем же правилом. `CellType` — это
+/// ОДНОВРЕМЕННО и "значение" (то, что арифметика читает/пишет), и КЛЮЧ
+/// матчинга (`Rule::id`/`pattern` матчат ТОЧНЫЙ тип) — после первого тика
+/// клетка становится типом 11, а это правило зарегистрировано под головой
+/// `CellType(1)` и на тип 11 больше не сработает. "Счётчик, растущий
+/// каждый тик ОДНИМ правилом" в текущей модели не выражается напрямую —
+/// нужно было бы либо отдельное правило на каждое возможное значение
+/// счётчика, либо более широкий (диапазонный/wildcard) матчинг, которого
+/// у `pattern`/`id` пока нет. Не баг арифметики -- следствие того, что
+/// значение и тип у клетки — одно и то же поле.
+#[test]
+fn test_change_value_add_applies_once_from_pattern_ref() {
+    let rule = Rule {
+        id: vec![CellType(1)],
+        pattern: vec![(0, 0, CellType(1))],
+        shifts: vec![],
+        changes: vec![(0, 0, ChangeValue::Add(Box::new(ChangeValue::Ref(0)), Box::new(ChangeValue::Literal(10))))],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+    };
+    let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
+    rule_index.insert(CellType(1), vec![rule]);
+    let mut grid = make_grid(1, 1);
+    grid.set_cell(0, 0, Cell::new(1));
+    let mut engine = Engine::new(grid, rule_index);
+    engine.run_tick();
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(11), "1 + 10 = 11 -- Add must read the pre-tick pattern value, not overwrite blindly");
+    // Второй тик: клетка теперь тип 11, это правило (голова 1) больше не
+    // матчит -- значение остаётся неизменным, ИМЕННО демонстрируя
+    // ограничение из doc-комментария выше, не гипотетическое.
+    engine.run_tick();
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(11), "after the value became a different CellType, the same rule (registered under head 1) must not fire again");
+}
+
+/// `ChangeValue::Add`/`Sub` — переполнение `u8` заворачивается
+/// (`wrapping_add`/`wrapping_sub`), не паникует и не насыщается на 255/0 --
+/// см. `ChangeValue`'s doc-комментарий про то, почему wrapping выбран
+/// намеренно, не случайно.
+#[test]
+fn test_change_value_add_wraps_on_u8_overflow() {
+    let rule = Rule {
+        id: vec![CellType(250)],
+        pattern: vec![(0, 0, CellType(250))],
+        shifts: vec![],
+        changes: vec![(0, 0, ChangeValue::Add(Box::new(ChangeValue::Ref(0)), Box::new(ChangeValue::Literal(10))))],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+    };
+    let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
+    rule_index.insert(CellType(250), vec![rule]);
+    let mut grid = make_grid(1, 1);
+    grid.set_cell(0, 0, Cell::new(250));
+    let mut engine = Engine::new(grid, rule_index);
+    engine.run_tick();
+    // 250 + 10 = 260, wrapping u8 -> 260 - 256 = 4.
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(4), "250 + 10 must wrap to 4 (260 mod 256), not panic or saturate at 255");
+}
+
+/// `ChangeValue::Sub`, вложенная композиция (`Sub(Add(Ref, Literal),
+/// Literal)`) — произвольная глубина рекурсии, не только одноуровневая пара.
+#[test]
+fn test_change_value_nested_add_sub() {
+    let rule = Rule {
+        id: vec![CellType(5)],
+        pattern: vec![(0, 0, CellType(5))],
+        shifts: vec![],
+        // (pattern[0] + 20) - 3 = (5 + 20) - 3 = 22.
+        changes: vec![(
+            0,
+            0,
+            ChangeValue::Sub(
+                Box::new(ChangeValue::Add(Box::new(ChangeValue::Ref(0)), Box::new(ChangeValue::Literal(20)))),
+                Box::new(ChangeValue::Literal(3)),
+            ),
+        )],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+    };
+    let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
+    rule_index.insert(CellType(5), vec![rule]);
+    let mut grid = make_grid(1, 1);
+    grid.set_cell(0, 0, Cell::new(5));
+    let mut engine = Engine::new(grid, rule_index);
+    engine.run_tick();
+    assert_eq!(engine.grid().get_cell(0, 0).map(|c| c.value.0 .0), Some(22), "nested Sub(Add(Ref,Literal),Literal) must resolve recursively: (5+20)-3=22");
+}
+
 /// `Rule::max_activations` — правило с бюджетом 3 побеждает ровно 3 раза,
 /// затем гейт закрывается НАВСЕГДА (не сбрасывается, не открывается заново).
 /// Проверка не просто "значение перестало обновляться" (неотличимо от "и не
@@ -3043,6 +3212,7 @@ fn test_max_activations_gate_closes_permanently_after_budget() {
         tie_break: 0,
         starvation_after: None, feedback: None, recursion: None, memory: None,
         max_activations: Some(BUDGET),
+        cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3094,6 +3264,7 @@ fn test_max_activations_bounds_keep_source_growth() {
         tie_break: 0,
         starvation_after: None, feedback: None, recursion: None, memory: None,
         max_activations: Some(BUDGET),
+        cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3130,7 +3301,7 @@ fn test_rebuild_rule_cache_clears_stale_activation_counter_on_rule_idx_reuse() {
         cam: None,
         tie_break: 0,
         starvation_after: None, feedback: None, recursion: None, memory: None,
-        max_activations: Some(1),
+        max_activations: Some(1), cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![old_rule]));
     engine.run_tick();
@@ -3148,7 +3319,7 @@ fn test_rebuild_rule_cache_clears_stale_activation_counter_on_rule_idx_reuse() {
         cam: None,
         tie_break: 0,
         starvation_after: None, feedback: None, recursion: None, memory: None,
-        max_activations: Some(1),
+        max_activations: Some(1), cross_layer_reads: Vec::new(),
     };
     let mut head_1_rules = engine.rule_index().get(&CellType(1)).unwrap().clone();
     head_1_rules[0] = new_rule;
@@ -3194,7 +3365,7 @@ fn test_min_age_gated_cell_matures_exactly_on_time_when_isolated_on_sparse_grid(
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3246,7 +3417,7 @@ fn test_feedback_latches_new_direction_after_timeout_and_stays() {
         feedback: Some(FeedbackSpec { timeout: TIMEOUT, new_direction: Direction::Up }),
         recursion: None,
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3348,7 +3519,7 @@ fn test_feedback_counter_crossing_threshold_this_tick_matches_arbitration_and_ap
         feedback: Some(FeedbackSpec { timeout: TIMEOUT, new_direction: Direction::Down }),
         recursion: None,
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     let competitor_rule = Rule {
         id: vec![CellType(COMPETITOR)],
@@ -3365,7 +3536,7 @@ fn test_feedback_counter_crossing_threshold_this_tick_matches_arbitration_and_ap
         feedback: None,
         recursion: None,
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![marker_rule, competitor_rule]));
 
@@ -3425,7 +3596,7 @@ fn test_recursion_cascades_multiple_cells_in_one_tick() {
         feedback: None,
         recursion: Some(RecursionSpec { max_depth: MAX_DEPTH, direction: Direction::Right }),
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3472,7 +3643,7 @@ fn test_recursion_conflict_only_visible_via_cascade_depth_union() {
         feedback: None,
         recursion: Some(RecursionSpec { max_depth: 2, direction: Direction::Right }),
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     // Правило B: пишет в (0,0) относительно себя. Размещённое (в терминах
     // относительного офсета, который перебирает `ConflictGraph::build`) на
@@ -3492,7 +3663,7 @@ fn test_recursion_conflict_only_visible_via_cascade_depth_union() {
         feedback: None,
         recursion: None,
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let graph = crate::ConflictGraph::build(&[rule_a, rule_b]);
@@ -3545,7 +3716,7 @@ fn test_memory_neighbor_type_gate_opens_exactly_after_matching_sequence() {
                 RecordedValue::Type(CellType(MEM_NEIGH_B)),
                 RecordedValue::Type(CellType(MEM_NEIGH_A)),
             ],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3612,7 +3783,7 @@ fn test_memory_rule_outcome_gate_fires_on_exact_mixed_sequence() {
             window: 3,
             record_trigger: RecordTrigger::RuleOutcome,
             match_pattern: vec![RecordedValue::Missed, RecordedValue::Applied, RecordedValue::Missed],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3675,7 +3846,7 @@ fn test_memory_rule_outcome_gate_rejects_reordered_sequence_with_same_multiset()
             window: 3,
             record_trigger: RecordTrigger::RuleOutcome,
             match_pattern: vec![RecordedValue::Missed, RecordedValue::Applied, RecordedValue::Missed],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3737,7 +3908,7 @@ fn test_emit_preserves_feedback_and_memory_state_at_source_across_ticks() {
             // bootstrap deadlock в `test_memory_rule_outcome_gate_fires_on_exact_mixed_sequence`):
             // однородный [Missed, Missed] естественно накопится, пока гейт закрыт.
             match_pattern: vec![RecordedValue::Missed, RecordedValue::Missed],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3811,7 +3982,7 @@ fn test_memory_gate_closed_excludes_from_starvation_accounting() {
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(WANTED_B))], // недостижимо — сосед всегда NEVER_A
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3858,7 +4029,7 @@ fn test_cam_magnet_respects_memory_gate() {
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(GATE_NEIGHBOR_VALUE))],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -3930,7 +4101,7 @@ fn test_emit_memory_neighbor_type_copy_gets_independent_buffer_own_position() {
             window: 3,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(TYPE_A)), RecordedValue::Type(CellType(TYPE_B)), RecordedValue::Type(CellType(TYPE_A))],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -4090,7 +4261,7 @@ fn test_memory_buffer_entry_pruned_after_match_stops_existing() {
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::NeighborType(Direction::Right), match_pattern: vec![RecordedValue::Type(CellType(NEIGH_OK))] }), max_activations: None,
+        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::NeighborType(Direction::Right), match_pattern: vec![RecordedValue::Type(CellType(NEIGH_OK))] }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -4165,7 +4336,7 @@ fn test_memory_buffer_entry_pruned_exactly_on_tick_match_stops_existing() {
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(NEVER_MATCHES))],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -4235,7 +4406,7 @@ fn test_feedback_counter_pruned_after_match_stops_existing() {
         feedback: Some(FeedbackSpec { timeout: 1000, new_direction: Direction::Up }),
         recursion: None,
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -4303,7 +4474,7 @@ fn test_memory_gate_does_not_track_immature_cell_before_min_age() {
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Right),
             match_pattern: vec![RecordedValue::Type(CellType(NEIGH))],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -4389,7 +4560,7 @@ fn test_keep_source_emit_target_never_inherits_source_age_for_min_age() {
         feedback: None,
         recursion: None,
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -4489,7 +4660,7 @@ fn test_recursion_with_min_age_blocks_cascade_at_too_young_cell() {
         feedback: None,
         recursion: Some(RecursionSpec { max_depth: MAX_DEPTH, direction: Direction::Right }),
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -4570,7 +4741,7 @@ fn test_memory_neighbor_type_plus_recursion_cascade_level_gate_primes_across_tic
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Up),
             match_pattern: vec![RecordedValue::Type(CellType(MEM_RECUR_MARKER))],
-        }), max_activations: None,
+        }), max_activations: None, cross_layer_reads: Vec::new(),
     };
     let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
 
@@ -4660,7 +4831,7 @@ fn test_arbitrate_spatial_matches_centralized_cam_dense_overlapping_writes() {
         overflow: Default::default(),
         cam: Some(CamSearch { radius: 1, target_type: CellType(2) }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     let rule_index = make_rule_index(vec![rule]);
     let rule_cache = crate::conflict_analyzer::build_rule_data_cache(&rule_index);
@@ -4696,7 +4867,7 @@ fn test_arbitrate_spatial_matches_centralized_cam_dense_overlapping_writes() {
     let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(2654435761) % 7;
 
     let (centralized, _) =
-        arbitrate_with_cam(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), &cam_positions, 0, &Default::default(), &Default::default(), get_age);
+        arbitrate_with_cam(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), &cam_positions, 0, &Default::default(), &Default::default(), &[], get_age);
     let (spatial, _) = arbitrate_spatial_with_cam(
         matches,
         &rule_index,
@@ -4744,7 +4915,7 @@ fn test_arbitrate_spatial_matches_centralized_feedback_dense_overlapping_writes(
         feedback: Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down }),
         recursion: None,
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     let rule_index = make_rule_index(vec![rule]);
     let rule_cache = crate::conflict_analyzer::build_rule_data_cache(&rule_index);
@@ -4783,6 +4954,7 @@ fn test_arbitrate_spatial_matches_centralized_feedback_dense_overlapping_writes(
         0,
         &Default::default(),
         &feedback_counters,
+        &[],
         get_age,
     );
     let (spatial, _) = arbitrate_spatial_with_cam(

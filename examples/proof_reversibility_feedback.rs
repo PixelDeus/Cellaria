@@ -83,7 +83,7 @@ fn feedback_rules(normal: Direction, new_direction: Direction) -> HashMap<CellTy
             starvation_after: None,
             feedback: Some(FeedbackSpec { timeout: TIMEOUT, new_direction }),
             recursion: None,
-            memory: None, max_activations: None,
+            memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }],
     );
     idx
@@ -228,7 +228,7 @@ fn main() {
                 starvation_after: None,
                 feedback: None,
                 recursion: None,
-                memory: None, max_activations: None,
+                memory: None, max_activations: None, cross_layer_reads: Vec::new(),
             }],
         );
         idx

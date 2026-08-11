@@ -4,6 +4,7 @@ use std::fs;
 
 use crate::error::CellariaError;
 use crate::grid::Grid;
+use crate::layered::LayeredEngine;
 use crate::storage::VecStorage;
 use crate::types::{
     BoundaryBuffer, Cell, CamSearch, CellType, CellValue, ChangeValue, Direction, FeedbackSpec,
@@ -44,6 +45,16 @@ struct YamlChange {
 #[derive(Debug, Deserialize)]
 struct YamlPatternEntry {
     offset: [i8; 2],
+    #[serde(rename = "type")]
+    cell_type: u8,
+}
+
+/// YAML-формат межслойного чтения — см. `types::Rule::cross_layer_reads`.
+/// `offset` — `[dx, dy, dz]`, `dz` индексирует СОСЕДНИЙ слой относительно
+/// своего, не координату.
+#[derive(Debug, Deserialize)]
+struct YamlCrossLayerEntry {
+    offset: [i8; 3],
     #[serde(rename = "type")]
     cell_type: u8,
 }
@@ -131,6 +142,11 @@ struct YamlRule {
     /// Бюджет срабатываний — см. `Rule::max_activations`.
     #[serde(default)]
     max_activations: Option<u32>,
+    /// Межслойное чтение — см. `Rule::cross_layer_reads`. Пусто (по
+    /// умолчанию) — правило не читает другие слои, `LayeredEngine` не
+    /// требуется.
+    #[serde(default)]
+    cross_layer_reads: Vec<YamlCrossLayerEntry>,
 }
 
 /// YAML-формат начальной ячейки.
@@ -199,7 +215,12 @@ fn parse_direction(s: &str) -> Result<Direction, CellariaError> {
     }
 }
 
-/// Преобразовать serde_yaml::Value в ChangeValue.
+/// Преобразовать serde_yaml::Value в ChangeValue. Рекурсивная (не только
+/// для листьев `Literal`/`Ref`) — `add`/`sub` сами принимают ЛЮБОЙ
+/// `ChangeValue`-совместимый YAML-узел в качестве операнда, включая
+/// вложенные `add`/`sub` (см. `ChangeValue::Add`/`Sub`'s doc-комментарий в
+/// `types.rs` про то, почему это в принципе рекурсивный тип, не только
+/// одноуровневая пара).
 fn parse_change_value(value: &serde_yaml::Value) -> Result<ChangeValue, CellariaError> {
     match value {
         serde_yaml::Value::Number(n) => {
@@ -226,6 +247,34 @@ fn parse_change_value(value: &serde_yaml::Value) -> Result<ChangeValue, Cellaria
                     s
                 )))
             }
+        }
+        // `{add: [a, b]}` / `{sub: [a, b]}` -- ровно один из двух ключей,
+        // значение -- 2-элементная последовательность операндов, каждый
+        // сам по себе -- допустимый `ChangeValue` (число, "$N", или снова
+        // вложенный add/sub).
+        serde_yaml::Value::Mapping(m) if m.len() == 1 => {
+            let (key, val) = m.iter().next().expect("m.len() == 1 checked above");
+            let key_str = key.as_str().ok_or_else(|| CellariaError::Config(format!("Invalid change value: mapping key must be a string, got {:?}", key)))?;
+            let op_name = match key_str {
+                "add" | "sub" => key_str,
+                other => {
+                    return Err(CellariaError::Config(format!(
+                        "Invalid change value: unknown operation '{other}' (expected 'add' or 'sub')"
+                    )));
+                }
+            };
+            let operands = val.as_sequence().ok_or_else(|| {
+                CellariaError::Config(format!("Invalid change value: '{op_name}' expects a 2-element list of operands, got {:?}", val))
+            })?;
+            if operands.len() != 2 {
+                return Err(CellariaError::Config(format!(
+                    "Invalid change value: '{op_name}' expects exactly 2 operands, got {}",
+                    operands.len()
+                )));
+            }
+            let a = Box::new(parse_change_value(&operands[0])?);
+            let b = Box::new(parse_change_value(&operands[1])?);
+            Ok(if op_name == "add" { ChangeValue::Add(a, b) } else { ChangeValue::Sub(a, b) })
         }
         other => Err(CellariaError::Config(format!(
             "Invalid change value type: {:?}",
@@ -343,6 +392,101 @@ pub type RuleIndex = HashMap<CellType, Vec<Rule>>;
 pub fn load_config(path: &str) -> ConfigResult {
     let content = fs::read_to_string(path)?;
     load_config_str(&content)
+}
+
+/// Загрузить `LayeredEngine` из нескольких YAML-файлов, по одному на слой —
+/// каждый файл ровно тот же формат, что и обычный [`load_config`] (свой
+/// `grid:` + свои `rules:`), никакого отдельного "многослойного" YAML-
+/// формата не вводится. Правила всех файлов сливаются в один общий
+/// `rule_index`, потому что `LayeredEngine`'s слои структурно используют
+/// ОДИН И ТОТ ЖЕ набор правил (`Rule::cross_layer_reads`'s `dz` сам
+/// определяет, с каким слоем взаимодействовать — правило не привязано к
+/// конкретному слою, см. `layered.rs`'s doc-комментарий).
+///
+/// Слои обязаны быть одного размера (тот же инвариант, что
+/// `LayeredEngine::new` теперь проверяет через `assert!` — но здесь, в
+/// отличие от него, источник данных ВНЕШНИЙ, YAML-файлы, а не доверенный
+/// вызывающий код, так что несовпадение возвращается как обычная
+/// `CellariaError`, а не паника).
+///
+/// **Коллизии `CellType` между файлами.** ВСЕ слои делят ОДИН `rule_index`
+/// (см. выше) — значит, если два РАЗНЫХ файла определяют правила для
+/// ОДНОГО И ТОГО ЖЕ `CellType` (независимо написанные домены случайно
+/// заняли одно и то же число из 256 возможных), клетка этого типа на ЛЮБОМ
+/// слое будет матчить ОБА набора правил — почти наверняка не то, что имел
+/// в виду ни один из авторов. Проверяется явно и безусловно (не только
+/// когда содержимое различается — см. её doc-комментарий у самой проверки
+/// про то, почему без исключений проще): понятная ошибка с именами файлов
+/// и номером типа, а не тихое смешение.
+pub fn load_layered_config(paths: &[&str]) -> Result<LayeredEngine<VecStorage>, CellariaError> {
+    if paths.is_empty() {
+        return Err(CellariaError::Config(
+            "load_layered_config: at least one layer config path is required".to_string(),
+        ));
+    }
+
+    let mut grids = Vec::with_capacity(paths.len());
+    let mut merged_rules: HashMap<CellType, Vec<Rule>> = HashMap::new();
+    // Какие файлы внесли правила под каждый `CellType` -- нужно для
+    // проверки коллизий ниже, отдельно от `merged_rules` (тот уже СЛИТ, из
+    // него не восстановить, что пришло из какого файла).
+    let mut contributors: HashMap<CellType, Vec<&str>> = HashMap::new();
+    let mut first_dims: Option<(usize, usize, &str)> = None;
+
+    for &path in paths {
+        let (grid, rule_index) = load_config(path)?;
+        let (w, h) = (grid.width(), grid.height());
+        match first_dims {
+            None => first_dims = Some((w, h, path)),
+            Some((ew, eh, first_path)) if (ew, eh) != (w, h) => {
+                return Err(CellariaError::GridBounds(format!(
+                    "load_layered_config: layer '{path}' is {w}x{h}, but layer '{first_path}' is {ew}x{eh} -- \
+                     LayeredEngine requires all layers to share the same grid dimensions"
+                )));
+            }
+            _ => {}
+        }
+        grids.push(grid);
+        for (ct, rules) in rule_index {
+            contributors.entry(ct).or_default().push(path);
+            merged_rules.entry(ct).or_default().extend(rules);
+        }
+    }
+
+    // Сортируем ключи явно (не полагаемся на порядок итерации `HashMap`,
+    // недетерминированный между запусками) -- при НЕСКОЛЬКИХ коллизиях
+    // сразу возвращаем ту, что относится к меньшему номеру `CellType`,
+    // стабильно, не какую попало. Безусловный отказ (не "только если
+    // содержимое различается") -- проще объяснить и проще проверить, а
+    // единственная альтернатива (буквально идентичные правила в двух
+    // файлах) настолько редкий и легко обходимый случай (вынести общее
+    // правило в один файл), что не стоит усложнения ради него.
+    let mut cell_types: Vec<&CellType> = contributors.keys().collect();
+    cell_types.sort();
+    for ct in cell_types {
+        let paths_with_this_type = &contributors[ct];
+        if paths_with_this_type.len() >= 2 {
+            return Err(CellariaError::Config(format!(
+                "load_layered_config: CellType {} has rules defined in MORE THAN ONE file ({}) -- \
+                 all layers share one rule_index, so this CellType would fire every one of those files' rules \
+                 on every layer, which is almost certainly not what any of them intended. Use a different \
+                 CellType number in each file, or move the shared rule into just one of them",
+                ct.0,
+                paths_with_this_type.join(", ")
+            )));
+        }
+    }
+
+    // Каждый файл уже отсортировал СВОИ правила по приоритету в
+    // `load_config_str` -- но слияние по CellType из НЕСКОЛЬКИХ файлов
+    // может чередовать приоритеты между файлами, так что общий список
+    // нужно пересортировать целиком, а не полагаться на то, что
+    // конкатенация уже отсортированных кусков остаётся отсортированной.
+    for rules in merged_rules.values_mut() {
+        rules.sort_by_key(|r| std::cmp::Reverse(r.priority));
+    }
+
+    Ok(LayeredEngine::new(grids, merged_rules))
 }
 
 /// Собственно разбор — вынесен из [`load_config`] отдельной функцией,
@@ -591,6 +735,15 @@ fn load_config_str(content: &str) -> ConfigResult {
                 .collect()
         };
 
+        let cross_layer_reads: Vec<(i8, i8, i8, CellType)> = yr
+            .cross_layer_reads
+            .into_iter()
+            .map(|entry| {
+                let [dx, dy, dz] = entry.offset;
+                (dx, dy, dz, CellType::new(entry.cell_type))
+            })
+            .collect();
+
         rules.push(Rule {
             id: rule_id,
             pattern,
@@ -613,6 +766,7 @@ fn load_config_str(content: &str) -> ConfigResult {
             },
             memory: yr.memory.map(build_memory_spec).transpose()?,
             max_activations: yr.max_activations,
+            cross_layer_reads,
         });
     }
 
@@ -671,6 +825,106 @@ mod tests {
         assert!(result.is_err(), "Should fail for nonexistent file");
     }
 
+    /// Пишет YAML во временный файл с уникальным именем (тесты этого
+    /// модуля идут параллельно -- фиксированное имя ловило бы гонку между
+    /// тестами, пишущими и читающими один и тот же путь).
+    fn write_temp_config(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("cellaria_test_{name}_{:?}.yaml", std::thread::current().id()));
+        fs::write(&path, content).expect("failed to write temp config");
+        path
+    }
+
+    #[test]
+    fn test_load_layered_config_merges_rules_from_all_files_into_one_shared_rule_index() {
+        // Слой 0: правило на голове 1 (файл A). Слой 1: правило на голове
+        // 2 (файл B) -- РАЗНЫЕ CellType, чтобы не задеть проверку коллизий
+        // ниже (см. test_load_layered_config_rejects_same_cell_type_from_two_files) --
+        // сама эта проверка тестирует, что слияние в ОДИН общий
+        // `rule_index` физически произошло (оба видны с ЛЮБОГО слоя, не
+        // только со "своего"), не приоритетную сортировку конкретно --
+        // после запрета на коллизии между файлами каждый CellType всегда
+        // приходит из РОВНО одного файла, уже отсортированного
+        // `load_config_str`, так что кросс-файловый ресорт для валидного
+        // конфига больше не наблюдаемый сценарий (сам шаг пересортировки в
+        // коде остался как защитная мера, не как фикс конкретного бага).
+        let path_a = write_temp_config(
+            "layered_merge_a",
+            "grid:\n  width: 2\n  height: 2\n  default_cell_type: 0\n  initial_cells:\n    - {coord: [0, 0], type: 1}\nrules:\n  - id: [1]\n    priority: 1\n    changes:\n      - {dx: 0, dy: 0, value: 50}\n",
+        );
+        let path_b = write_temp_config(
+            "layered_merge_b",
+            "grid:\n  width: 2\n  height: 2\n  default_cell_type: 0\n  initial_cells: []\nrules:\n  - id: [2]\n    priority: 5\n    changes:\n      - {dx: 0, dy: 0, value: 90}\n",
+        );
+
+        let engine = load_layered_config(&[path_a.to_str().unwrap(), path_b.to_str().unwrap()]).expect("load_layered_config must succeed for two same-size layers with non-colliding CellTypes");
+        assert_eq!(engine.layer_count(), 2);
+        // ОБА CellType видны в ОБЩЕМ rule_index, доступном с ЛЮБОГО слоя --
+        // не "слой 0 знает только про 1, слой 1 только про 2".
+        for layer in 0..2 {
+            assert!(engine.layer(layer).rule_index().contains_key(&CellType(1)), "layer {layer} must see head 1 from file A -- rule_index is shared, not per-layer");
+            assert!(engine.layer(layer).rule_index().contains_key(&CellType(2)), "layer {layer} must see head 2 from file B -- rule_index is shared, not per-layer");
+        }
+
+        let _ = fs::remove_file(&path_a);
+        let _ = fs::remove_file(&path_b);
+    }
+
+    /// Реальный риск, который эта проверка закрывает: два независимо
+    /// написанных домена (файла) случайно занимают один и тот же
+    /// `CellType` для РАЗНОГО смысла -- поскольку все слои делят ОДИН
+    /// `rule_index`, клетка этого типа на любом слое матчила бы правила
+    /// ОБОИХ файлов сразу, тихо, без единой ошибки.
+    #[test]
+    fn test_load_layered_config_rejects_same_cell_type_from_two_files() {
+        let path_a = write_temp_config(
+            "layered_collision_a",
+            "grid:\n  width: 2\n  height: 2\n  default_cell_type: 0\n  initial_cells: []\nrules:\n  - id: [1]\n    priority: 1\n    changes:\n      - {dx: 0, dy: 0, value: 50}\n",
+        );
+        let path_b = write_temp_config(
+            "layered_collision_b",
+            "grid:\n  width: 2\n  height: 2\n  default_cell_type: 0\n  initial_cells: []\nrules:\n  - id: [1]\n    priority: 5\n    changes:\n      - {dx: 0, dy: 0, value: 90}\n",
+        );
+
+        let result = load_layered_config(&[path_a.to_str().unwrap(), path_b.to_str().unwrap()]);
+        let Err(err) = result else {
+            panic!("expected an error when two files both define rules for CellType 1");
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("CellType 1"), "error must name the colliding CellType: {msg}");
+        assert!(msg.contains("layered_collision_a") && msg.contains("layered_collision_b"), "error must name BOTH colliding files: {msg}");
+
+        let _ = fs::remove_file(&path_a);
+        let _ = fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn test_load_layered_config_rejects_mismatched_layer_dimensions() {
+        let path_a = write_temp_config(
+            "layered_dims_a",
+            "grid:\n  width: 2\n  height: 2\n  default_cell_type: 0\n  initial_cells: []\nrules: []\n",
+        );
+        let path_b = write_temp_config(
+            "layered_dims_b",
+            "grid:\n  width: 3\n  height: 3\n  default_cell_type: 0\n  initial_cells: []\nrules: []\n",
+        );
+
+        let result = load_layered_config(&[path_a.to_str().unwrap(), path_b.to_str().unwrap()]);
+        let Err(err) = result else {
+            panic!("expected an error for mismatched layer dimensions (2x2 vs 3x3)");
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("2x2") && msg.contains("3x3"), "error must mention both conflicting sizes: {msg}");
+
+        let _ = fs::remove_file(&path_a);
+        let _ = fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn test_load_layered_config_rejects_empty_paths() {
+        let result = load_layered_config(&[]);
+        assert!(result.is_err(), "at least one layer path must be required");
+    }
+
     const MINIMAL_CONFIG_BODY: &str = "\ngrid:\n  width: 2\n  height: 2\n  default_cell_type: 0\n  initial_cells: []\nrules: []\n";
 
     #[test]
@@ -722,6 +976,61 @@ mod tests {
     fn test_parse_change_value_overflow() {
         let v = serde_yaml::Value::Number(serde_yaml::Number::from(300u64));
         assert!(parse_change_value(&v).is_err());
+    }
+
+    #[test]
+    fn test_parse_change_value_add_flat() {
+        let yaml = serde_yaml::from_str::<serde_yaml::Value>("add: [\"$0\", 1]").unwrap();
+        let m = match yaml {
+            serde_yaml::Value::Mapping(m) => serde_yaml::Value::Mapping(m),
+            _ => unreachable!(),
+        };
+        assert_eq!(parse_change_value(&m).unwrap(), ChangeValue::Add(Box::new(ChangeValue::Ref(0)), Box::new(ChangeValue::Literal(1))));
+    }
+
+    #[test]
+    fn test_parse_change_value_sub_flat() {
+        let yaml = serde_yaml::from_str::<serde_yaml::Value>("sub: [10, \"$2\"]").unwrap();
+        assert_eq!(parse_change_value(&yaml).unwrap(), ChangeValue::Sub(Box::new(ChangeValue::Literal(10)), Box::new(ChangeValue::Ref(2))));
+    }
+
+    #[test]
+    fn test_parse_change_value_add_nested() {
+        // add: [ $0, {add: [1, 2]} ] -- вложенный операнд.
+        let yaml = serde_yaml::from_str::<serde_yaml::Value>("add:\n  - \"$0\"\n  - add: [1, 2]\n").unwrap();
+        let expected = ChangeValue::Add(
+            Box::new(ChangeValue::Ref(0)),
+            Box::new(ChangeValue::Add(Box::new(ChangeValue::Literal(1)), Box::new(ChangeValue::Literal(2)))),
+        );
+        assert_eq!(parse_change_value(&yaml).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_parse_change_value_add_rejects_wrong_operand_count() {
+        let yaml = serde_yaml::from_str::<serde_yaml::Value>("add: [1, 2, 3]").unwrap();
+        assert!(parse_change_value(&yaml).is_err());
+        let yaml = serde_yaml::from_str::<serde_yaml::Value>("add: [1]").unwrap();
+        assert!(parse_change_value(&yaml).is_err());
+    }
+
+    #[test]
+    fn test_parse_change_value_rejects_unknown_operation() {
+        let yaml = serde_yaml::from_str::<serde_yaml::Value>("mul: [1, 2]").unwrap();
+        assert!(parse_change_value(&yaml).is_err());
+    }
+
+    #[test]
+    fn test_load_config_with_add_change_end_to_end() {
+        let content = format!(
+            "version: {SUPPORTED_CONFIG_VERSION}\ngrid:\n  width: 2\n  height: 1\n  default_cell_type: 0\n  initial_cells:\n    - {{coord: [0, 0], type: 1}}\nrules:\n  - id: [1]\n    priority: 1\n    changes:\n      - {{dx: 0, dy: 0, value: {{add: [\"$0\", 5]}}}}\n"
+        );
+        let (grid, rule_index) = load_config_str(&content).expect("config with an add-change must load");
+        let rules = rule_index.get(&CellType(1)).expect("head 1 must have a rule");
+        assert_eq!(
+            rules[0].changes[0].2,
+            ChangeValue::Add(Box::new(ChangeValue::Ref(0)), Box::new(ChangeValue::Literal(5)))
+        );
+        let _ = grid;
     }
 
     #[test]

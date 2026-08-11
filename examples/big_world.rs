@@ -46,19 +46,19 @@ fn module_wire() -> Vec<Rule> {
         Rule {
             id: vec![CellType(HEAD)], pattern: vec![], shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(TAIL))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(TAIL)], pattern: vec![], shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(WIRE))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(WIRE)],
             pattern: vec![(0, 0, CellType(WIRE)), (-1, 0, CellType(HEAD))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(HEAD))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -76,12 +76,12 @@ fn module_decay() -> Vec<Rule> {
         Rule {
             id: vec![CellType(RAD)], pattern: vec![], shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(MID))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(MID)], pattern: vec![], shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(STABLE))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -102,23 +102,23 @@ fn module_shuttle() -> Vec<Rule> {
             id: vec![CellType(HEAD_R)],
             pattern: vec![(0, 0, CellType(HEAD_R)), (1, 0, CellType(WALL))],
             shifts: vec![], changes: vec![(0, 0, ChangeValue::Literal(HEAD_L))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(HEAD_R)], pattern: vec![],
             shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]], changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(HEAD_L)],
             pattern: vec![(0, 0, CellType(HEAD_L)), (-1, 0, CellType(WALL))],
             shifts: vec![], changes: vec![(0, 0, ChangeValue::Literal(HEAD_R))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(HEAD_L)], pattern: vec![],
             shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]], changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -211,7 +211,7 @@ fn main() {
                 vec![Rule {
                     id: vec![CellType(STABLE)], pattern: vec![], shifts: vec![],
                     changes: vec![(0, 0, ChangeValue::Literal(GLOW))],
-                    active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+                    active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
                 }],
             );
             println!("тик {:>2}: добавили правило STABLE->GLOW на лету, решётка не трогалась", tick);

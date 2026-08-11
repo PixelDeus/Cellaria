@@ -1453,7 +1453,7 @@ fn run_tick_with_cache<S: GridStorage>(
         // дисциплиной.
         let snap = state.snapshot();
         match conflict_ctx {
-            None => arbitrate_with_cam(matches, rule_index, rule_cache, (grid.width(), grid.height()), &cam_positions, generation, snap.starvation_counters(), snap.feedback_counters(), |x, y| {
+            None => arbitrate_with_cam(matches, rule_index, rule_cache, (grid.width(), grid.height()), &cam_positions, generation, snap.starvation_counters(), snap.feedback_counters(), &[], |x, y| {
                 grid.get_age(x, y) as u32
             }),
             Some(ctx) => {

@@ -590,7 +590,7 @@ fn compute_write_cells(rule: &Rule, shift_targets: &[(i32, i32)]) -> Vec<(i32, i
     let mut cells = Vec::new();
 
     if shift_targets.is_empty() {
-        for &(dx, dy, _value) in &rule.changes {
+        for &(dx, dy, _) in &rule.changes {
             cells.push((dx, dy));
         }
     } else {
@@ -605,7 +605,7 @@ fn compute_write_cells(rule: &Rule, shift_targets: &[(i32, i32)]) -> Vec<(i32, i
         cells.push((0, 0));
         for &(sdx, sdy) in shift_targets {
             cells.push((sdx, sdy));
-            for &(dx, dy, _value) in &rule.changes {
+            for &(dx, dy, _) in &rule.changes {
                 cells.push((sdx + dx, sdy + dy));
             }
         }
@@ -648,13 +648,13 @@ pub fn compute_affected_cells(rule: &Rule) -> Vec<(i32, i32)> {
     // относительно неё (репликация, не цепочка — см. shift_targets).
     let shift_targets = compute_shift_targets(rule);
     if shift_targets.is_empty() {
-        for &(dx, dy, _value) in &rule.changes {
+        for &(dx, dy, _) in &rule.changes {
             cells.push((dx, dy));
         }
     } else {
         for &(sdx, sdy) in &shift_targets {
             cells.push((sdx, sdy));
-            for &(dx, dy, _value) in &rule.changes {
+            for &(dx, dy, _) in &rule.changes {
                 cells.push((sdx + dx, sdy + dy));
             }
         }

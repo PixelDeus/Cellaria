@@ -608,6 +608,31 @@ fn read_pattern_buffer_effective<S: GridStorage>(
     pattern.iter().map(|&(dx, dy, _)| read_cell_effective(grid, write_buffer, ox + dx as i32, oy + dy as i32)).collect()
 }
 
+/// Рекурсивно вычислить значение `ChangeValue` — `Literal`/`Ref` листья,
+/// `Add`/`Sub` рекурсивно вычисляют оба операнда (произвольная глубина
+/// вложенности, не только одноуровневая `Add(Ref, Literal)`) и складывают/
+/// вычитают их СЫРОЕ `u8`-значение (`u8::wrapping_add`/`wrapping_sub`) —
+/// см. `ChangeValue`'s doc-комментарий про то, почему wrapping, не
+/// насыщение/ошибка. `Ref` вне длины `pattern_buffer` (индекс за
+/// пределами паттерна) — `CellValue::default()` (тип 0), та же
+/// консервативная семантика, что была у листового случая до рекурсии.
+fn resolve_change_value(value: &ChangeValue, pattern_buffer: &[CellValue]) -> CellValue {
+    match value {
+        ChangeValue::Literal(v) => CellValue(CellType::new(*v)),
+        ChangeValue::Ref(i) => pattern_buffer.get(*i).copied().unwrap_or_default(),
+        ChangeValue::Add(a, b) => {
+            let av = resolve_change_value(a, pattern_buffer).0 .0;
+            let bv = resolve_change_value(b, pattern_buffer).0 .0;
+            CellValue(CellType::new(av.wrapping_add(bv)))
+        }
+        ChangeValue::Sub(a, b) => {
+            let av = resolve_change_value(a, pattern_buffer).0 .0;
+            let bv = resolve_change_value(b, pattern_buffer).0 .0;
+            CellValue(CellType::new(av.wrapping_sub(bv)))
+        }
+    }
+}
+
 /// Применить `rule.changes` относительно одной цели сдвига (или (0,0), если
 /// сдвигов нет). Вынесено отдельно, потому что правило с несколькими
 /// сдвигами вызывает это один раз на каждую цель (см. вызывающий код).
@@ -638,16 +663,7 @@ fn apply_changes_at<S: GridStorage>(
             // координатах. Найдено экспериментально: простейшее "1 -> 2"
             // без паттерна и сдвигов не срабатывало вообще.
             if (nx as usize) < grid.width() && (ny as usize) < grid.height() {
-                let new_val = match *value {
-                    ChangeValue::Literal(v) => CellValue(CellType::new(v)),
-                    ChangeValue::Ref(i) => {
-                        if i < pattern_buffer.len() {
-                            pattern_buffer[i]
-                        } else {
-                            CellValue::default()
-                        }
-                    }
-                };
+                let new_val = resolve_change_value(value, pattern_buffer);
 
                 let cell = Cell {
                     value: new_val,

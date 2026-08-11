@@ -31,7 +31,7 @@ pub fn make_pattern_rule(pattern_size: usize) -> Rule {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -69,7 +69,7 @@ pub fn rules_per_head(k: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         })
         .collect()
 }

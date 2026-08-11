@@ -38,13 +38,13 @@ fn cycle_rules(forward: bool) -> HashMap<CellType, Vec<Rule>> {
         idx.insert(CellType(CYCLE_BASE + s), vec![Rule {
             id: vec![CellType(CYCLE_BASE + s)], pattern: vec![], shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(CYCLE_BASE + next))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }]);
     }
     let dir = if forward { Direction::Right } else { Direction::Left };
     idx.insert(CellType(TOKEN), vec![Rule {
         id: vec![CellType(TOKEN)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(dir, 1)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }]);
     idx
 }

@@ -15,7 +15,7 @@ fn base_rule(id: Vec<u8>, pattern: Vec<(i8, i8, u8)>, changes: Vec<(i32, i32, Ch
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -224,6 +224,22 @@ fn test_build_gpu_rule_table_rejects_ref_change() {
 
     let err = build_gpu_rule_table(&idx).unwrap_err();
     assert_eq!(err, GpuUnsupportedReason::ChangeIsRef { head: 1, rule_idx: 0 });
+}
+
+#[test]
+fn test_build_gpu_rule_table_rejects_arithmetic_change() {
+    let mut idx = HashMap::new();
+    idx.insert(
+        CellType(1),
+        vec![base_rule(
+            vec![1],
+            vec![(0, 0, 1)],
+            vec![(0, 0, ChangeValue::Add(Box::new(ChangeValue::Ref(0)), Box::new(ChangeValue::Literal(1))))],
+        )],
+    );
+
+    let err = build_gpu_rule_table(&idx).unwrap_err();
+    assert_eq!(err, GpuUnsupportedReason::ChangeIsArithmetic { head: 1, rule_idx: 0 });
 }
 
 /// `starvation_after` ТЕПЕРЬ поддерживается (см. `GpuRuleTable::needs_starvation`'s

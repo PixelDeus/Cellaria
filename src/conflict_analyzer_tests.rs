@@ -32,7 +32,7 @@ fn make_rule(
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }
 }
 
@@ -475,7 +475,7 @@ fn test_feedback_conflict_only_visible_via_alternate_direction_union() {
         feedback: Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down }),
         recursion: None,
         memory: None,
-        max_activations: None,
+        max_activations: None, cross_layer_reads: Vec::new(),
     };
     // Правило B: статичное self-change, без сдвигов — пишет только в (0,0)
     // ОТНОСИТЕЛЬНО СЕБЯ. Размещено (в терминах относительного офсета,
@@ -494,7 +494,7 @@ fn test_feedback_conflict_only_visible_via_alternate_direction_union() {
         cam: None,
         tie_break: 0,
         starvation_after: None,
-        feedback: None, recursion: None, memory: None, max_activations: None,
+        feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
 
     let graph = ConflictGraph::build(&[rule_a, rule_b]);

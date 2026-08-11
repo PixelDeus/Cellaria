@@ -528,6 +528,12 @@ pub enum GpuUnsupportedReason {
     /// `ChangeValue::Ref` — вне подмножества (нужен буфер значений
     /// паттерна на клетку, отдельная, более сложная задача).
     ChangeIsRef { head: u8, rule_idx: usize },
+    /// `ChangeValue::Add`/`Sub` — вне подмножества (та же категория, что
+    /// `ChangeIsRef`: нет шейдерного пути для вычисления значения на
+    /// GPU-стороне, всё подмножество ниже ожидает готовый `u32`-литерал).
+    /// CPU поддерживает безусловно (см. `ChangeValue`'s doc-комментарий) —
+    /// правило целиком уходит в CPU-fallback, как и с `Ref`.
+    ChangeIsArithmetic { head: u8, rule_idx: usize },
     /// `OverflowAction::Write`/`WriteLiteral` у правила со сдвигом — требует
     /// синхронизации с `BoundaryBuffer` на хосте; вне подмножества
     /// (поддерживается только `Discard` — уходящая за край клетка теряется).
@@ -948,10 +954,11 @@ pub fn build_gpu_rule_table(
             }
 
             let mut change_fields = [(0i32, 0i32, 0u32); MAX_CHANGES];
-            for (i, &(dx, dy, value)) in rule.changes.iter().enumerate() {
+            for (i, &(dx, dy, ref value)) in rule.changes.iter().enumerate() {
                 let literal = match value {
-                    ChangeValue::Literal(v) => v as u32,
+                    ChangeValue::Literal(v) => *v as u32,
                     ChangeValue::Ref(_) => return Err(GpuUnsupportedReason::ChangeIsRef { head: head.0, rule_idx }),
+                    ChangeValue::Add(..) | ChangeValue::Sub(..) => return Err(GpuUnsupportedReason::ChangeIsArithmetic { head: head.0, rule_idx }),
                 };
                 change_fields[i] = (dx, dy, literal);
             }

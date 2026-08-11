@@ -49,7 +49,7 @@ fn build_universal_machine() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(0), // неси своё значение как есть
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }]);
     }
     idx.insert(CellType(255), vec![Rule {
@@ -58,7 +58,7 @@ fn build_universal_machine() -> HashMap<CellType, Vec<Rule>> {
         overflow: OverflowAction::WriteLiteral(0), // единственный, кому нужен буквальный 0
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }]);
     idx
 }

@@ -51,7 +51,7 @@ fn build_engine() -> Engine<VecStorage> {
     idx.insert(CellType(RAD), vec![Rule {
         id: vec![CellType(RAD)], pattern: vec![], shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(MID))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }]);
 
     let mut engine = Engine::new(grid, idx);

@@ -56,7 +56,7 @@ fn cascade_rules() -> HashMap<CellType, Vec<Rule>> {
             starvation_after: None,
             feedback: None,
             recursion: Some(RecursionSpec { max_depth: MAX_DEPTH, direction: Direction::Right }),
-            memory: None, max_activations: None,
+            memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }],
     );
     idx
@@ -87,7 +87,7 @@ fn eraser_rules() -> HashMap<CellType, Vec<Rule>> {
             starvation_after: None,
             feedback: None,
             recursion: None,
-            memory: None, max_activations: None,
+            memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         }],
     );
     idx

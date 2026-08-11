@@ -42,14 +42,14 @@ fn wavefront_rules() -> HashMap<CellType, Vec<Rule>> {
             pattern: vec![(0, 0, CellType(SEEK)), (1, 0, CellType(TARGET))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(FOUND))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(SEEK)],
             pattern: vec![(0, 0, CellType(SEEK))],
             shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
             changes: vec![],
-            active_only: false, priority: 0, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            active_only: false, priority: 0, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         },
     ]);
     idx.insert(CellType(FOUND), vec![Rule {
@@ -57,7 +57,7 @@ fn wavefront_rules() -> HashMap<CellType, Vec<Rule>> {
         pattern: vec![],
         shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
         changes: vec![],
-        active_only: false, priority: 0, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        active_only: false, priority: 0, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     }]);
     idx
 }

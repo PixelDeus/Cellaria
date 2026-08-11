@@ -98,6 +98,7 @@ fn rule_strategy(head: u8) -> impl Strategy<Value = Rule> {
                 recursion: None,
                 memory,
                 max_activations,
+                cross_layer_reads: Vec::new(),
             })
         })
 }

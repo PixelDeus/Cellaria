@@ -621,7 +621,7 @@ fn deserialize_packet(data: &[u8]) -> Result<RuleOp, String> {
                 // как был).
                 feedback: None,
                 memory: None,
-                max_activations: None,
+                max_activations: None, cross_layer_reads: Vec::new(),
             };
 
             Ok(RuleOp::AddRule(rule))
@@ -713,7 +713,7 @@ fn deserialize_packet(data: &[u8]) -> Result<RuleOp, String> {
                 feedback: None,
                 recursion: None,
                 memory: None,
-                max_activations: None,
+                max_activations: None, cross_layer_reads: Vec::new(),
             };
 
             Ok(RuleOp::AddRule(rule))
@@ -846,7 +846,7 @@ pub fn serialize_add_rule(rule: &Rule) -> Result<Vec<u8>, String> {
         Ok(())
     }
 
-    fn push_change(out: &mut Vec<u8>, is_first: bool, dx: i32, dy: i32, value: ChangeValue) -> Result<(), String> {
+    fn push_change(out: &mut Vec<u8>, is_first: bool, dx: i32, dy: i32, value: &ChangeValue) -> Result<(), String> {
         if !(i8::MIN as i32..=i8::MAX as i32).contains(&dx)
             || !(i8::MIN as i32..=i8::MAX as i32).contains(&dy)
         {
@@ -864,6 +864,7 @@ pub fn serialize_add_rule(rule: &Rule) -> Result<Vec<u8>, String> {
         }
         match value {
             ChangeValue::Literal(v) => {
+                let v = *v;
                 if v == TERMINATOR {
                     return Err(
                         "serialize_add_rule: change value 255 (0xFF) is unreachable -- would be consumed by the stream-level terminator scan"
@@ -885,6 +886,7 @@ pub fn serialize_add_rule(rule: &Rule) -> Result<Vec<u8>, String> {
                 out.push(v);
             }
             ChangeValue::Ref(idx) => {
+                let idx = *idx;
                 if idx > u8::MAX as usize {
                     return Err(format!(
                         "serialize_add_rule: ChangeValue::Ref({idx}) exceeds the protocol's u8 range (0..=255)"
@@ -902,6 +904,30 @@ pub fn serialize_add_rule(rule: &Rule) -> Result<Vec<u8>, String> {
                 out.push(dyb);
                 out.push(idxb);
             }
+            // `Add`/`Sub` (арифметика над `ChangeValue`) -- вне
+            // подмножества протокола, КАК И `feedback`/`memory`/
+            // `keep_source` (см. doc-комментарий сериализатора), но
+            // ДРУГАЯ категория отказа: те просто нигде не кодируются (весь
+            // пакет собирается БЕЗ них, тихо, потому что для них в
+            // принципе нет байта/бита нигде в формате). `changes`, в
+            // отличие от них, УЖЕ активно кодируется поэлементно
+            // (Literal/Ref) -- если бы `Add`/`Sub` просто МОЛЧА
+            // пропускались здесь (как feedback/memory целиком), это
+            // означало бы, что конкретная запись из `rule.changes`
+            // тихо ИСЧЕЗЛА бы из пакета, а не "правило целиком не может
+            // нести это расширение" -- получатель применял бы правило,
+            // которое должно было писать вычисленное значение, вообще
+            // ничего не записывая в эту клетку. Ошибка здесь, а не тихий
+            // пропуск -- та же дисциплина, что и у остальных
+            // `Err`-веток этой функции.
+            ChangeValue::Add(..) | ChangeValue::Sub(..) => {
+                return Err(
+                    "serialize_add_rule: ChangeValue::Add/Sub are outside the wire protocol's supported subset -- \
+                     there is no byte encoding for arithmetic changes (unlike Literal/Ref); a rule using them cannot \
+                     be sent through the self-modification channel"
+                        .to_string(),
+                );
+            }
         }
         Ok(())
     }
@@ -913,7 +939,7 @@ pub fn serialize_add_rule(rule: &Rule) -> Result<Vec<u8>, String> {
         }
     }
     let mut first_change = true;
-    for &(dx, dy, value) in &rule.changes {
+    for &(dx, dy, ref value) in &rule.changes {
         push_change(&mut body, first_change, dx, dy, value)?;
         first_change = false;
     }

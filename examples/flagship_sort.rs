@@ -47,7 +47,7 @@ fn cellaria_sort_pass_rules() -> Vec<Rule> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     vec![
         mk(vec![10, 1, 0], vec![(0, 0, ChangeValue::Literal(0)), (1, 0, ChangeValue::Literal(1))]),

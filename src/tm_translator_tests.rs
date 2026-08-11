@@ -269,7 +269,7 @@ fn test_tm_translator_no_left_rule_match() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
     };
     assert_eq!(l_rule.id, vec![CellType::new(2), CellType::new(10)]);
     assert_eq!(l_rule.shifts[0][0].direction, Direction::Left);

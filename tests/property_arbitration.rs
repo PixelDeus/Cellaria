@@ -129,7 +129,7 @@ fn rule_strategy() -> impl Strategy<Value = Rule> {
                 overflow,
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
             }
         })
 }
@@ -196,6 +196,28 @@ fn affected_cell_abs(
         }
     }
     abs
+}
+
+/// Независимый (не переиспользующий `applicator::resolve_change_value`)
+/// эталон вычисления `ChangeValue` -- та же рекурсивная семантика
+/// (`wrapping_add`/`wrapping_sub`, `Ref` вне длины паттерна -> дефолт), но
+/// написана отдельно, чтобы этот тест реально сверял ДВЕ независимые
+/// реализации, а не одну и ту же логику саму с собой.
+fn resolve_change_value_reference(value: &ChangeValue, pattern_vals: &[CellValue]) -> CellValue {
+    match value {
+        ChangeValue::Literal(v) => CellValue::new(*v),
+        ChangeValue::Ref(i) => pattern_vals.get(*i).copied().unwrap_or_default(),
+        ChangeValue::Add(a, b) => {
+            let av = resolve_change_value_reference(a, pattern_vals).0 .0;
+            let bv = resolve_change_value_reference(b, pattern_vals).0 .0;
+            CellValue::new(av.wrapping_add(bv))
+        }
+        ChangeValue::Sub(a, b) => {
+            let av = resolve_change_value_reference(a, pattern_vals).0 .0;
+            let bv = resolve_change_value_reference(b, pattern_vals).0 .0;
+            CellValue::new(av.wrapping_sub(bv))
+        }
+    }
 }
 
 proptest! {
@@ -446,10 +468,7 @@ proptest! {
                     let nx = m.x as i32 + base_dx + dx;
                     let ny = m.y as i32 + base_dy + dy;
                     if nx >= 0 && ny >= 0 && (nx as usize) < width && (ny as usize) < height {
-                        let val = match *value {
-                            ChangeValue::Literal(v) => CellValue(CellType::new(v)),
-                            ChangeValue::Ref(i) => pattern_vals.get(i).copied().unwrap_or_default(),
-                        };
+                        let val = resolve_change_value_reference(value, &pattern_vals);
                         expected.insert((nx as u32, ny as u32), val);
                     }
                 }
@@ -600,7 +619,7 @@ fn conflict_cluster_rule_index(m: usize) -> (HashMap<CellType, Vec<Rule>>, cella
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         })
         .collect();
     let rule_index = make_rule_index(&rules);
@@ -699,7 +718,7 @@ fn recursion_cluster_rule_index(m: usize, max_depth: u8) -> (HashMap<CellType, V
             feedback: None,
             recursion: Some(cellaria::types::RecursionSpec { max_depth, direction: Direction::Right }),
             memory: None,
-            max_activations: None,
+            max_activations: None, cross_layer_reads: Vec::new(),
         })
         .collect();
     let rule_index = make_rule_index(&rules);
@@ -825,7 +844,7 @@ fn test_arbitrate_spatial_matches_centralized_plain_shift_dense_overlapping_writ
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
         })
         .collect();
     let rule_index = make_rule_index(&rules);
@@ -851,4 +870,328 @@ fn test_arbitrate_spatial_matches_centralized_plain_shift_dense_overlapping_writ
 
     assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
     assert_eq!(centralized_set, spatial_set, "плотная упаковка ОБЫЧНЫХ сдвигов не должна расходиться с централизованным арбитражем -- самый частый случай, впервые проверен только сегодня");
+}
+
+/// РЕАЛЬНЫЙ баг, найден 2026-08-11 при замере плотной производительности на
+/// масштабе ~1M клеток (для проекта городской симуляции): "RefCell already
+/// borrowed" panic. `arbitrator.rs`'s `KEYED_BUF.par_sort_unstable_by`
+/// раньше вызывался ВНУТРИ заимствования `thread_local!`-буфера --
+/// rayon'овский work-stealing может увести ТОТ ЖЕ OS-поток на ДРУГОЙ вызов
+/// `arbitrate_with_cam` (соседняя полоса, работающая с ТЕМ ЖЕ thread_local),
+/// пока первый ещё не вернулся из сортировки (ждёт свои подзадачи через
+/// `join`) -- второй вызов пытается занять тот же `RefCell` и падает.
+/// Никогда не ловилось раньше: нужен per-полосный размер >=
+/// `PARALLEL_SORT_THRESHOLD=1024`, чего ни один тест до сегодняшнего замера
+/// на 1M клеток не давал. Этот тест — дешёвая (не 1M клеток) прямая
+/// проверка того же условия: много полос (`rayon::current_num_threads()`),
+/// каждая гарантированно > 1024 матчей.
+#[test]
+fn test_arbitrate_spatial_no_refcell_reentrancy_panic_with_many_matches_per_band() {
+    let num_bands_hint = rayon::current_num_threads().max(1);
+    // С запасом x2, чтобы per-полосный размер надёжно перевалил за
+    // PARALLEL_SORT_THRESHOLD=1024 независимо от точного деления на core/
+    // boundary.
+    let per_band = 2500usize;
+    let total_anchors = num_bands_hint * per_band;
+
+    let rules: Vec<Rule> = (0..2)
+        .map(|i| Rule {
+            id: vec![CellType(1)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: i as u32,
+            min_age: 0,
+            overflow: OverflowAction::Discard,
+            cam: None,
+            tie_break: 0,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        })
+        .collect();
+    let rule_index = make_rule_index(&rules);
+    let rule_cache = build_rule_data_cache(&rule_index);
+    let reach = max_reach_from_cache(&rule_cache);
+
+    let mut matches: Vec<RuleMatch> = Vec::new();
+    for x in 0..total_anchors as u32 {
+        for rule_idx in 0..2usize {
+            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+        }
+    }
+
+    let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(2654435761) % 7;
+
+    // Несколько прогонов подряд -- гонка timing-зависимая, один прогон
+    // может случайно не задеть её (см. сессию: понадобилось 3 тика на
+    // 1M клеток, чтобы проявилось первый раз).
+    for _ in 0..5 {
+        let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
+        let spatial = arbitrate_spatial(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
+        assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+    }
+}
+
+/// Целенаправленная (не property, не случайная) проверка остаточного
+/// теоретического риска, задокументированного в `specs/architecture.md`
+/// §11 п.5 при фиксе бага boundary-vs-core: `at_risk`-победитель полосы,
+/// проигравший boundary-конкуренту в финальном merge-проходе, не даёт
+/// шанса более слабому кандидату СВОЕЙ ЖЕ полосы, отвергнутому ещё на
+/// этапе локального арбитража полосы -- хотя истинный централизованный
+/// порядок мог бы отдать клетку именно ему (греди-арбитраж: отклонение
+/// сильного кандидата ОСВОБОЖДАЕТ клетки, которые он бы забрал, и это
+/// может открыть путь более слабому конкуренту, если тот претендовал
+/// ТОЛЬКО на эти клетки, а не на всю область сильного).
+///
+/// Конструкция трёх конкурентов на одну "клетку C" вплотную к границе
+/// полосы (аналитически выведено, не угадано):
+/// - L (rule_idx 0, priority 0) -- пишет ТОЛЬКО {C}.
+/// - W (rule_idx 1, priority 1) -- пишет {C, C+2} (reach=2 от этого правила).
+/// - B (rule_idx 2, priority 2, анкор в C+2) -- пишет ТОЛЬКО {C+2}.
+///
+/// L и W стоят В ОДНОЙ точке C, оба в ГЛУБИНЕ полосы (core), но C
+/// намеренно поставлена так, что dist_right == margin (core, но НЕ safe --
+/// значит W после локальной победы попадёт в `at_risk_accepted`, а не в
+/// `safe_accepted`). B стоит в C+2, где dist_right < margin -- значит B
+/// классифицируется boundary СРАЗУ, в общем проходе.
+///
+/// Локальный арбитраж полосы видит только {L, W}: W побеждает (выше
+/// priority), L отклонён НАВСЕГДА -- в `accepted` полосы остаётся только W.
+/// Финальный merge видит {W (at_risk), B (boundary), ...}: B побеждает W
+/// (выше priority, C+2 общая) -- W отклонён ЦЕЛИКОМ (греди — не частично).
+/// Итог spatial: принят только B, клетка C остаётся НИЧЬЕЙ, хотя L её
+/// хотел и был единственным реальным претендентом после того, как W выбыл.
+///
+/// Централизованный арбитраж той же тройки (тот же тотальный порядок:
+/// B > W > L): B принят (C+2 свободна) -> W отклонён (C+2 занята B) -> L
+/// проверяется НЕЗАВИСИМО (C всё ещё свободна -- W её так и не занял,
+/// будучи отклонён целиком) -> L ПРИНЯТ. Централизованный итог: {B, L}.
+///
+/// `L` и `B` НАМЕРЕННО не пересекаются друг с другом (L хочет только C, B
+/// только C+2) -- это и есть условие, при котором расхождение возможно:
+/// если бы B и L пересекались, B заблокировал бы L и централизованно тоже.
+#[test]
+fn test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_rejected_weaker_candidate() {
+    let rules: Vec<Rule> = vec![
+        // L (rule_idx 0) -- пишет только свою клетку.
+        Rule {
+            id: vec![CellType(1)],
+            pattern: vec![],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(1))],
+            active_only: false,
+            priority: 0,
+            min_age: 0,
+            overflow: OverflowAction::Discard,
+            cam: None,
+            tie_break: 0,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        },
+        // W (rule_idx 1) -- пишет свою клетку И клетку на dx=+2 (даёт reach=2).
+        Rule {
+            id: vec![CellType(1)],
+            pattern: vec![],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(2)), (2, 0, ChangeValue::Literal(3))],
+            active_only: false,
+            priority: 1,
+            min_age: 0,
+            overflow: OverflowAction::Discard,
+            cam: None,
+            tie_break: 0,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        },
+        // B (rule_idx 2) -- пишет только свою клетку, но выше приоритетом всех.
+        Rule {
+            id: vec![CellType(1)],
+            pattern: vec![],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(4))],
+            active_only: false,
+            priority: 2,
+            min_age: 0,
+            overflow: OverflowAction::Discard,
+            cam: None,
+            tie_break: 0,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        },
+    ];
+    let rule_index = make_rule_index(&rules);
+    let rule_cache = build_rule_data_cache(&rule_index);
+    let reach = max_reach_from_cache(&rule_cache);
+    assert_eq!(reach, 2, "W's second write at dx=+2 must be what drives reach here");
+
+    let num_threads = rayon::current_num_threads();
+    assert!(num_threads >= 2, "this test needs a multi-threaded rayon pool to exercise band-split at all -- on a single-threaded pool arbitrate_spatial_with_cam falls back to arbitrate_with_cam directly and this test would pass vacuously without proving anything");
+
+    let margin = (2 * reach) as u32; // 4
+    let safe_margin = margin + reach as u32; // 6
+
+    // Наполнитель: широко разнесённые изолированные кластеры (та же схема,
+    // что в `test_arbitrate_spatial_matches_centralized_many_isolated_clusters`)
+    // -- нужен только чтобы (а) перевалить SPATIAL_THRESHOLD и реально
+    // включить band-split, и (б) дать разброс x, достаточный, чтобы число
+    // полос было ограничено числом потоков, а не разбросом (см. ниже).
+    const N_FILLER: u32 = 2000;
+    const SPACING: u32 = 1000;
+    let mut matches: Vec<RuleMatch> = Vec::new();
+    for cluster in 0..N_FILLER {
+        let x = cluster * SPACING;
+        for rule_idx in 0..3usize {
+            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+        }
+    }
+
+    // Разброс наполнителя УЖЕ настолько велик (spread/(margin*2) на 3
+    // порядка больше любого реалистичного числа потоков), что число полос
+    // определяется ИСКЛЮЧИТЕЛЬНО `rayon::current_num_threads()`, не
+    // разбросом -- воспроизводим ТУ ЖЕ формулу, что и сама
+    // `arbitrate_spatial_with_cam`, чтобы точно знать границы полосы 0 и
+    // разместить тройку L/W/B ровно на нужном расстоянии от них.
+    let min_x = 0u32;
+    let max_x = (N_FILLER - 1) * SPACING;
+    let spread = max_x - min_x;
+    let max_bands_by_spread = ((spread / (margin * 2)) as usize).max(1);
+    let num_bands = num_threads.min(max_bands_by_spread).max(1);
+    assert!(num_bands >= 2, "filler spread must be wide enough for band count to be thread-limited, not spread-limited -- got {num_bands} bands");
+    let band_width = (spread / num_bands as u32).max(1);
+    // Полоса 0 -- НЕ последняя (num_bands >= 2), значит её правая граница
+    // считается обычной формулой, не спецслучаем "max_x + 1" последней полосы.
+    let band0_end = min_x + band_width;
+    assert!(band_width > 20, "band 0 must be wide enough that dist_left(x_pocket) is trivially >= margin -- got band_width={band_width}");
+
+    // C стоит так, что dist_right(C) == margin (core, но не safe: margin <=
+    // dist_right < safe_margin). C+2 (B) стоит так, что dist_right(C+2) <
+    // margin (boundary сразу).
+    let x_c = band0_end - 1 - margin; // dist_right(x_c) = (band0_end-1) - x_c = margin
+    let x_b = x_c + 2;
+
+    let dist_right_c = (band0_end - 1).saturating_sub(x_c);
+    let dist_right_b = (band0_end - 1).saturating_sub(x_b);
+    assert!(dist_right_c >= margin && dist_right_c < safe_margin, "C must be core but at-risk (not safe) -- got dist_right={dist_right_c}, margin={margin}, safe_margin={safe_margin}");
+    assert!(dist_right_b < margin, "C+2 must be classified boundary outright -- got dist_right={dist_right_b}, margin={margin}");
+
+    // Защита от случайного совпадения с наполнителем (SPACING=1000 -- при
+    // band_width, не кратном 1000 практически невозможно, но проверяем
+    // явно, а не полагаемся на "практически").
+    for cluster in 0..N_FILLER {
+        let fx = cluster * SPACING;
+        assert!(
+            fx.abs_diff(x_c) > 20 && fx.abs_diff(x_b) > 20,
+            "filler cluster at x={fx} collides with the hand-placed L/W/B pocket at x_c={x_c}/x_b={x_b} -- adjust SPACING/N_FILLER"
+        );
+    }
+
+    // ВНИМАНИЕ: `make_rule_index` (как и реальный `RuleStore::get_index`)
+    // сортирует правила по приоритету УБЫВАЮЩЕ -- значит порядковый индекс
+    // в `rules` (0=L,1=W,2=B по приоритету 0,1,2) НЕ совпадает с итоговым
+    // `rule_idx` после сортировки: убывающий порядок даёт [B(pri2)->idx0,
+    // W(pri1)->idx1, L(pri0)->idx2]. Используем ИТОГОВЫЕ индексы, не
+    // индексы вставки -- иначе тест молча проверяет совсем другую тройку
+    // ролей (обнаружено эмпирически: первая версия этого теста проходила,
+    // но выяснилось, что она из-за этой путаницы вообще не строила
+    // задуманный сценарий).
+    matches.push(RuleMatch { x: x_c, y: 0, head: CellType(1), rule_idx: 2 }); // L (priority 0 -> index 2 after sort)
+    matches.push(RuleMatch { x: x_c, y: 0, head: CellType(1), rule_idx: 1 }); // W (priority 1 -> index 1 after sort)
+    matches.push(RuleMatch { x: x_b, y: 0, head: CellType(1), rule_idx: 0 }); // B (priority 2 -> index 0 after sort)
+
+    // Все priority различны (0/1/2) -- возраст не участвует в разрешении,
+    // берём константу, чтобы не вносить лишнюю степень свободы.
+    let get_age = |_x: usize, _y: usize| 0u32;
+
+    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
+    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
+
+    let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+    let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+
+    assert!(centralized_set.contains(&(x_c, 0, 2)), "sanity check on the reference: centralized arbitration must accept L at C -- B only ever contests C+2, not C, so once W is rejected wholesale, C is free for L");
+    assert_eq!(
+        centralized_set, spatial_set,
+        "spatial band-split must accept exactly what centralized arbitration accepts -- if this diverges, spatial is missing L at C={x_c}: centralized={centralized_set:?}, spatial={spatial_set:?}"
+    );
+}
+
+/// Проверка, ни разу не сделанная прямо: НЕСКОЛЬКО независимых `Engine`,
+/// работающих ОДНОВРЕМЕННО с разных OS-потоков, делят ОДИН И ТОТ ЖЕ
+/// глобальный rayon-пул (`arbitrate_spatial_with_cam` внутри каждого
+/// диспетчерит на него свои полосы) -- ровно тот же класс риска, что и
+/// найденная и исправленная в этой сессии реентерабельность `KEYED_BUF`
+/// (work-stealing может увести ОДИН OS-поток на ЧУЖОЙ вызов
+/// `arbitrate_with_cam`, будь то соседняя полоса ТОГО ЖЕ движка или
+/// ВООБЩЕ ДРУГОЙ движок на другом потоке, делящий тот же пул). Тот фикс
+/// был точечным (одна конкретная функция) -- этот тест целится в сам
+/// класс проблемы на уровне двух ПОЛНОСТЬЮ независимых `Engine`, не одной
+/// функции: если где-то ещё осталось похожее удержание `thread_local!`
+/// заимствования поперёк вложенного rayon-вызова, это должно проявиться
+/// именно здесь (панике reentrancy или, хуже, тихой порче состояния одного
+/// движка данными другого).
+///
+/// Дизайн: N движков, каждый со СВОИМ dense CA-сценарием (сплошной сдвиг
+/// вправо, >SPATIAL_THRESHOLD матчей за тик -- гарантированно включает
+/// band-split), запущены параллельно с разных потоков на много тиков.
+/// Каждый сверяется с ОДИНАКОВО построенным, но прогнанным
+/// ПОСЛЕДОВАТЕЛЬНО (до старта потоков) эталоном -- если разделяемый
+/// rayon-пул хоть как-то путает состояние между движками, конкретный
+/// движок разойдётся со своим же эталоном (тем же самым, что дал бы,
+/// будучи прогнан в одиночку).
+#[test]
+fn test_multiple_engines_run_concurrently_on_shared_rayon_pool_without_cross_contamination() {
+    fn build_dense_engine(side: usize) -> cellaria::engine::Engine<VecStorage> {
+        let rule = Rule {
+            id: vec![CellType(1)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: 1,
+            min_age: 0,
+            overflow: OverflowAction::Discard,
+            cam: None,
+            tie_break: 0,
+            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        };
+        let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
+        rule_index.insert(CellType(1), vec![rule]);
+        let mut grid = Grid::new(VecStorage::new(side, side), HashSet::new());
+        for y in 0..side {
+            for x in 0..side {
+                grid.set_cell(x, y, Cell { value: CellValue(CellType(1)), born_at: 0 });
+            }
+        }
+        cellaria::engine::Engine::new(grid, rule_index)
+    }
+
+    fn dump(engine: &cellaria::engine::Engine<VecStorage>, side: usize) -> Vec<Cell> {
+        (0..side).flat_map(|y| (0..side).map(move |x| (x, y))).map(|(x, y)| engine.grid().get_cell(x, y).copied().unwrap_or_default()).collect()
+    }
+
+    const SIDE: usize = 90; // 8100 клеток > SPATIAL_THRESHOLD=4096 -- band-split реально включается
+    const TICKS: u32 = 15;
+    const N_ENGINES: usize = 6;
+
+    // Эталон: один движок, прогнанный ОДИНОКО, ПОСЛЕДОВАТЕЛЬНО, до старта
+    // конкурентных потоков.
+    let mut reference = build_dense_engine(SIDE);
+    for _ in 0..TICKS {
+        reference.run_tick();
+    }
+    let reference_dump = dump(&reference, SIDE);
+
+    let handles: Vec<_> = (0..N_ENGINES)
+        .map(|_| {
+            std::thread::spawn(move || {
+                let mut engine = build_dense_engine(SIDE);
+                for _ in 0..TICKS {
+                    engine.run_tick();
+                }
+                dump(&engine, SIDE)
+            })
+        })
+        .collect();
+
+    for (i, handle) in handles.into_iter().enumerate() {
+        let result = handle.join().unwrap_or_else(|e| panic!("engine {i} thread panicked (likely reentrancy): {e:?}"));
+        assert_eq!(result, reference_dump, "engine {i}, run concurrently with {} others on the shared rayon pool, diverged from the same scenario run alone -- cross-instance interference", N_ENGINES - 1);
+    }
 }
