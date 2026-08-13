@@ -5,8 +5,8 @@ mod pipeline;
 mod rule_state;
 
 // `impl<S: GridStorage> Engine<S>` разбит по concern'ам на несколько файлов
-// (35 методов, ~800 строк в одном блоке — самые крупные группы см. в
-// CHANGELOG.md), каждый со СВОИМ `impl` блоком для того же `Engine<S>` —
+// (35 методов, ~800 строк в одном блоке), каждый со СВОИМ `impl` блоком
+// для того же `Engine<S>` —
 // стандартная и полностью безопасная в Rust практика (компилятор просто
 // собирает все `impl`-блоки одного типа воедино, независимо от файла).
 mod io;
@@ -25,9 +25,14 @@ pub(crate) use pipeline::{build_head_index, lookup_rule, HeadRuleIndex};
 // лишь потому, что сам mod.rs не вызывает эту функцию напрямую).
 #[allow(unused_imports)]
 pub(crate) use pipeline::reset_age_for_regions;
+// `resolve_search_coords_advance` не используется напрямую этим файлом
+// (была нужна только старой реализации `compose_with`), но остаётся
+// нужна дочерним тестовым модулям через `super::*` (`engine/tests/`).
+#[allow(unused_imports)]
 use pipeline::{
-    compute_conflict_partners, compute_extension_flags, compute_search_radius_cache, resolve_search_coords_advance,
-    resolve_search_coords_peek, run_tick_with_cache, ConflictContext, ExtensionFlags, SearchRadiusCache,
+    compute_conflict_partners, compute_extension_flags, compute_search_radius_cache,
+    resolve_search_coords_advance, resolve_search_coords_peek, run_tick_with_cache, ConflictContext, ExtensionFlags,
+    SearchRadiusCache,
     TickEventCounts,
 };
 

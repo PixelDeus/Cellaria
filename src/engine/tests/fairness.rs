@@ -1,6 +1,6 @@
 use super::super::*;
 use super::common::*;
-use crate::types::{Cell, CellType, ChangeValue, Rule};
+use crate::types::{Cell, CellType, ChangeValue, Direction, Rule, ShiftSpec};
 
 const TIMER: u8 = 60;
 const FIRED: u8 = 61;
@@ -552,5 +552,55 @@ fn test_starvation_after_ignores_tie_break_decided_wins() {
         engine.state.snapshot().starvation_counters().get(&(0, 0, 0)),
         None,
         "форсированная победа -- решительная (priority override), счётчик должен сброситься"
+    );
+}
+
+/// Регрессия: `compose_with` раньше гонял свой собственный цикл тиков через
+/// "сырые" `Engine::arbitrate`/`Engine::apply_matches` (см. `raw_phases.rs`'s
+/// doc-комментарий) вместо настоящего `Engine::run_tick` -- тот же класс
+/// бага, что был у `LayeredEngine`, только для этой
+/// проверки не закрытый до сих пор.
+///
+/// `max_activations` даёт прямое, наблюдаемое через САМ ВЕРДИКТ различие:
+/// правило с `keep_source` копирует маркер вправо (не убывая у источника,
+/// см. `max_activations::test_max_activations_bounds_keep_source_growth`),
+/// без работающего бюджета срабатываний растёт, пока не заполнит решётку
+/// (20 клеток, `initial_count=1` -> `final_count=20` -> `Divergent`, т.к.
+/// 20 > 1*2). С РАБОТАЮЩИМ бюджетом (`Some(1)`, через `Engine::state`,
+/// сырые методы для него всегда no-op) рост останавливается на 2 маркерах
+/// (1 исходный + 1 копия) -> `final_count=2`, НЕ строго больше `1*2=2` ->
+/// `Bounded(2)`. Если `compose_with` регрессирует обратно на сырые методы,
+/// этот тест увидит `Divergent` вместо `Bounded(2)` и упадёт.
+#[test]
+fn test_compose_with_respects_max_activations_not_raw_stateless_methods() {
+    const MARKER: u8 = 72;
+    let rule = Rule {
+        id: vec![CellType(MARKER)],
+        pattern: vec![(0, 0, CellType(MARKER)), (1, 0, CellType(0))],
+        shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: true }]],
+        changes: vec![],
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: Some(1),
+        cross_layer_reads: Vec::new(),
+    };
+    let mut grid = make_grid(20, 1);
+    grid.set_cell(0, 0, Cell::new(MARKER));
+    let mut engine = Engine::new(grid, make_rule_index(vec![rule]));
+
+    let verdict = engine.compose_with();
+    assert_eq!(
+        verdict,
+        CompositionVerdict::Bounded(2),
+        "max_activations=1 обязан остановить рост на 2 маркерах (1 исходный + 1 копия) через настоящий тик-пайплайн -- \
+         Divergent здесь означал бы, что compose_with снова использует сырые detect/arbitrate/apply, для которых max_activations -- no-op"
     );
 }

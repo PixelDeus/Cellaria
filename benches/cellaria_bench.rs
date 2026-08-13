@@ -317,7 +317,6 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
     use std::time::Instant;
     use cellaria::Grid;
     use cellaria::VecStorage;
-    use cellaria::GridStorage;
     use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Rule};
 
     let storage = VecStorage::new(n, n);
@@ -419,18 +418,16 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
     // reset_age
     let t4 = Instant::now();
     for region in &regions {
-        for y in region.y_start..region.y_end {
-            for x in region.x_start..region.x_end {
-                if let Some(cell) = grid.get_cell(x as usize, y as usize) {
-                    grid.storage.set(
-                        x as usize,
-                        y as usize,
-                        Cell {
-                            value: cell.value,
-                            born_at: grid.generation(),
-                        },
-                    );
-                }
+        for &(x, y) in &region.written_cells {
+            if let Some(cell) = grid.get_cell(x as usize, y as usize) {
+                grid.set_cell(
+                    x as usize,
+                    y as usize,
+                    Cell {
+                        value: cell.value,
+                        born_at: grid.generation(),
+                    },
+                );
             }
         }
     }

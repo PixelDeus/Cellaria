@@ -80,9 +80,8 @@ use super::rule_table::{
 // `impl GpuEngine` разбит на построение (`engine_build.rs`: new/with_rounds/
 // build_simple_pipeline/build_arbitrated_pipeline) и рантайм-исполнение
 // (`engine_tick.rs`: run_tick/dispatch_tick/cpu_fallback_resolve/read_grid)
-// — та же практика, что уже применена к `engine/mod.rs` (см. CHANGELOG.md):
-// несколько `impl`-блоков одного типа в разных файлах, публичный API не
-// меняется.
+// — та же практика, что уже применена к `engine/mod.rs`: несколько
+// `impl`-блоков одного типа в разных файлах, публичный API не меняется.
 #[path = "engine_build.rs"]
 mod engine_build;
 #[path = "engine_tick.rs"]

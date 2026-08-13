@@ -308,8 +308,8 @@ fn test_snapshot_restore_continues_identically_across_all_layers() {
 /// "raw"-методы `Engine::detect_matches`/`arbitrate`/`apply_matches`,
 /// каждый из которых, по СОБСТВЕННЫМ doc-комментариям, не хранит
 /// состояние между вызовами -- `starvation_after` был безмолвным no-op
-/// на ЛЮБОМ `LayeredEngine` (см. `CHANGELOG.md` и doc-комментарий модуля
-/// для полного списка сломанных расширений: `cam`, `feedback`, `memory`,
+/// на ЛЮБОМ `LayeredEngine` (см. doc-комментарий модуля для полного
+/// списка сломанных расширений: `cam`, `feedback`, `memory`,
 /// `max_activations` тоже страдали тем же путём). До фикса HIGH выигрывал
 /// все 30/30 тиков подряд; после -- LOW периодически выигрывает.
 #[test]

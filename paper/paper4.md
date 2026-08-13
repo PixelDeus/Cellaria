@@ -2,19 +2,27 @@
 
 ## Status
 
-Draft, covering everything established through 2026-08-03: the General
-Conservative Bound Lemma (§8) with all three of its instances shipped and
-verified (CAM, bounded recursion, feedback-driven rules); a full pairwise
-audit of how the five post-`paper2.md` extensions (CAM, tie-break,
-starvation guard, feedback, recursion) interact with each other and with
-`min_age`/`active_only` (§9); what does and does not survive
-self-modification transmission (§10); the complete GPU-parity picture
-(§11); and an extension of `paper2.md` §7's reversibility result to
-systems that cross the grid's I/O boundary (§12). Not yet written: a
-full field-by-field anatomy of `Rule` with no accompanying theorem (ruled
-out as padding — see the project notes this paper grew from), and the
-"rules with memory" direction from the original six-topic discussion,
-which never reached a concrete design.
+Draft. Sections 8-13 cover everything established through 2026-08-03: the
+General Conservative Bound Lemma (§8) with all three of its instances
+shipped and verified (CAM, bounded recursion, feedback-driven rules); a
+full pairwise audit of how the five post-`paper2.md` extensions (CAM,
+tie-break, starvation guard, feedback, recursion) interact with each other
+and with `min_age`/`active_only` (§9); what does and does not survive
+self-modification transmission (§10); the GPU-parity picture as it stood
+then (§11, since corrected in place — see below); and an extension of
+`paper2.md` §7's reversibility result to systems that cross the grid's
+I/O boundary (§12). Still not written: a full field-by-field anatomy of
+`Rule` with no accompanying theorem (ruled out as padding — see the
+project notes this paper grew from).
+
+**2026-08-13 update.** §11's GPU-parity table was corrected in place — it
+had gone stale within days of the original text (see the table's own
+"Update note" for what changed and why). §14 was added as a short,
+non-formal factual summary of four systems built after 2026-08-03
+(`Rule::memory`, `LayeredEngine`, `Rule::max_activations`,
+`ChangeValue::Add`/`Sub`) — deliberately scoped as inventory, not new
+lemmas; whether any of them warrants its own Lemma-4-style corollary is
+left for a future revision.
 
 All definitions/lemmas/theorems from `paper2.md`/`paper3.md` are assumed
 and cited by number, not restated.
@@ -35,13 +43,13 @@ set to be the *exact* set of cells touched at runtime — only that it be a
 
 Three extensions to Cellaria exploit exactly this slack, independently:
 
-- **CAM** (`Rule::cam`, already implemented): the rule's actual write
+- **CAM** (`Rule::cam`, shipped): the rule's actual write
   target is wherever the nearest matching cell turns out to be within a
   radius — unknown until the tick runs, but always inside a fixed disc.
-- **Bounded local recursion** (queued, not yet built): the rule's actual
+- **Bounded local recursion** (`Rule.recursion`, shipped — §8.5): the rule's actual
   cascade depth is data-dependent — unknown until the tick runs, but
   always at most a declared maximum.
-- **Feedback-driven rules** (queued, not yet built): after a declared
+- **Feedback-driven rules** (`Rule.feedback`, shipped — §8.6): after a declared
   timeout, the rule's effect switches from its normal shift/changes to
   one of a declared list of alternatives — which alternative fires is
   data-dependent, but the *list* is fixed at rule-definition time.
@@ -176,7 +184,7 @@ since the cascade's shape is a single straight line along one declared
 `direction`, not an arbitrary 2D template — the exact union *is* already
 the tight bound). Verified with an adversarial test
 (`test_recursion_conflict_only_visible_via_cascade_depth_union`,
-`src/engine/tests.rs`): rule B sits at a relative offset reachable only at
+`src/engine/tests/extensions_interactions.rs`): rule B sits at a relative offset reachable only at
 cascade depth `k=2`, unreachable at `k=0` — `ConflictGraph::build` finds
 the edge. Passed on the first run.
 
@@ -207,7 +215,11 @@ class of problem.
 GPU rejects `recursion` rules outright
 (`GpuUnsupportedReason::RecursionUnsupported`) — the shader pipeline
 parallelizes one thread per cell and has no mechanism for "match A already
-wrote what match A is now re-reading" within one dispatch.
+wrote what match A is now re-reading" within one dispatch. *(Status note
+added 2026-08-13: `recursion` was later ported to GPU too, within a depth
+cap — see §11 for the current, much wider GPU-supported subset; this
+paragraph's "GPU rejects `recursion` outright" is historical, not
+current, the same correction already applied to `feedback` above.)*
 
 ### 8.6. Corollary C — Feedback-Driven Rules (implemented 2026-07-31)
 
@@ -320,8 +332,8 @@ just exercise the happy path.
 
 ## 9. Interaction Audit
 
-`paper2.md`/`paper3.md` were written before four of `Rule`'s five
-extension fields existed (`cam`, `tie_break`, `starvation_after`,
+`paper2.md`/`paper3.md` were written before any of the five extension
+fields discussed in §8 existed (`cam`, `tie_break`, `starvation_after`,
 `feedback`, `recursion`). Nothing in either paper says whether they
 compose safely with each other or with the original fields (`min_age`,
 `active_only`). This section reports a direct audit against the current
@@ -425,60 +437,79 @@ composition safety for rules transmitted through the `RuleStore` protocol
 field discussed in §8-9. This section states plainly what the wire
 protocol actually carries today.
 
-**Fact (verified against `src/rule_store.rs::deserialize_packet`).** Every
-`AddRule` operation decoded from the self-modification channel
-constructs its `Rule` with `cam: None, tie_break: 0, starvation_after:
-None, feedback: None, recursion: None`, unconditionally — these five
-fields have no wire encoding at all. A cell physically transmitting a
-rule to itself through the boundary-buffer protocol (§ of `paper2.md`
-§4) can *only* ever install a rule using the original field set (`id`,
-`pattern`, `shifts`, `changes`, `active_only`, `priority`, `min_age`,
-`overflow`) — never a CAM search, a modular tie-break, a starvation
-guard, feedback, or recursion.
+**Fact, corrected 2026-08-13 (originally verified only against the base
+`AddRule` op-code — too narrow).**
+The protocol now has two op-codes, not one. The original `AddRule` packet
+still constructs its `Rule` with `cam: None, tie_break: 0,
+starvation_after: None, feedback: None, recursion: None`, unconditionally
+— confirmed by `test_add_rule_protocol_cannot_express_feedback_recursion_memory_or_keep_source`
+(`src/rule_store_tests.rs`), which is accurate for that op-code
+specifically. But `AddRuleExtended` (`src/rule_store_deserialize.rs`,
+added 2026-08-08 — see §8.5's status note) carries an `ext_flags` byte
+that *can* encode `cam` and `recursion` (bits 0 and 1). `tie_break`,
+`starvation_after`, `feedback`, `memory`, and `max_activations` remain
+unencodable by either op-code — no bytes exist anywhere in the current
+protocol for them.
 
-**Corollary 8.** `paper2.md`'s Composition Theorem (§4.1) and its
-guarded-self-modification extension (§4.6) remain fully valid exactly as
-stated — they were proved for, and continue to apply to, the original
-field set only. No extension of §8/§9 requires re-proving anything in
-`paper2.md` §4, because none of them is reachable through the mechanism
-those proofs are about. This is a scope observation, not a limitation
-requiring a fix: extending the wire protocol to carry the new fields is a
-possible future direction, not a gap in what's already proven.
+**Corollary 8 (revised).** For the fields still wire-unreachable
+(`tie_break`, `starvation_after`, `feedback`, `memory`,
+`max_activations`), the original argument is untouched: `paper2.md`'s
+Composition Theorem (§4.1) and its guarded-self-modification extension
+(§4.6) apply to them exactly as stated, because they cannot arrive
+through this mechanism at all. For `cam` and `recursion`, which now can
+arrive via `AddRuleExtended`, the safety argument is different but still
+holds — under `Engine::enable_guarded_self_modification` (opt-in, default
+off), every decoded rule is checked by `composition_allows` /
+`conflict_analyzer::check_composition` before installation, which
+computes conflicts through the *same* `compute_rule_data`/`Affected⁺`
+machinery §8's Lemma 4 already proved sound for `cam` and `recursion`
+(Corollaries A and B). So a transmitted rule using either field is
+checked with exactly the bound Lemma 4 established, not exempted from it
+— composition remains provably safe under the guard, not because `cam`/
+`recursion` are unreachable (they no longer are), but because the guard's
+own soundness proof already covers them. Without the guard enabled,
+`paper2.md` §4 never claimed safety for *any* self-transmitted rule, `cam`/
+`recursion` included, so nothing changes there either.
 
 ---
 
 ## 11. GPU Parity
 
-Complete list of `gpu::rule_table::GpuUnsupportedReason` variants, as of
-2026-08-03, split into structural caps (present since the GPU backend was
-first built) and per-extension policy (added alongside each extension):
+**Update note (2026-08-13, factual correction only).** The table below, as it stood through
+2026-08-03, claimed broadcast shift, starvation guard, feedback, and
+bounded recursion were all "rejected outright" on GPU. That is no longer
+true, and per session notes it stopped being true within days of this
+paper's cutoff (persistent per-cell GPU counter buffers removed the
+"no cross-tick state" obstacle each of those rejections cited). This
+section now states current reality; it does not attempt to re-derive
+*why* each port works — that belongs in a future revision, not a
+same-day factual patch.
+
+Current `gpu::rule_table::GpuUnsupportedReason` variants (`src/gpu/rule_table.rs`),
+split the same way as before:
 
 | Category | Variants |
 |---|---|
-| Structural caps | `NoEffect`, `ChangeIsRef`, `OverflowNotDiscard`, `TooManyShifts`, `TooManyChanges`, `PatternTooLarge`, `RuleIdTooLong`, `TooManyRulesForArbitration`, `ShiftTooFar`, `ChangeTooFar` |
-| Extension policy | `CamRadiusTooFar`, `BroadcastShiftUnsupported`, `StarvationGuardUnsupported`, `FeedbackUnsupported`, `RecursionUnsupported` |
+| Structural caps | `NoEffect`, `ChangeIsRef`, `ChangeIsArithmetic`, `OverflowNotDiscard`, `TooManyShifts`, `TooManyChanges`, `PatternTooLarge`, `RuleIdTooLong`, `TooManyRulesForArbitration`, `ShiftTooFar`, `ChangeTooFar` |
+| Per-extension reach caps | `CamRadiusTooFar` (`radius > MAX_CAM_RADIUS = 16`), `BroadcastPathTooLong` (`steps > MAX_BROADCAST_REACH = 4`), `RecursionDepthTooLarge` (`max_depth > MAX_RECURSION_DEPTH = 4`), `MemoryWindowTooLarge` (`window > MAX_MEMORY_WINDOW = 4`) |
+| Pairwise combination gaps | `CamRecursionUnsupported`, `MemoryRecursionUnsupported`, `MemoryCamUnsupported`, `FeedbackKeepSourceUnsupported`, `MemoryKeepSourceUnsupported`, `FeedbackBroadcastUnsupported`, `MemoryBroadcastUnsupported`, `FeedbackChangeCollidesWithShiftTarget`, `MemoryChangeCollidesWithShiftTarget` |
+| Structural, still unconditional | `MaxActivationsUnsupported` (deliberate, not yet ported — see below) |
 
 | Extension | GPU support |
 |---|---|
-| CAM | Full parity, within `radius <= MAX_CAM_RADIUS` — `shader.wgsl::cam_search` mirrors `matcher::search_nearest`'s tie-break exactly |
-| Modular tie-break | Full parity — `shader.wgsl`'s `TIE_BREAK_MODULUS` constant and rotation formula match `arbitrator.rs` bit-for-bit; verified by `tests/gpu_v2_correctness.rs` |
-| Broadcast shift | Rejected outright — the shader writes only the final point of a shift's path |
-| Starvation guard | Rejected outright — requires `Engine`-level state between ticks, which the GPU path does not keep |
-| Feedback | Rejected outright — same reason as starvation guard |
-| Bounded recursion | Rejected outright — the shader parallelizes one thread per cell per dispatch; there is no mechanism for a match to read what it itself already wrote earlier in the same dispatch |
+| CAM | Full parity within `radius <= MAX_CAM_RADIUS`. |
+| Modular tie-break | Full parity, unconditional. Verified bit-for-bit by `tests/gpu_v2_correctness.rs`. |
+| Broadcast shift | Supported within `steps <= MAX_BROADCAST_REACH`; longer paths rejected. |
+| Starvation guard | Full parity, unconditional (no dedicated exclusion variant exists). `test_gpu_v2_starvation_matches_cpu_periodic_progress` and related tests in `tests/gpu_v2_correctness.rs`. |
+| Feedback | Supported, except combined with `keep_source`, `broadcast`, or a `changes` offset that collides with the shift target. `test_gpu_v2_feedback_switches_direction_after_timeout_matches_cpu` and related tests. |
+| Bounded recursion | Supported within `max_depth <= MAX_RECURSION_DEPTH`, except combined with `cam` or `memory`. `test_gpu_v2_recursion_cascade_matches_cpu_in_one_tick` and related tests. |
+| `Rule::memory` (not yet built as of this paper's original text; see §14) | Supported within `window <= MAX_MEMORY_WINDOW`, except combined with `keep_source`, `recursion`, `cam`, `broadcast`, or a colliding `changes` offset. `test_gpu_v2_memory_neighbor_type_gate_and_relocation_matches_cpu` and related tests. |
+| `Rule::max_activations` (not yet built as of this paper's original text; see §14) | Rejected outright — deliberate, not an oversight: its counter keys on `(head, rule_idx)` alone (no cell position), a different shape than every other persistent GPU counter buffer (all keyed by grid position), and would need its own buffer and gate pass. |
 
-**Principle, restated for this table specifically.** Every rejection above
-is a hard build-time error (`build_gpu_rule_table` returns `Err`), not a
-silently-dropped rule or a best-effort approximation. Two of the five new
-extensions (CAM, tie-break) got full GPU implementations because their
-mechanism decomposes into something the shader's per-cell parallelism can
-express (a bounded local search; a per-match scalar rotation). The other
-three (broadcast, starvation, feedback, recursion — four, not three;
-broadcast predates this paper's extensions but follows the identical
-policy) all require either a whole-path write or cross-tick/cross-match
-state that a stateless, one-thread-per-cell dispatch cannot provide
-without a fundamentally different pipeline — refusing to build rather
-than emulating them badly was a deliberate choice, not an oversight.
+Every rejection above remains a hard build-time error
+(`build_gpu_rule_table` returns `Err`), never a silently-dropped rule or
+a best-effort approximation — the principle this section originally
+stated is unchanged; only the extent of what's rejected has shrunk.
 
 ---
 
@@ -591,6 +622,47 @@ proofs constrain what is *possible*, but only running the adversarial
 case surfaces what the implementation actually *does*.
 
 Not covered here: a field-by-field anatomy of `Rule` with no accompanying
-theorem (deliberately excluded as padding), and the "rules with memory"
-direction from the original six-topic discussion, which never reached a
-concrete enough design to formalize or build.
+theorem (deliberately excluded as padding). "Rules with memory," the one
+item this section originally left as an open direction, has since been
+designed and built — see §14, added as a factual patch rather than a
+retroactive rewrite of this section's "as of 2026-08-03" framing.
+
+---
+
+## 14. Post-2026-08-03 Additions (Factual Summary)
+
+Added 2026-08-13. Four systems were built after this paper's original
+text; none has a Lemma-4-style corollary or its own theorem here — this
+section states what exists and where, deferring formal treatment (if any
+turns out to be warranted) to a future revision.
+
+**`Rule::memory` (`Option<MemorySpec>`, `src/types.rs`).** A FIFO-buffer
+gate: unlike `starvation_after`/`feedback`'s scalar counters, it can
+distinguish one specific past sequence (e.g. `[Missed, Applied, Missed]`)
+from any other of the same length. Two trigger kinds
+(`RecordTrigger::NeighborType`/`RuleOutcome`); the gate opens only when the
+buffer is full and matches `match_pattern` element-for-element. Full
+semantics: `specs/specification.md` §4.9. GPU support: §11 above. Not
+compatible with `recursion` when the trigger is `RuleOutcome` (no
+per-cascade-level arbitration outcome exists to record).
+
+**`LayeredEngine` (`src/layered.rs`).** A stack of same-sized 2D grids,
+each its own `Engine` ticking independently through the ordinary
+`run_tick`-based pipeline (not the raw, state-dropping phase methods —
+an early version used those and silently disabled `cam`/`starvation_after`/
+`feedback`/`memory`/`max_activations` for every layered rule; fixed).
+First slice: cross-layer *read* only
+(`Rule::cross_layer_reads`, `(dx, dy, dz, type)`), no cross-layer write.
+
+**`Rule::max_activations` (`Option<u32>`, `src/types.rs`).** A global
+(not per-position) budget on how many times a rule may win arbitration in
+total — designed as a backstop against unbounded growth under
+`ShiftSpec::keep_source`, but applicable to any rule. Not wire-encodable
+(`RuleStore` protocol), not GPU-supported (§11). Full semantics:
+`specs/specification.md` §4.10.
+
+**`ChangeValue::Add`/`Sub` (`src/types.rs`).** Two additional `ChangeValue`
+variants alongside `Literal`/`Ref`: `u8::wrapping_add`/`wrapping_sub` over
+two nested `ChangeValue`s. CPU-side unconditional; GPU rejects rules using
+either (`GpuUnsupportedReason::ChangeIsArithmetic`, §11) since the shader
+subset expects a ready-made `u32` literal, not an expression to evaluate.

@@ -334,7 +334,7 @@ pub(crate) fn expand_neighborhood<S: GridStorage>(
     // чем HashSet<(usize,usize)> с хешированием каждой пары координат.
     let side = (2 * radius + 1) as usize;
     let per_cell = side * side;
-    if let Some((w, h)) = grid.storage.bounds() {
+    if let Some((w, h)) = grid.storage().bounds() {
         if w > 0 && h > 0 && coords.len().saturating_mul(per_cell) >= w * h {
             let mut seen = vec![false; w * h];
             let mut result = Vec::new();
@@ -406,10 +406,23 @@ pub(crate) fn reset_age_for_regions<S: GridStorage>(grid: &mut Grid<S>, regions:
     // (найдено экспериментально: клетка между позициями получала обнулённый
     // возраст, хотя сама не менялась). `written_cells` — ровно то, что было
     // вставлено в write-буфер при применении, без лишнего.
+    //
+    // `grid.set_cell(...)`, а не `grid.storage.set(...)` напрямую — раньше
+    // было наоборот (в обход `set_cell`, единственной документированной
+    // точки мутации), из-за чего `active_coords`/`dirty_coords` не
+    // синхронизировались с этой записью; это уже вызывало реальный баг в
+    // связке с `is_default()`-логикой `set_cell` (см. её doc-комментарий
+    // про `was_in_active`) — тот баг был закрыт СО СТОРОНЫ `set_cell`
+    // (сделан устойчивым к обходу), а не устранением самого обхода. Раз
+    // `value` не меняется, единственный реальный эффект здесь —
+    // корректная отметка `dirty_coords`; `active_coords`-переход
+    // практически никогда не срабатывает (клетка уже отмечена активной
+    // записью value на этом же тике), так что цена этого перехода на
+    // `set_cell` пренебрежимо мала.
     for region in regions {
         for &(x, y) in &region.written_cells {
             if let Some(cell) = grid.get_cell(x as usize, y as usize) {
-                grid.storage.set(
+                grid.set_cell(
                     x as usize,
                     y as usize,
                     Cell {

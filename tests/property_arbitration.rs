@@ -1051,6 +1051,83 @@ fn test_arbitrate_spatial_matches_centralized_plain_shift_dense_overlapping_writ
     assert_eq!(centralized_set, spatial_set, "плотная упаковка ОБЫЧНЫХ сдвигов не должна расходиться с централизованным арбитражем -- самый частый случай, впервые проверен только сегодня");
 }
 
+/// РЕАЛЬНЫЙ БАГ, найден 2026-08-13 адверсариальным тестом (не багом кода,
+/// найденным при работе над `paper2.md`'s Lemma 6 -- проверка формальной
+/// статьи вскрыла живой баг в реализации). Все предыдущие тесты этой
+/// области (bug #1, bug #2) использовали ОДНОНАПРАВЛЕННЫЙ affected-регион
+/// (обычный сдвиг: `{source, target}`, растёт только в одну сторону от
+/// центра) -- ни один из них не мог реализовать худший случай, где
+/// affected-регион СИММЕТРИЧЕН (растёт в ОБЕ стороны от центра, например
+/// `changes` на смещениях `-reach` И `+reach` разом).
+///
+/// Старая формула `safe_margin = margin + reach` (`arbitrator.rs`)
+/// доказывала только, что худший boundary-матч (dist=margin-1) не
+/// пересекает ЛИНИЮ `safe_margin` -- не то, что он не пересекает КОНКРЕТНЫЕ
+/// клетки safe-матча. safe-матч на самой границе `safe_margin` имеет
+/// клетки вплоть до `safe_margin - reach`; при старой формуле это
+/// `margin + reach - reach = margin`, а худший boundary дотягивается до
+/// `margin - 1 + reach` -- эти диапазоны пересекаются для любого
+/// `reach >= 1`, если правило пишет по обе стороны от центра. Верная
+/// формула: `safe_margin = margin + 2*reach`.
+#[test]
+fn test_arbitrate_spatial_matches_centralized_symmetric_affected_region_dense_overlapping_writes() {
+    // Правило без сдвига, `changes` на смещениях -reach И +reach разом --
+    // affected(m) = {m.x-reach, m.x, m.x+reach}, симметрично в обе стороны
+    // (обычный сдвиг физически не может это реализовать -- он растёт
+    // только в направлении сдвига).
+    for reach in [1i32, 2, 3] {
+        let rules: Vec<Rule> = (0..3)
+            .map(|i| Rule {
+                id: vec![CellType(1)],
+                pattern: vec![],
+                shifts: vec![],
+                changes: vec![(-reach, 0, ChangeValue::Literal(9)), (0, 0, ChangeValue::Literal(9)), (reach, 0, ChangeValue::Literal(9))],
+                active_only: false,
+                priority: i as u32,
+                min_age: 0,
+                overflow: OverflowAction::Discard,
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            })
+            .collect();
+        let rule_index = make_rule_index(&rules);
+        let rule_cache = build_rule_data_cache(&rule_index);
+        let computed_reach = max_reach_from_cache(&rule_cache);
+        assert_eq!(computed_reach, reach, "симметричный changes на +-reach -- reach обязан совпасть");
+
+        const N_ANCHORS: u32 = 3000; // × 3 rule_idx = 9000 > SPATIAL_THRESHOLD=4096
+        let mut matches: Vec<RuleMatch> = Vec::new();
+        for x in 0..N_ANCHORS {
+            for rule_idx in 0..3usize {
+                matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+            }
+        }
+
+        let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(40503) % 5;
+
+        let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
+        let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), computed_reach, get_age);
+
+        let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+        let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
+
+        assert_eq!(
+            centralized.len(),
+            spatial.len(),
+            "reach={reach}: разное число принятых матчей: {} vs {} -- safe-матч столкнулся с boundary/at_risk той же полосы",
+            centralized.len(),
+            spatial.len()
+        );
+        assert_eq!(centralized_set, spatial_set, "reach={reach}: симметричный affected-регион не должен расходиться с централизованным арбитражем");
+    }
+}
+
 /// РЕАЛЬНЫЙ баг, найден 2026-08-11 при замере плотной производительности на
 /// масштабе ~1M клеток (для проекта городской симуляции): "RefCell already
 /// borrowed" panic. `arbitrator.rs`'s `KEYED_BUF.par_sort_unstable_by`

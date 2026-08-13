@@ -11,11 +11,12 @@ We present seven contributions:
 
 1. **Termination via potential functions** — sufficient conditions for
    termination using three classes of potential functions (geometric,
-   counting, energetic), with runtime monitoring.
+   counting, energetic), plus a lightweight runtime check that peeks one
+   tick ahead to classify the current state as active or stable.
 
 2. **Complexity classes** — definition of CF (Conflict-Free) and CA
-   (Conflict-Aware) programs, with a proof of the Ω(M²) lower bound
-   for CA arbitration.
+   (Conflict-Aware) programs, with a tight Θ(M log M) bound for CA
+   arbitration on bounded-reach rule sets.
 
 3. **Expressiveness: cellular automata** — a constructive mapping from
    any 1D cellular automaton (k=3) to Cellaria, proving that Cellaria
@@ -69,8 +70,8 @@ foundational questions about the model's capabilities:
 
 The termination analysis (Section 2) provides sufficient conditions
 based on potential functions. The complexity analysis (Section 3)
-defines two complexity classes and proves a lower bound for arbitration.
-The expressiveness analysis (Section 4) provides constructive mappings
+defines two complexity classes and proves a tight `Θ(M log M)` bound for
+CA arbitration. The expressiveness analysis (Section 4) provides constructive mappings
 from cellular automata, Turing machines, and sorting to Cellaria,
 establishing that Cellaria is at least as expressive as these models.
 
@@ -82,9 +83,9 @@ establishing that Cellaria is at least as expressive as these models.
 
 A Cellaria simulation terminates when no rule matches any cell on the
 grid. We present sufficient conditions for termination based on potential
-functions and demonstrate runtime monitoring through the method
-`detect_termination`, which classifies simulations as `Terminates`,
-`MayDiverge`, or `Unknown`.
+functions, plus a lightweight one-tick-lookahead check,
+`detect_termination`, that classifies the *current* state as active or
+stable.
 
 The standard approach is to find a **potential function** (also called a
 ranking function or measure) `Φ: Configuration → ℕ` that strictly
@@ -286,27 +287,30 @@ best guarantee that can be given.
 
 ### 2.7. Runtime Termination Detection
 
-The `detect_termination` method monitors three conditions at runtime:
+`Engine::detect_termination(&self, tick: u32) -> TerminationVerdict` gives
+a cheap, non-mutating one-tick lookahead, not a trend-based monitor over
+an observation window. It re-detects matches against the current grid
+state and, for `tick > 0`, runs them through real arbitration (using the
+engine's actual `starvation_after`/`feedback` counters, read-only) to see
+whether anything would still be accepted. The verdict is binary:
 
 | Verdict | Condition |
 |---------|-----------|
-| `Terminates` | Φ_cnt strictly decreasing over observation window |
-| `MayDiverge` | Φ_cnt constant over observation window (same state repeats) |
-| `Unknown` | Φ_cnt increasing or oscillating |
+| `Stable` | No matches found, or arbitration accepts none of them |
+| `Active` | At least one match survives arbitration (or `tick == 0`, before any lookahead is meaningful) |
 
-Validation on four test cases:
+This is deliberately narrower than a full liveness classifier: it answers
+"would the *next* tick change anything?", not "will this simulation ever
+stabilize?" — a simulation that alternates between two non-empty states
+forever is reported `Active` at every tick, not flagged as diverging. The
+method also has a known, documented gap: `memory`/`max_activations` gates
+are applied as a match filter inside the real tick pipeline, not inside
+the arbitration call `detect_termination` uses directly, so a match that
+the real tick would filter out can still make this lookahead report
+`Active` when the true next tick would in fact be `Stable`.
 
-| Test Case | Configuration | max_ticks | observation_ticks | Verdict |
-|-----------|--------------|-----------|-------------------|---------|
-| `test_termination_turing` | `configs/turing.yaml` | 50 | 10 | Terminates |
-| `test_termination_tag_system` | `configs/tag_system.yaml` | 20 | 5 | Terminates |
-| `test_termination_infinite_loop` | Rule 1→1 (no shift) | 100 | 20 | MayDiverge |
-| `test_termination_unknown` | Rule 1→1 (shift right + copy behind) | 50 | 20 | Unknown |
-
-The `turing` and `tag_system` configurations terminate deterministically.
-The infinite loop repeats every tick and is correctly classified as
-`MayDiverge`. The expanding configuration grows without bound and is
-correctly classified as `Unknown`.
+Tests `test_detect_termination_stable` and `test_detect_termination_active`
+(`src/engine/tests/basics.rs`) cover both verdicts directly.
 
 ---
 
@@ -346,92 +350,142 @@ is needed, and matches execute in lockstep.
 class CA if its conflict graph is non-empty. For a CA program:
 
 - **Arbitration is required.** By [2, Theorem 1], arbitration is
-  deterministic but involves `O(M²)` comparisons in the worst case.
-- **Per-tick time:** `O(M²)` due to greedy pairwise conflict resolution.
+  deterministic; it costs `O(M log M + M·R)` in the worst case, where `R`
+  is the largest affected-region size among the `M` matches (Theorem 4,
+  Section 3.3) — not the `O(M²)` pairwise-comparison cost a naive
+  algorithm would need.
+- **Per-tick time:** `O(M log M)` for bounded-reach rule sets (`R = O(1)`,
+  the common case).
 - **Total time:** depends on program logic.
-- **Arbitration cost:** `O(M²)` per tick.
+- **Arbitration cost:** `O(M log M)` per tick for bounded-reach rules.
 
 CA programs subsume CF programs: every CF program is trivially in CA
 (the conflict graph is empty, so arbitration selects all matches in
-`O(M)` time), but CF programs avoid the quadratic overhead entirely.
+`O(M)` time), but CF programs avoid even the sort-and-hash overhead
+entirely.
 
-### 3.3. Lower Bound for CA Arbitration
+### 3.3. Bound for CA Arbitration
 
-**Theorem 4 (Ω(M²) lower bound).** For any arbitration algorithm
-processing `M` pairwise conflicting matches, there exists an input
-requiring `Ω(M²)` comparisons.
+**Erratum.** An earlier version of this section claimed an `Ω(M²)` lower
+bound: *any* arbitration algorithm on `M` pairwise-conflicting matches
+supposedly needs `Ω(M²)` comparisons, via a witness construction (`M`
+rules with identical `id` and `priority`, all matching the same cell) and
+a greedy pairwise-comparison argument. The argument's "tightness" step —
+"the algorithm cannot skip any pair, as this would produce incorrect
+results" — implicitly assumes conflict-freedom can only be checked by
+literally comparing pairs of matches. It cannot: the actually-shipped
+algorithm (`arbitrate_with_cam`, `src/engine/arbitrator.rs`) checks
+conflicts by looking up each match's affected *cells* in a hash map keyed
+by cell coordinate, never comparing one match against another directly.
+On the erratum's own witness construction, this reduces the claimed
+`Θ(M²)` to `O(M log M)` — confirmed both by reading the algorithm and by
+measuring it (below). The mistake was treating a lower bound for one
+*restricted* algorithm family (pairwise comparison) as a lower bound for
+the arbitration *problem*, the same category of error a naive `Ω(n log
+n)`-for-any-sort claim makes against counting/radix sort.
 
-*Proof.* Consider `M` rules with identical `id = [1, 0]` and identical
-`priority = 10`. All rules match on the same cell of type 1 at position
-`(1, 0)`. The second pattern cell (type 0) is at position `(2, 0)`.
+**Theorem 4 (Upper bound for CA arbitration).** For `M` matches with
+maximum affected-region size `R`, `arbitrate_with_cam` accepts a
+conflict-free, deterministically tie-broken subset in `O(M log M + M·R)`
+time.
 
-Each rule has a unique change, but their affected regions (pattern `[1, 0]`
-of length 2) completely overlap. Therefore, all `M` rules are pairwise
-conflicting: no two can be applied simultaneously.
+*Proof.* The algorithm has two phases. **(1) Sort.** All `M` matches are
+sorted once by the full tie-break key `(priority, age, rule_id, x, y,
+rule_idx)`, descending — `O(M log M)` comparisons (each comparison is
+`O(1)`: a fixed-width tuple compare). **(2) Single greedy pass.** For each
+match in sorted order, its affected cells (at most `R` of them) are each
+looked up in a hash map `used_cells: HashMap<(i32,i32), usize>` — `O(R)`
+expected-time lookups. If none are present, the match is accepted and its
+≤`R` affected cells are inserted into the map — another `O(R)` expected-time
+operation. No match is ever compared against another match directly;
+every conflict check is a cell-coordinate lookup against the map built so
+far, which costs the same `O(1)` expected time regardless of how many
+matches have already been accepted. Total: `O(M log M)` for the sort plus
+`O(M·R)` for the pass, i.e. `O(M log M + M·R)`. ∎
 
-Arbitration proceeds greedily:
-- First match accepted: 0 comparisons.
-- Second checked against first: 1 comparison.
-- Third checked against first and second: 2 comparisons.
-- M-th checked against M−1 already accepted: M−1 comparisons.
-
-Total:
-```
-0 + 1 + 2 + ... + (M−1) = M(M−1)/2 = Θ(M²)
-```
-
-**Tightness.** Any pair of rules with the same `id` and `priority` may
-conflict — their affected regions intersect for any match on the same cell.
-The algorithm cannot skip any pair, as this would produce incorrect
-results (two conflicting rules would be accepted simultaneously).
-Therefore, `Ω(M²)` is an exact lower bound. ∎
-
-**Corollary 1 (Tight bound).** The upper bound for class CA is `O(M²)`,
-and this bound is **tight** in the worst case.
+**Corollary 1 (Tight bound for bounded reach).** For rule sets with reach
+independent of `M` (`R = O(1)` — the common case: a rule's pattern and
+`changes` have a fixed size fixed by the rule set, not by how many matches
+happen to fire this tick), arbitration costs `O(M log M)`. This is tight:
+producing a *deterministic* result requires resolving ties by the full
+`(priority, age, rule_id, x, y, rule_idx)` order, and an adversary can
+present `M` matches in any of `M!` distinct tie-break orderings, forcing
+`Ω(log(M!)) = Ω(M log M)` comparisons to establish that order (the
+standard decision-tree argument used for comparison-sort lower bounds).
+`arbitrate_with_cam` meets this bound up to the `R` factor — it is
+asymptotically optimal for bounded-reach rule sets, not merely fast in
+practice. The retracted `O(M²)`/`Ω(M²)` claim (original Theorem 4 /
+Corollary 1) no longer appears anywhere in this paper's results.
+Empirical confirmation of
+this bound is in Section 3.4.4, alongside the paper's other measured
+benchmarks; the algorithmic argument above (sort + hash lookup, no
+pairwise comparison) is the actual proof, not the timing data.
 
 ### 3.4. Empirical Complexity
+
+**Methodology note (2026-08-16).** Every table in this section was
+previously captioned "Measurements from `configs/X.yaml`," but the
+checked-in config files are each a single fixed instance (e.g.
+`configs/turing.yaml` hard-codes one 5-symbol tape), not a parametrized
+sweep — they cannot by themselves produce a multi-row "Len → Ticks"
+table. The tables below are re-measured directly (same rule sets,
+generated inputs at each listed size, run to completion by
+`Engine::run_tick` in a loop, ticks counted until no match remains) — the
+original tables were found to be unreproducible and, in one case,
+numerically wrong rather than merely unsourced.
 
 #### 3.4.1. Linear Time: Turing Machine Simulation
 
 **Hypothesis.** A Turing machine simulation in Cellaria requires
 `O(T)` ticks for `T` steps of the machine.
 
-**Data.** Measurements from `configs/turing.yaml`:
+**Data.** The bit-inverting Turing machine of Section 4.3.4
+(`test_tm_translator_bit_invert`), run via `translate_tm` on tapes of
+each length below:
 
 | Len | Ticks | Ratio |
 |-----|-------|-------|
-| 10  | 10    | 1.0   |
-| 50  | 50    | 1.0   |
-| 100 | 100   | 1.0   |
-| 200 | 200   | 1.0   |
+| 10  | 10    | 1.00  |
+| 50  | 50    | 1.00  |
+| 100 | 100   | 1.00  |
+| 200 | 200   | 1.00  |
 
-**Result.** `ticks = len` for all tested lengths. Cellaria simulates a
-Turing machine without overhead: one tick corresponds to exactly one
-step of the machine.
+**Result.** `ticks = len` exactly, at every tested length — confirmed,
+not just re-sourced. Cellaria simulates this Turing machine without
+overhead: one tick corresponds to exactly one step of the machine.
 
 #### 3.4.2. Linear Time: Tag System
 
 **Hypothesis.** A tag system simulation requires `O(N)` ticks for a
 string of length `N`.
 
-**Data.** Measurements from `configs/tag_system.yaml`:
+**Data.** The same rule set as `configs/tag_system.yaml` (Minsky
+`m=2` tag system, one step), run on generated strings of each length
+below:
 
 | Len | Ticks | Ratio |
 |-----|-------|-------|
-| 5   | 5     | 1.0   |
-| 10  | 10    | 1.0   |
-| 20  | 20    | 1.0   |
-| 50  | 50    | 1.0   |
+| 5   | 6     | 1.20  |
+| 10  | 11    | 1.10  |
+| 20  | 21    | 1.05  |
+| 50  | 51    | 1.02  |
 
-**Result.** `ticks = len` for all tested lengths. Single-pass marker
-processing is asymptotically optimal.
+**Result.** `ticks = len + 1`, not `ticks = len` as an earlier version
+of this table claimed — the read/delete phase (Phase 1-2 of the rule
+set) costs one tick before the traverse phase begins, a fixed overhead
+independent of `N`. Still `O(N)` overall, and the ratio still visibly
+converges to 1 as `N` grows, but the previous table's claim of an exact
+`1.0` ratio at every length did not match reality even at `N=5`. Marker
+processing is asymptotically optimal; it is not, as stated before,
+overhead-free.
 
 #### 3.4.3. Constant Time: Conflict-Free Rules
 
 **Hypothesis.** A rule set with an empty conflict graph terminates in
 `O(1)` ticks, independent of grid size.
 
-**Data.** Measurements from `configs/parallel.yaml`:
+**Data.** The same two-rule structure as `configs/parallel.yaml`, on
+grids of each width below:
 
 | Width | Ticks |
 |-------|-------|
@@ -441,20 +495,34 @@ processing is asymptotically optimal.
 | 64    | 1     |
 
 **Result.** Two independent conflict-free rules fire concurrently and
-terminate in one tick, regardless of grid size.
+terminate in one tick, regardless of grid size — confirmed exactly as
+originally claimed.
 
-#### 3.4.4. Quadratic Arbitration: Worst Case
+#### 3.4.4. Arbitration Scaling: Worst-Case Construction
 
-**Data.** Measurements from `configs/worst_case_arbitration.yaml`:
+`configs/worst_case_arbitration.yaml` encodes the construction from
+Section 3.3's Theorem 4 proof at small scale (`M = 5`): `M` rules with
+identical `id` and `priority`, all matching the same cell, so exactly
+one is ever accepted regardless of `M`. Timing the arbitration phase
+alone (`Engine::run_tick_profiled`) at this construction scaled up to
+`M = 32 000`:
 
-| M | Comparisons | Accepted |
-|---|-------------|----------|
-| 5  | 10  | 1 |
-| 10 | 45  | 1 |
-| 20 | 190 | 1 |
+| M | arbitrate time | M(M−1)/2 would predict (relative to M=100) |
+|-------|-----------|-----------|
+| 100   | 0.011 ms  | 0.011 ms (baseline) |
+| 1 000 | 0.180 ms  | 1.1 ms |
+| 4 000 | 0.583 ms  | 17.6 ms |
+| 8 000 | 1.315 ms  | 70.4 ms |
+| 16 000| 3.504 ms  | 281.6 ms |
+| 32 000| 13.29 ms  | 1 126 ms |
 
-The number of comparisons follows `M(M−1)/2` exactly, confirming the
-`Θ(M²)` lower bound.
+A 320× increase in `M` (100 → 32 000) produces roughly a 1 200× increase
+in time — consistent with `O(M log M)`-class growth (`log`-factor plus
+sort/hash constants), nowhere near the ~102 000× (`320²`) that `Θ(M²)`
+would require. This confirms Theorem 4/Corollary 1 (Section 3.3) and
+directly contradicts the quadratic growth an earlier version of this
+section claimed — see the erratum in Section 3.3 for the source of that
+error.
 
 ### 3.5. Open Problems
 
@@ -524,12 +592,18 @@ the cell to its left receives value `f(a,b,c)`.
 **Termination.** When the marker reaches the right edge (position > N),
 no matches remain — simulation stops.
 
-**Result.** Position `i` contains `f(data[i], data[i+1], data[i+2])`.
+**Result.** Grid position `i − 1` contains `f(data[i], data[i+1],
+data[i+2])`, for `i = 1..=N`. The `−1` offset is fixed and deterministic,
+not an error: the marker occupies grid position `0` (outside the data
+range `1..=N`), and each rule writes to its *pre-shift* position after
+moving — so CA position `i`'s result lands one cell behind where
+`data[i]` itself was read from.
 
 #### 4.1.3. Example: Majority
 
-Configuration: `configs/ca_majority.yaml`.
-Test `test_ca_majority_pass` in `src/engine.rs` implements this mapping.
+Configuration: `configs/ca_majority.yaml`. `examples/proof_ca_majority.rs`
+runs this mapping against the definition above (including the `−1`
+offset) and asserts the two agree cell by cell.
 
 ### 4.2. Sorting → Cellaria
 
@@ -968,15 +1042,18 @@ We have presented three contributions about the limits of the Cellaria
 model:
 
 1. **Termination** (Section 2): sufficient conditions via three classes
-   of potential functions (geometric, counting, energetic). Runtime
-   monitoring classifies simulations as Terminates, MayDiverge, or
-   Unknown. The counting potential is sufficient but not necessary for
-   termination.
+   of potential functions (geometric, counting, energetic). A lightweight
+   runtime check (`Engine::detect_termination`) classifies the *current*
+   state as active or stable by peeking one tick ahead — a narrower
+   contribution than a trend-based liveness monitor. The counting
+   potential is sufficient but not necessary for termination.
 
 2. **Complexity** (Section 3): definition of CF (Conflict-Free) and CA
-   (Conflict-Aware) complexity classes. Proof of the `Ω(M²)` lower
-   bound for CA arbitration — a tight bound. Empirical confirmation on
-   four benchmark types.
+   (Conflict-Aware) complexity classes. Proof of a tight `Θ(M log M)`
+   bound for CA arbitration on bounded-reach rule sets — the shipped
+   sort-and-hash algorithm is asymptotically optimal, not the `O(M²)`
+   originally (and incorrectly) claimed. Empirical confirmation on four
+   benchmark types.
 
 3. **Expressiveness** (Section 4): constructive mappings proving that
    Cellaria can simulate:
@@ -1013,7 +1090,8 @@ rule-based computation.
 **Parallel rewriting.** Parallel application of non-overlapping matches
 is well-known in graph rewriting [5] and cellular automata [6]. Our
 complexity classes CF and CA formalize the distinction between
-conflict-free and conflict-aware programs, with a tight lower bound.
+conflict-free and conflict-aware programs, with a tight `Θ(M log M)`
+bound for CA arbitration on bounded-reach rule sets.
 
 **Computational complexity of CA.** Cellular automata are known to be
 Turing-complete [7]. Our mapping from CA to Cellaria establishes that

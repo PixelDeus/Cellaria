@@ -242,7 +242,7 @@ pub(crate) fn detect_matches_with_group_data<S: GridStorage + Sync>(
     group_data: &GroupCache,
     active_coords: &Vec<(usize, usize)>,
 ) -> Vec<RuleMatch> {
-    let bounds = grid.storage.bounds();
+    let bounds = grid.storage().bounds();
     let default_cell = Cell::default();
 
     // Отфильтровываем клетки, чей тип вообще не имеет привязанных правил, —

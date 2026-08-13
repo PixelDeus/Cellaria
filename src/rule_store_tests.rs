@@ -418,8 +418,8 @@ fn test_integration_self_modification() {
 // ====================================================================
 // Part A: `feedback`/`recursion`/`memory`/`keep_source` через RuleStore.
 //
-// Precedent (`ChangeValue::Ref`, see `deserialize_packet`'s doc-comment and
-// CHANGELOG.md v0.6.0): the packet format is a FIXED byte layout with no
+// Precedent (`ChangeValue::Ref`, see `deserialize_packet`'s doc-comment):
+// the packet format is a FIXED byte layout with no
 // byte position reserved for these fields, so a rule transmitted through the
 // self-modification channel can never carry them -- this is a structural
 // impossibility to encode, not a silent loss of already-encoded intent (no
@@ -1298,7 +1298,7 @@ fn test_add_rule_extended_end_to_end_through_self_modification_pipeline() {
 // Адверсариальная проверка: `deserialize_packet`/`drain_rule_channel`
 // разбирают байты, которые в реальном сценарии (канал 0 = ввод от ВНЕШНЕГО
 // источника, не обязательно доверенного) могут быть чем угодно. Найденный
-// в этой же сессии баг с `ChunkStorage` (см. `CHANGELOG.md`) показал, что
+// в этой же сессии баг с `ChunkStorage` показал, что
 // "должно быть безопасно по построению" стоит проверять конструктивно, а
 // не только по чтению кода — здесь то же самое, но через `proptest`
 // вместо одной руками собранной адверсариальной клетки.

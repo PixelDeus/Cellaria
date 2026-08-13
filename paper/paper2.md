@@ -5,7 +5,7 @@
 Cellaria is a cellular automaton-like model of computation based entirely
 on local reduction, defined by five axioms. The tick cycle consists of
 detection (pattern matching), arbitration (conflict resolution), and
-application (modification). We present three contributions about the
+application (modification). We present six contributions about the
 arbitration mechanism:
 
 1. **Determinism of arbitration** — the sort key `(priority, age,
@@ -234,8 +234,8 @@ independent of the underlying execution platform.
 
 The theorem is validated experimentally on all 10 configurations from
 `configs/`. Repeated runs with identical parameters produce identical
-logs. The test suite (`#[cfg(test)]` in `src/engine.rs`) includes
-specific tests for arbitration determinism.
+logs. The test suite (`src/engine/tests/basics.rs`) includes specific
+tests for arbitration determinism.
 
 ---
 
@@ -245,9 +245,13 @@ specific tests for arbitration determinism.
 
 Greedy arbitration is the sequential bottleneck of the Cellaria tick
 cycle. In the worst case, resolving conflicts among overlapping matches
-requires `O(M²)` comparisons, where `M` is the number of matches in a
-single tick. For rule sets provably free of conflicts, arbitration can
-be skipped entirely: all matches are accepted and applied simultaneously.
+costs `O(M log M)` for rule sets with reach independent of `M` — the
+implementation sorts the `M` matches by tie-break key once, then checks
+each match's affected cells against a hash map of already-claimed cells,
+never comparing matches pairwise (see the companion paper on termination
+and complexity for the full derivation and a tight lower bound). For rule
+sets provably free of conflicts, arbitration can be skipped entirely: all
+matches are accepted and applied simultaneously.
 
 ### 3.2. Formal Definitions
 
@@ -645,7 +649,7 @@ pub fn check_composition(rules_a: &[Rule], rules_b: &[Rule]) -> CompositionVerdi
 | `test_composition_overlap` | [1,2]→right | [2,3]→left | Unsafe | Intersecting affected regions |
 | `test_composition_tm_cleanup` | [10] | [99] | Safe | composition.yaml |
 
-All 6 tests pass (51/51 total, 0 failures).
+All 6 tests pass (`src/conflict_analyzer_tests.rs`).
 
 ### 4.5. Example: TM Head + Cleanup
 
@@ -688,7 +692,8 @@ composition is safe.
 
 Theorem 4 checks composition *once*, statically, before two rule sets are
 merged. If either side can self-modify (installing new rules at runtime
-via `RuleStore`, as in [3, self-modification]), that one-time guarantee
+via `RuleStore`, detailed in the companion papers on expressiveness and
+the rule mechanism), that one-time guarantee
 does not automatically persist: a self-installed rule could, in
 principle, target a head type that an independently-written, already
 safe neighboring module depends on, silently invalidating the very
@@ -840,7 +845,7 @@ single snapshot that goes stale the moment anything changes around it.
 Covered by `test_self_modification_extending_existing_head_preserves_original`,
 `test_self_modification_remove_rule_actually_removes`, and
 `test_self_modification_preserves_rule_added_after_construction`
-(`src/engine/tests.rs`).
+(`src/engine/tests/basics.rs`).
 
 **A fourth bug, one level below the `Engine`.** All of the above concerns
 the merge into `rule_index`. A separate defect sat underneath it, in
@@ -876,7 +881,7 @@ Fixed by checking against `RuleStore`'s own current state instead of
 so far, including ones accepted earlier in the very same batch, so the
 second of two mutually-conflicting rules now correctly sees the first.
 Covered by `test_guarded_self_modification_catches_conflict_within_same_batch`
-(`src/engine/tests.rs`).
+(`src/engine/tests/basics.rs`).
 
 ---
 
@@ -930,7 +935,8 @@ nothing left to resolve. The composition theorem (Section 4) extends
 this to merging two independently conflict-free rule sets. Neither
 result says anything about a rule set whose conflict graph is
 *non-empty* — the CA class of Section 3.2, where arbitration is
-genuinely required and costs `O(M²)` in the worst case (Theorem 4).
+genuinely required and costs `O(M log M)` in the worst case for
+bounded-reach rule sets (Section 3.1).
 
 This section shows that arbitration for CA programs can still be
 parallelized, by exploiting the same locality property used throughout
@@ -948,93 +954,165 @@ effect can spread over time (Section 6.3).
 any cell in `PatternCells(Rᵢ) ∪ Affected(Rᵢ)` (Definition 2). This is the
 same `K` used as the offset range in Algorithm 1.
 
-**Definition 5 (Band partition).** Partition the grid into contiguous,
-non-overlapping bands `B₁, ..., Bₙ` along one axis. For a match `m` with
-center `c`, classify `m` relative to the band `Bᵢ` containing `c`:
+**Erratum.** An earlier version of this subsection used a two-way
+core/boundary split at margin `2K`, with core matches finalized directly
+by independent per-band arbitration. That construction was unsound: its
+Lemma 6 claimed a core match's affected region never overlaps a boundary
+match's, but a boundary match sitting at the `2K` threshold can reach a
+further `K` inward, directly into the region a core match at the same
+threshold can reach outward — the two `K`-radius neighborhoods share a
+strip near the line, for any `K > 0`. A concrete counterexample (a rule
+whose affected region extends symmetrically in both directions from its
+center, at reach `K = 1`, run at high match density) reproduces a real
+divergence from centralized arbitration in the reference implementation.
+The corrected construction below uses a wider threshold (`4K`, not `2K`)
+for the tier that skips re-verification, and is the one the shipped
+implementation uses (`arbitrator.rs::arbitrate_spatial_with_cam`).
 
-- `m` is **core** to `Bᵢ` if the distance from `c` to every edge of
-  `Bᵢ` is at least `2K`.
-- Otherwise, `m` is **boundary**.
+**Definition 5′ (Three-way band classification).** Partition the grid
+into contiguous, non-overlapping bands `B₁, ..., Bₙ` along one axis. For
+a match `m` with center `c`, let `d` be the distance from `c` to the
+*nearer* edge of the band `Bᵢ` containing `c`. Classify:
 
-**Lemma 6 (Core isolation).** If `m₁` is core to some band and `m₂` is
-either core to a *different* band or boundary, then
+- `m` is **safe** to `Bᵢ` if `d ≥ 4K`.
+- `m` is **at-risk** to `Bᵢ` if `2K ≤ d < 4K`.
+- `m` is **boundary** to `Bᵢ` if `d < 2K`.
+
+Write **candidate** for safe ∪ at-risk (`d ≥ 2K`) — the class the
+original Definition 5 called `core`.
+
+**Lemma 6a (Candidate isolation across bands).** If `m₁` is a candidate
+to band `Bᵢ` and `m₂` is a candidate to a *different* band `Bⱼ`, then
 `affected(m₁) ∩ affected(m₂) = ∅`.
 
-*Proof.* By Definition 4, `affected(m₁)` lies entirely within Manhattan
-distance `K` of `m₁`'s center `c₁`. Since `c₁` is at distance `≥ 2K` from
-every edge of its band, `affected(m₁)` — which extends at most `K` from
-`c₁` — stays at distance `≥ K` from every edge of that band, and
-therefore cannot reach into a neighboring band or into any region within
-`K` of an edge. Any `m₂` that is core to a different band or boundary
-has its own affected region confined to a different band, or reaching
-toward an edge; in either case, by the same radius-`K` argument applied
-to `m₂`, the two affected regions are separated by more than `K + K`
-distance in the worst case that would bring them together, i.e. they
-cannot overlap. ∎
+*Proof.* `c₁` is at distance `≥ 2K` from every edge of `Bᵢ`, so
+`affected(m₁)`, extending at most `K` from `c₁`, stays at distance `≥ K`
+from every edge of `Bᵢ` and cannot leave it. The symmetric bound holds
+for `affected(m₂)` inside `Bⱼ`. Distinct bands are disjoint, so the two
+affected regions, each confined to its own band, cannot meet. ∎
 
-**Theorem 6 (Spatial decomposition correctness).** Let `R` have reach
-`K`. Partition the grid into bands with margin `≥ 2K` (Definition 5),
-classifying every match as core or boundary. Let:
+This licenses arbitrating each band's full candidate set (safe and
+at-risk together — not pre-split, see the remark after Theorem 6′)
+independently and in parallel.
 
-- `A_core = ⋃ᵢ arbitrate(core matches of Bᵢ)`, with each band's core
-  matches arbitrated independently (in parallel, using the same
-  deterministic total order of Section 2),
-- `A_boundary = arbitrate(all boundary matches)`, arbitrated as one
-  shared sequential pass.
+**Lemma 6b (Safe isolation from boundary).** If `m₁` is safe to band
+`Bᵢ` and `m₂` is boundary to `Bᵢ` or to the band on the other side of
+the edge `m₁` is nearest to, then `affected(m₁) ∩ affected(m₂) = ∅`.
 
-Then `A_core ∪ A_boundary = arbitrate(all matches)` computed as a single
-centralized pass over the full match set.
+*Proof.* Measure distance from the shared edge `e`, `0` at the edge,
+increasing into `Bᵢ`. `m₁` safe gives `d₁ ≥ 4K`; every cell of
+`affected(m₁)` is at distance `≥ d₁ - K ≥ 3K` from `e`. `m₂` boundary
+(to either side of `e`) gives `d₂ < 2K` measured from `e` on its own
+side; every cell of `affected(m₂)` reaches at most `d₂ + K < 3K` from
+`e`, using integer distances `d₂ ≤ 2K - 1`, hence `d₂ + K ≤ 3K - 1`. So
+every cell of `affected(m₂)` is at distance `≤ 3K - 1` from `e`, and
+every cell of `affected(m₁)` is at distance `≥ 3K` — disjoint by exactly
+one cell of margin. ∎
 
-*Proof.* The greedy arbitration algorithm (Section 2.2) accepts a match
-`m`, in the fixed total order of Lemma 1, if and only if no
-already-accepted match with an earlier position in that order shares a
-cell with `m` — i.e. has an overlapping affected region.
+**Not claimed:** safe vs. at-risk of the *same* band. An at-risk match
+at `d` approaching `4K` can reach a cell at `d + K` approaching `5K`,
+which is inside the range `affected(m₁)` can occupy for a safe `m₁` at
+`d₁ = 4K` (reaching down to `3K`) once both ranges are compared against
+matches positioned arbitrarily close to the boundary between the two
+classes — the same obstruction as in the erratum, now pushed to the
+safe/at-risk line instead of the removed core/boundary line, and
+unavoidable for *any* finite threshold by the identical argument. This
+is why at-risk matches are not finalized by classification alone (see
+Theorem 6′).
 
-Take any core match `m`, core to band `Bᵢ`. By Lemma 6, no match outside
-`Bᵢ`'s core — whether core to another band or boundary — shares a cell
-with `m`. Therefore `m`'s accept/reject outcome under the centralized
-algorithm depends *only* on the other core matches of `Bᵢ`, in the same
-relative order (the total order of Lemma 1 is fixed and does not depend
-on which subset of matches is presented to the algorithm). Running
-`arbitrate` on just the core matches of `Bᵢ` therefore reproduces exactly
-the centralized decision for every match core to `Bᵢ`. Since this holds
-for every band independently, and different bands' core matches never
-share cells (Lemma 6), the bands can be arbitrated in parallel: `A_core`
-reproduces the centralized decision on every core match.
+**Theorem 6′ (Spatial decomposition correctness, corrected).** Let `R`
+have reach `K`. Partition the grid into bands with margin `≥ 4K`
+(Definition 5′). Let:
 
-Take any boundary match `m`. By Lemma 6, no core match shares a cell
-with `m` — only other boundary matches can. So `m`'s accept/reject
-outcome depends only on other boundary matches, in the same relative
-order, and is unaffected by however core matches were resolved. Running
-`arbitrate` on the full set of boundary matches therefore reproduces the
-centralized decision for every boundary match: `A_boundary` reproduces
-the centralized decision on every boundary match.
+1. `Candidates(Bᵢ) = arbitrate(\text{safe} ∪ \text{at-risk matches of } Bᵢ)`,
+   computed independently per band, in parallel (licensed by Lemma 6a).
+2. `Safe = \{m ∈ Candidates(Bᵢ), \text{any } i : m \text{ is safe to } Bᵢ\}`
+   — taken as final.
+3. `Merged = arbitrate(\text{boundary matches} ∪ \{\text{every at-risk
+   match of every band, whether accepted or rejected in step 1}\},
+   \text{with every cell of } Safe \text{ pre-marked occupied})`.
 
-Core and boundary partition all matches (Definition 5). Since `A_core`
-and `A_boundary` each individually reproduce the centralized decision on
-their respective subset, their union equals the centralized result on
-the full match set. ∎
+Then `Safe ∪ Merged = arbitrate(\text{all matches})` computed as a
+single centralized pass.
+
+*Proof.* Fix a match `m`. If `m` is a candidate to band `Bᵢ`, by Lemma
+6a nothing outside `Candidates(Bᵢ)` can share a cell with it, so `m`'s
+outcome in step 1 already equals its outcome in a centralized pass
+restricted to `Candidates(Bᵢ)`. It remains to show this restricted
+outcome equals `m`'s outcome in the *full* centralized pass, i.e. that
+no match outside `Candidates(Bᵢ)` — a boundary match, from either side
+of `Bᵢ`'s edges — can outrank `m` for a shared cell.
+
+If `m` is safe, Lemma 6b rules this out directly: no boundary match
+shares any cell with `m` at all, regardless of rank. So `m`'s step-1
+outcome is final, justifying `Safe` as stated.
+
+If `m` is at-risk, Lemma 6b does not apply (see the remark above), and a
+boundary match *can* share a cell with `m` and outrank it. Step 1's
+outcome for `m` is therefore provisional, not final — which is exactly
+why every at-risk match, win or lose in step 1, is re-submitted in step
+3 alongside every boundary match, in the same total order used
+everywhere else. Restricted to this combined set, `arbitrate` reproduces
+the centralized decision for each of them by the same argument as
+Theorem 1 applied to this subset — the only remaining question is
+whether a `Safe` cell could be incorrectly reclaimed here, which the
+pre-marking rules out by construction (no candidate is accepted onto an
+already-occupied cell), and which is sound because Lemma 6b already
+guarantees no genuine centralized winner among `Safe ∪ Merged`'s
+candidates depends on that cell being reachable from outside `Safe`.
+
+`Safe`, `Merged`, and nothing else exhaust all matches once boundary and
+at-risk are folded into step 3 and safe is separated out — so their
+union reproduces the centralized result on the full match set. ∎
+
+**Remark (why safe and at-risk must be arbitrated together in step 1).**
+Splitting `Bᵢ`'s candidates into safe and at-risk *before* step 1, and
+arbitrating each subset separately, breaks Lemma 1's total order between
+two candidates of the *same* band that happen to fall on opposite sides
+of the `4K` line: nothing in Lemma 6a licenses treating them as
+independent, since they are not in different bands. Step 1 must see the
+full candidate set of `Bᵢ` at once.
 
 **Corollary 5 (Parallel arbitration for CA programs).** Unlike
-Corollary 3, Theorem 6 places no requirement on the conflict graph of
-`R` — it applies to CA programs (non-empty conflict graph) as much as
-CF ones. The only requirement is a band margin of at least `2K`, where
-`K` depends only on the rule set, not on the grid state.
+Corollary 3, Theorem 6′ places no requirement on the conflict graph of
+`R` — it applies to CA programs (non-empty conflict graph) as much as CF
+ones. The requirement is a band margin of at least `4K` (not `2K`),
+where `K` depends only on the rule set, not on the grid state. The
+sequential fraction (step 3: boundary plus the `2K`-wide at-risk strip
+on each side of every band) shrinks relative to the parallel fraction
+(step 1's `≥ 4K`-wide safe interior) as bands grow wide relative to `K`.
 
 **Empirical validation.** `examples/decentralized_arbitration.rs`
-implements exactly this construction for a rule set with genuine,
-unavoidable conflicts (adjacent `R`-movers and `L`-movers, each wanting
-to write both of a colliding pair's cells, `K = 1`, margin `= 4 ≥ 2K`).
-Centralized arbitration and the banded parallel construction (up to 24
-worker threads) are compared directly on every run and found bit-for-bit
-identical, matching Theorem 6.
+demonstrates the general two-tier (core/boundary) principle for a rule
+set with genuine, unavoidable conflicts (adjacent `R`-movers and
+`L`-movers each wanting to write both of a colliding pair's cells,
+`K = 1`, margin `= 4`), with centralized and banded-parallel arbitration
+compared bit-for-bit on every run. Its rules are one-directional shifts,
+which cannot realize the erratum's counterexample regardless of margin
+(see below) — it demonstrates the decomposition idea, not the tight
+threshold. The tight `4K` threshold, and the full three-tier
+construction, are validated by the reference implementation's test
+suite instead: a dense one-directional-shift stress test (the original
+motivating case, immune to the erratum by construction); a dense
+*symmetric*-affected-region stress test (`changes` at both `-K` and
+`+K`, the case that requires `4K`) that reproduces the erratum's
+divergence when run against the old `2K + K` threshold and passes
+against the corrected `2K + 2K` one, for `K ∈ {1, 2, 3}`; and a
+three-competitor scenario (local winner, local loser, stronger boundary
+competitor) isolating the requirement that step 3 include at-risk
+losers, not just step-1 winners. All are sabotage-verified: reverting
+the threshold, or excluding step-1 losers from step 3, reproduces a
+divergence from centralized arbitration immediately.
 
 **Remark (relation to domain decomposition).** This is the Cellaria
 analogue of halo/ghost-cell exchange in domain-decomposed scientific
 computing [8]: a margin of stencil width around each subdomain boundary
 lets interior points update independently, with only the halo requiring
-communication. Theorem 6 shows the same pattern holds for Cellaria's
-arbitration step specifically, including when rules genuinely conflict.
+communication. The corrected construction shows the same pattern holds
+for Cellaria's arbitration step, including when rules genuinely conflict
+— with the caveat, absent from the classical halo-exchange picture, that
+a sub-strip of the interior near the halo (at-risk) must be re-examined
+together with the halo, not treated as already settled.
 
 ### 6.3. A Bound on Fault Propagation
 
@@ -1085,7 +1163,7 @@ arbitration (CA), still only touches cells within `K` of its center. The
 propagation bound is therefore a property of the rule set's reach alone,
 not of its conflict class. This is a sharper statement than "conflict-free
 rule sets contain damage better than conflict-aware ones" — the two
-classes differ in arbitration cost (Theorem 4), not in fault locality.
+classes differ in arbitration cost (Section 3.1), not in fault locality.
 
 **Empirical validation.** `examples/proof_fault_propagation.rs` runs two
 identical Wireworld-style wire simulations (`K = 1`) side by side; at
@@ -1109,7 +1187,8 @@ is a worst-case containment bound only.
 ### 6.4. Fault Propagation Under Self-Modification
 
 Theorem 7 assumes a single, fixed reach `K` for the entire span of `t`
-ticks. Since [3, self-modification] establishes that a running program
+ticks. Since Cellaria's self-modification mechanism (companion papers on
+expressiveness and the rule mechanism) establishes that a running program
 can install new rules at runtime, `K` is not actually fixed in general —
 a self-installed rule can have a different reach than anything present
 before it. The natural question: does Theorem 7's bound still hold once
@@ -1278,11 +1357,11 @@ can be composed modularly, with guaranteed preservation of behavior.
 
 **Domain decomposition.** Splitting a computation across independent
 spatial regions with a shared halo of ghost cells is standard practice
-in distributed scientific computing [8]. Theorem 6 shows the same
+in distributed scientific computing [8]. Theorem 6′ shows the same
 pattern applies to Cellaria's arbitration step, including when the rule
-set has genuine conflicts — the "halo" here is the set of boundary
-matches requiring shared sequential arbitration, sized by the rule set's
-reach `K` rather than by a fixed physical stencil.
+set has genuine conflicts — the "halo" here is the set of boundary and
+at-risk matches requiring shared sequential arbitration, sized by the
+rule set's reach `K` rather than by a fixed physical stencil.
 
 **Bounded propagation speed.** Lieb-Robinson bounds [7] establish that
 local interactions in quantum lattice systems propagate information at a

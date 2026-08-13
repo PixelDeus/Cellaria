@@ -3,6 +3,7 @@
 //! `CompositionVerdict`.
 
 use super::*;
+use super::matcher::CamPositions;
 
 impl<S: GridStorage> Engine<S> {
     // ─── Age ───
@@ -11,36 +12,55 @@ impl<S: GridStorage> Engine<S> {
         self.grid.advance_age();
     }
 
-    /// Устанавливает `born_at` = текущее поколение для всех клеток в regions.
+    /// Устанавливает `born_at` = текущее поколение для всех РЕАЛЬНО
+    /// записанных клеток (`region.written_cells`), не для прямоугольника
+    /// `x_start..x_end`/`y_start..y_end` — тот шире реального множества
+    /// записей (например, сдвиг на N>1 клеток захватывает и клетки МЕЖДУ
+    /// исходной и целевой позицией, которые сдвиг не трогает вовсе), и
+    /// сбрасывал бы возраст клеткам, которые в этом тике не менялись.
+    /// Делегирует внутренней `reset_age_for_regions` — той же функции,
+    /// что использует настоящий `run_tick` (единая логика, не две
+    /// параллельные копии, из которых только одна была бы исправлена).
     pub fn reset_age(&mut self, regions: &[AffectedRegion]) {
-        let gen = self.grid.generation();
-        for region in regions {
-            for y in region.y_start..region.y_end {
-                for x in region.x_start..region.x_end {
-                    if let Some(cell) = self.grid.get_cell(x as usize, y as usize) {
-                        self.grid.storage.set(
-                            x as usize,
-                            y as usize,
-                            Cell {
-                                value: cell.value,
-                                born_at: gen,
-                            },
-                        );
-                    }
-                }
-            }
-        }
+        reset_age_for_regions(&mut self.grid, regions);
     }
 
     // ─── Терминация ───
 
+    /// Не мутирует `self` (не тик), поэтому не может пройти через
+    /// `Engine::run_tick` — арбитраж строится напрямую через
+    /// `arbitrate_with_cam` с РЕАЛЬНЫМИ (не пустыми, в отличие от
+    /// `Engine::arbitrate`/`raw_phases.rs`) `starvation_counters`/
+    /// `feedback_counters`, читаемыми только на просмотр
+    /// (`self.state.snapshot()`, ничего не пишется назад) — иначе вердикт
+    /// для правил со `starvation_after`/`feedback` был бы неверным
+    /// (тот же класс бага, что и в `compose_with`, ниже).
+    ///
+    /// Честное ограничение, оставшееся и после этого фикса: гейты
+    /// `memory`/`max_activations` применяются как фильтр матчей ДО
+    /// арбитража внутри `run_tick_with_cache`, не внутри самого
+    /// `arbitrate_with_cam` — правило, которое реальный тик бы отфильтровал
+    /// этим гейтом, здесь всё ещё виден как найденный матч, так что вердикт
+    /// может ошибочно показать `Active` вместо `Stable` для таких правил.
     pub fn detect_termination(&self, tick: u32) -> TerminationVerdict {
         let search_coords = resolve_search_coords_peek(&self.grid, &self.search_radius_cache);
         let matches = detect_matches_with_group_data(&self.grid, &self.group_cache, &search_coords);
         if matches.is_empty() {
             TerminationVerdict::Stable
         } else if tick > 0 {
-            let accepted = self.arbitrate(matches);
+            let snapshot = self.state.snapshot();
+            let (accepted, _) = arbitrate_with_cam(
+                matches,
+                &self.rule_index,
+                &self.rule_cache,
+                (self.grid.width(), self.grid.height()),
+                &CamPositions::default(),
+                self.grid.generation() as u32,
+                snapshot.starvation_counters(),
+                snapshot.feedback_counters(),
+                &[],
+                |x, y| self.grid.get_age(x, y) as u32,
+            );
             if accepted.is_empty() {
                 TerminationVerdict::Stable
             } else {
@@ -52,6 +72,18 @@ impl<S: GridStorage> Engine<S> {
     }
 
     /// Проверить возможность композиции.
+    ///
+    /// Гоняет РЕАЛЬНЫЕ тики через [`Engine::run_tick`] (полный стейтфул-
+    /// пайплайн), а не свои собственные detect/arbitrate/apply — раньше
+    /// использовал "сырые" `Engine::arbitrate`/`Engine::apply_matches`,
+    /// не хранящие состояние между вызовами (см. `raw_phases.rs`'s doc-
+    /// комментарий), из-за чего `cam`/`starvation_after`/`feedback`/
+    /// `memory`/`max_activations` были no-op для ЭТОЙ проверки — вердикт
+    /// (`Bounded`/`Divergent`/`NonTerminating`) мог быть неверным для
+    /// любого набора правил с этими расширениями (тот же класс бага, что
+    /// был у `LayeredEngine`; подтверждено эмпирически:
+    /// правило со `starvation_after` выигрывало 6/20 через `run_tick`,
+    /// 0/20 через сырые методы).
     pub fn compose_with(&mut self) -> CompositionVerdict {
         let initial_cells: Vec<(usize, usize, Cell)> = {
             let mut v = Vec::new();
@@ -69,27 +101,10 @@ impl<S: GridStorage> Engine<S> {
             if tick > 1000 {
                 return CompositionVerdict::NonTerminating;
             }
-            let search_coords = resolve_search_coords_advance(&mut self.grid, &self.search_radius_cache);
-            let matches = detect_matches_with_group_data(&self.grid, &self.group_cache, &search_coords);
-            if matches.is_empty() {
-                break;
-            }
-            // См. комментарий в свободной функции run_tick: помечаем
-            // ВСЕ найденные совпадения, не только принятые — проигравшее
-            // арбитраж совпадение остаётся актуальным условием и должно
-            // переоцениваться на следующем тике.
-            for m in &matches {
-                self.grid.mark_dirty(m.x as usize, m.y as usize);
-            }
-            let accepted = self.arbitrate(matches);
+            let (accepted, _outputs) = self.run_tick();
             if accepted.is_empty() {
                 break;
             }
-            let (regions, _) = self.apply_matches(accepted);
-
-            // Старение
-            self.grid.advance_age();
-            self.reset_age(&regions);
             tick += 1;
         }
 

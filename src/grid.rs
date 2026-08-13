@@ -53,8 +53,16 @@ use crate::types::{BoundaryBuffer, Cell};
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
 pub struct Grid<S: GridStorage> {
-    /// Внутреннее хранилище.
-    pub storage: S,
+    /// Внутреннее хранилище. Приватное — `Grid::set_cell` (единственная
+    /// точка записи, синхронизирующая `active_coords`/`dirty_coords`)
+    /// обязана быть НЕ просто конвенцией, а закрытой на уровне типов: было
+    /// найдено, что несколько мест (`reset_age_for_regions`,
+    /// `Engine::reset_age`, а также один бенчмарк) писали через
+    /// `storage.set(...)` напрямую, в обход этой синхронизации. Только
+    /// чтение (`Grid::storage()`, ниже) остаётся
+    /// открытым — read-only ссылка не может обойти `set_cell` физически,
+    /// раз у неё нет `&mut`.
+    storage: S,
     /// Граничные буферы: координата → буфер.
     pub boundaries: HashMap<(usize, usize), BoundaryBuffer>,
     /// Cache-friendly линейный Vec активных (не-дефолтных) координат.
@@ -210,6 +218,15 @@ impl<S: GridStorage> Grid<S> {
         self.generation += 1;
     }
 
+    /// Read-only доступ к хранилищу — для типо-специфичных методов, которых
+    /// нет в трейте `GridStorage` (например `ChunkStorage::active_chunks`).
+    /// Только `&`, не `&mut` — намеренно: единственный способ писать в
+    /// хранилище остаётся [`Grid::set_cell`] (см. doc-комментарий поля
+    /// `storage`).
+    pub fn storage(&self) -> &S {
+        &self.storage
+    }
+
     /// Ширина решётки.
     pub fn width(&self) -> usize {
         self.storage.width()
@@ -236,9 +253,9 @@ impl<S: GridStorage> Grid<S> {
     /// (`matcher.rs`) хранят координату как `u32` ради памяти на hot path,
     /// без этой проверки клетка за пределами `u32::MAX` на `ChunkStorage`
     /// молча ПОРТИТ данные другой, far-меньшей клетки вместо того, чтобы
-    /// ошибиться явно (найдено целенаправленной адверсариальной проверкой,
-    /// см. `CHANGELOG.md`) — громкая паника здесь строго лучше тихого
-    /// усечения `cx as u32` дальше по пайплайну.
+    /// ошибиться явно (найдено целенаправленной адверсариальной проверкой)
+    /// — громкая паника здесь строго лучше тихого усечения `cx as u32`
+    /// дальше по пайплайну.
     pub fn set_cell(&mut self, x: usize, y: usize, cell: Cell) {
         assert!(
             x <= u32::MAX as usize && y <= u32::MAX as usize,

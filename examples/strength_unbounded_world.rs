@@ -16,7 +16,7 @@ fn main() {
 
     println!(
         "Границы решётки: {:?} (нет — мир не ограничен)\n",
-        grid.storage.bounds()
+        grid.storage().bounds()
     );
 
     let far_points: [(usize, usize); 4] = [
@@ -49,6 +49,6 @@ fn main() {
     println!(
         "\nВсего создано чанков 64x64: {} — память пропорциональна ТРОНУТОМУ,\n\
          а не номинальному размеру мира (тут номинально почти 10^18 клеток).",
-        grid.storage.active_chunks().count()
+        grid.storage().active_chunks().count()
     );
 }
