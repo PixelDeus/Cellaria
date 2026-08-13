@@ -10,14 +10,17 @@ use cellaria::ConflictGraph;
 fn main() {
     // (файл, ожидаемый вердикт, откуда известно ожидание)
     let cases: &[(&str, bool)] = &[
-        ("configs/parallel.yaml", true),   // "Параллельное применение: два непересекающихся правила"
-        ("configs/turing.yaml", true),     // "одно правило на состояние" — conflict-free по конструкции
-        ("configs/conflict.yaml", false),  // "цепочки пересекаются"
+        ("configs/parallel.yaml", true), // "Параллельное применение: два непересекающихся правила"
+        ("configs/turing.yaml", true),   // "одно правило на состояние" — conflict-free по конструкции
+        ("configs/conflict.yaml", false), // "цепочки пересекаются"
         ("configs/cf_ca_counterexample.yaml", false), // "недетерминизм при равных приоритетах"
         ("configs/worst_case_arbitration.yaml", false), // "худший случай для CA-арбитража"
     ];
 
-    println!("{:<45} | {:>10} | {:>10} | {}", "конфиг", "ожидание", "вердикт", "совпало?");
+    println!(
+        "{:<45} | {:>10} | {:>10} | {}",
+        "конфиг", "ожидание", "вердикт", "совпало?"
+    );
     println!("{}", "-".repeat(80));
 
     let mut all_match = true;

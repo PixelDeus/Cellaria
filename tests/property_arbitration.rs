@@ -113,25 +113,32 @@ fn rule_strategy() -> impl Strategy<Value = Rule> {
         // active_only — раньше вообще не генерировался (всегда false).
         any::<bool>(),
     )
-        .prop_map(|((head, pattern), shift_specs, changes, priority, min_age, overflow, active_only)| {
-            let shifts: Vec<Vec<ShiftSpec>> = shift_specs
-                .into_iter()
-                .map(|(dir, steps)| vec![ShiftSpec::new(dir, steps)])
-                .collect();
-            Rule {
-                id: vec![CellType(head)],
-                pattern,
-                shifts,
-                changes,
-                active_only,
-                priority,
-                min_age,
-                overflow,
-                cam: None,
-                tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-            }
-        })
+        .prop_map(
+            |((head, pattern), shift_specs, changes, priority, min_age, overflow, active_only)| {
+                let shifts: Vec<Vec<ShiftSpec>> = shift_specs
+                    .into_iter()
+                    .map(|(dir, steps)| vec![ShiftSpec::new(dir, steps)])
+                    .collect();
+                Rule {
+                    id: vec![CellType(head)],
+                    pattern,
+                    shifts,
+                    changes,
+                    active_only,
+                    priority,
+                    min_age,
+                    overflow,
+                    cam: None,
+                    tie_break: 0,
+                    starvation_after: None,
+                    feedback: None,
+                    recursion: None,
+                    memory: None,
+                    max_activations: None,
+                    cross_layer_reads: Vec::new(),
+                }
+            },
+        )
 }
 
 fn rule_set_strategy() -> impl Strategy<Value = Vec<Rule>> {
@@ -154,9 +161,8 @@ fn make_rule_index(rules: &[Rule]) -> HashMap<CellType, Vec<Rule>> {
 
 /// (width, height, содержимое width×height клеток, row-major).
 fn grid_strategy() -> impl Strategy<Value = (usize, usize, Vec<u8>)> {
-    (MIN_SIDE..=MAX_SIDE, MIN_SIDE..=MAX_SIDE).prop_flat_map(|(w, h)| {
-        prop::collection::vec(0..=CELL_ALPHABET, w * h).prop_map(move |cells| (w, h, cells))
-    })
+    (MIN_SIDE..=MAX_SIDE, MIN_SIDE..=MAX_SIDE)
+        .prop_flat_map(|(w, h)| prop::collection::vec(0..=CELL_ALPHABET, w * h).prop_map(move |cells| (w, h, cells)))
 }
 
 fn build_grid(width: usize, height: usize, cells: &[u8]) -> Grid<VecStorage> {
@@ -166,7 +172,14 @@ fn build_grid(width: usize, height: usize, cells: &[u8]) -> Grid<VecStorage> {
         if v != 0 {
             let x = i % width;
             let y = i / width;
-            grid.set_cell(x, y, Cell { value: CellValue(CellType(v)), born_at: 0 });
+            grid.set_cell(
+                x,
+                y,
+                Cell {
+                    value: CellValue(CellType(v)),
+                    born_at: 0,
+                },
+            );
         }
     }
     grid
@@ -568,9 +581,13 @@ fn reference_full_scan_tick(grid: &mut Grid<VecStorage>, rule_index: &HashMap<Ce
         return;
     }
     let rule_cache = build_rule_data_cache(rule_index);
-    let accepted = arbitrate(matches, rule_index, &rule_cache, (grid.width(), grid.height()), |x, y| {
-        grid.get_age(x, y) as u32
-    });
+    let accepted = arbitrate(
+        matches,
+        rule_index,
+        &rule_cache,
+        (grid.width(), grid.height()),
+        |x, y| grid.get_age(x, y) as u32,
+    );
     if accepted.is_empty() {
         grid.advance_age();
         return;
@@ -586,7 +603,14 @@ fn reference_full_scan_tick(grid: &mut Grid<VecStorage>, rule_index: &HashMap<Ce
     for region in &regions {
         for &(x, y) in &region.written_cells {
             if let Some(cell) = grid.get_cell(x as usize, y as usize) {
-                grid.set_cell(x as usize, y as usize, Cell { value: cell.value, born_at: gen });
+                grid.set_cell(
+                    x as usize,
+                    y as usize,
+                    Cell {
+                        value: cell.value,
+                        born_at: gen,
+                    },
+                );
             }
         }
     }
@@ -619,7 +643,12 @@ fn conflict_cluster_rule_index(m: usize) -> (HashMap<CellType, Vec<Rule>>, cella
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect();
     let rule_index = make_rule_index(&rules);
@@ -638,23 +667,54 @@ fn test_arbitrate_spatial_matches_centralized_many_isolated_clusters() {
     for cluster in 0..N_CLUSTERS {
         let x = cluster * SPACING;
         for rule_idx in 0..5usize {
-            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+            matches.push(RuleMatch {
+                x,
+                y: 0,
+                head: CellType(1),
+                rule_idx,
+            });
         }
     }
 
     let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(2654435761) % 7; // произвольный, но детерминированный "возраст"
 
-    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
-    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), REACH, get_age);
+    let centralized = arbitrate(
+        matches.clone(),
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        get_age,
+    );
+    let spatial = arbitrate_spatial(
+        matches,
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        REACH,
+        get_age,
+    );
 
     let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
     let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
 
-    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
-    assert_eq!(centralized_set, spatial_set, "разбиение на полосы должно принимать РОВНО ТЕ ЖЕ матчи, что централизованный арбитраж");
+    assert_eq!(
+        centralized.len(),
+        spatial.len(),
+        "разное число принятых матчей: {} vs {}",
+        centralized.len(),
+        spatial.len()
+    );
+    assert_eq!(
+        centralized_set, spatial_set,
+        "разбиение на полосы должно принимать РОВНО ТЕ ЖЕ матчи, что централизованный арбитраж"
+    );
 
     // Ровно один победитель на кластер (M конкурирующих правил за одну клетку).
-    assert_eq!(spatial.len() as u32, N_CLUSTERS, "должен победить ровно один матч на кластер");
+    assert_eq!(
+        spatial.len() as u32,
+        N_CLUSTERS,
+        "должен победить ровно один матч на кластер"
+    );
 }
 
 #[test]
@@ -671,20 +731,41 @@ fn test_arbitrate_spatial_matches_centralized_dense_adjacent_clusters() {
     for cluster in 0..N_CLUSTERS {
         let x = cluster * SPACING;
         for rule_idx in 0..3usize {
-            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+            matches.push(RuleMatch {
+                x,
+                y: 0,
+                head: CellType(1),
+                rule_idx,
+            });
         }
     }
 
     let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(40503) % 5;
 
-    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
-    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), REACH, get_age);
+    let centralized = arbitrate(
+        matches.clone(),
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        get_age,
+    );
+    let spatial = arbitrate_spatial(
+        matches,
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        REACH,
+        get_age,
+    );
 
     let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
     let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
 
     assert_eq!(centralized.len(), spatial.len());
-    assert_eq!(centralized_set, spatial_set, "плотная упаковка (много boundary-матчей) не должна расходиться с централизованным арбитражем");
+    assert_eq!(
+        centralized_set, spatial_set,
+        "плотная упаковка (много boundary-матчей) не должна расходиться с централизованным арбитражем"
+    );
 }
 
 /// Lemma 6 (спатиальная декомпозиция арбитража) доказана для модели БЕЗ
@@ -701,7 +782,10 @@ fn test_arbitrate_spatial_matches_centralized_dense_adjacent_clusters() {
 /// в mod.rs) — тест проверяет саму АЛГОРИТМИЧЕСКУЮ корректность band-split
 /// при данном (корректном) reach, не корректность вычисления reach как
 /// такового.
-fn recursion_cluster_rule_index(m: usize, max_depth: u8) -> (HashMap<CellType, Vec<Rule>>, cellaria::conflict_analyzer::RuleDataCache) {
+fn recursion_cluster_rule_index(
+    m: usize,
+    max_depth: u8,
+) -> (HashMap<CellType, Vec<Rule>>, cellaria::conflict_analyzer::RuleDataCache) {
     let rules: Vec<Rule> = (0..m)
         .map(|i| Rule {
             id: vec![CellType(1)],
@@ -716,9 +800,13 @@ fn recursion_cluster_rule_index(m: usize, max_depth: u8) -> (HashMap<CellType, V
             tie_break: 0,
             starvation_after: None,
             feedback: None,
-            recursion: Some(cellaria::types::RecursionSpec { max_depth, direction: Direction::Right }),
+            recursion: Some(cellaria::types::RecursionSpec {
+                max_depth,
+                direction: Direction::Right,
+            }),
             memory: None,
-            max_activations: None, cross_layer_reads: Vec::new(),
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect();
     let rule_index = make_rule_index(&rules);
@@ -738,7 +826,11 @@ fn max_reach_from_cache(rule_cache: &cellaria::conflict_analyzer::RuleDataCache)
         .flat_map(|rules| rules.iter())
         .map(|data| {
             let (min_x, max_x, min_y, max_y) = data.bbox;
-            min_x.unsigned_abs().max(max_x.unsigned_abs()).max(min_y.unsigned_abs()).max(max_y.unsigned_abs()) as i32
+            min_x
+                .unsigned_abs()
+                .max(max_x.unsigned_abs())
+                .max(min_y.unsigned_abs())
+                .max(max_y.unsigned_abs()) as i32
         })
         .max()
         .unwrap_or(0)
@@ -757,21 +849,49 @@ fn test_arbitrate_spatial_matches_centralized_recursion_isolated_clusters() {
     for cluster in 0..N_CLUSTERS {
         let x = cluster * spacing;
         for rule_idx in 0..5usize {
-            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+            matches.push(RuleMatch {
+                x,
+                y: 0,
+                head: CellType(1),
+                rule_idx,
+            });
         }
     }
 
     let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(2654435761) % 7;
 
-    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
-    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
+    let centralized = arbitrate(
+        matches.clone(),
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        get_age,
+    );
+    let spatial = arbitrate_spatial(
+        matches,
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        reach,
+        get_age,
+    );
 
     let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
     let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
 
-    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+    assert_eq!(
+        centralized.len(),
+        spatial.len(),
+        "разное число принятых матчей: {} vs {}",
+        centralized.len(),
+        spatial.len()
+    );
     assert_eq!(centralized_set, spatial_set, "разбиение на полосы с recursion-расширенным reach должно принимать РОВНО ТЕ ЖЕ матчи, что централизованный арбитраж");
-    assert_eq!(spatial.len() as u32, N_CLUSTERS, "должен победить ровно один матч на кластер");
+    assert_eq!(
+        spatial.len() as u32,
+        N_CLUSTERS,
+        "должен победить ровно один матч на кластер"
+    );
 }
 
 #[test]
@@ -793,26 +913,56 @@ fn test_arbitrate_spatial_matches_centralized_recursion_dense_overlapping_writes
     const MAX_DEPTH: u8 = 3;
     let (rule_index, rule_cache) = recursion_cluster_rule_index(3, MAX_DEPTH);
     let reach = max_reach_from_cache(&rule_cache);
-    assert!(reach > 1, "recursion must genuinely widen the reach beyond the pattern's own 1");
+    assert!(
+        reach > 1,
+        "recursion must genuinely widen the reach beyond the pattern's own 1"
+    );
 
     const N_ANCHORS: u32 = 3000;
     let mut matches: Vec<RuleMatch> = Vec::new();
     for x in 0..N_ANCHORS {
         for rule_idx in 0..3usize {
-            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+            matches.push(RuleMatch {
+                x,
+                y: 0,
+                head: CellType(1),
+                rule_idx,
+            });
         }
     }
 
     let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(40503) % 5;
 
-    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
-    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
+    let centralized = arbitrate(
+        matches.clone(),
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        get_age,
+    );
+    let spatial = arbitrate_spatial(
+        matches,
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        reach,
+        get_age,
+    );
 
     let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
     let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
 
-    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
-    assert_eq!(centralized_set, spatial_set, "плотная упаковка recursion-матчей не должна расходиться с централизованным арбитражем");
+    assert_eq!(
+        centralized.len(),
+        spatial.len(),
+        "разное число принятых матчей: {} vs {}",
+        centralized.len(),
+        spatial.len()
+    );
+    assert_eq!(
+        centralized_set, spatial_set,
+        "плотная упаковка recursion-матчей не должна расходиться с централизованным арбитражем"
+    );
 }
 
 /// Тот же класс стресс-теста, что нашёл реальный баг boundary-vs-core (см.
@@ -844,7 +994,12 @@ fn test_arbitrate_spatial_matches_centralized_plain_shift_dense_overlapping_writ
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect();
     let rule_index = make_rule_index(&rules);
@@ -856,19 +1011,43 @@ fn test_arbitrate_spatial_matches_centralized_plain_shift_dense_overlapping_writ
     let mut matches: Vec<RuleMatch> = Vec::new();
     for x in 0..N_ANCHORS {
         for rule_idx in 0..3usize {
-            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+            matches.push(RuleMatch {
+                x,
+                y: 0,
+                head: CellType(1),
+                rule_idx,
+            });
         }
     }
 
     let get_age = |x: usize, _y: usize| (x as u32).wrapping_mul(40503) % 5;
 
-    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
-    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
+    let centralized = arbitrate(
+        matches.clone(),
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        get_age,
+    );
+    let spatial = arbitrate_spatial(
+        matches,
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        reach,
+        get_age,
+    );
 
     let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
     let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
 
-    assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+    assert_eq!(
+        centralized.len(),
+        spatial.len(),
+        "разное число принятых матчей: {} vs {}",
+        centralized.len(),
+        spatial.len()
+    );
     assert_eq!(centralized_set, spatial_set, "плотная упаковка ОБЫЧНЫХ сдвигов не должна расходиться с централизованным арбитражем -- самый частый случай, впервые проверен только сегодня");
 }
 
@@ -906,7 +1085,12 @@ fn test_arbitrate_spatial_no_refcell_reentrancy_panic_with_many_matches_per_band
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect();
     let rule_index = make_rule_index(&rules);
@@ -916,7 +1100,12 @@ fn test_arbitrate_spatial_no_refcell_reentrancy_panic_with_many_matches_per_band
     let mut matches: Vec<RuleMatch> = Vec::new();
     for x in 0..total_anchors as u32 {
         for rule_idx in 0..2usize {
-            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+            matches.push(RuleMatch {
+                x,
+                y: 0,
+                head: CellType(1),
+                rule_idx,
+            });
         }
     }
 
@@ -926,9 +1115,28 @@ fn test_arbitrate_spatial_no_refcell_reentrancy_panic_with_many_matches_per_band
     // может случайно не задеть её (см. сессию: понадобилось 3 тика на
     // 1M клеток, чтобы проявилось первый раз).
     for _ in 0..5 {
-        let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
-        let spatial = arbitrate_spatial(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
-        assert_eq!(centralized.len(), spatial.len(), "разное число принятых матчей: {} vs {}", centralized.len(), spatial.len());
+        let centralized = arbitrate(
+            matches.clone(),
+            &rule_index,
+            &rule_cache,
+            (usize::MAX, usize::MAX),
+            get_age,
+        );
+        let spatial = arbitrate_spatial(
+            matches.clone(),
+            &rule_index,
+            &rule_cache,
+            (usize::MAX, usize::MAX),
+            reach,
+            get_age,
+        );
+        assert_eq!(
+            centralized.len(),
+            spatial.len(),
+            "разное число принятых матчей: {} vs {}",
+            centralized.len(),
+            spatial.len()
+        );
     }
 }
 
@@ -985,7 +1193,12 @@ fn test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_reject
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         // W (rule_idx 1) -- пишет свою клетку И клетку на dx=+2 (даёт reach=2).
         Rule {
@@ -999,7 +1212,12 @@ fn test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_reject
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         // B (rule_idx 2) -- пишет только свою клетку, но выше приоритетом всех.
         Rule {
@@ -1013,7 +1231,12 @@ fn test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_reject
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
     ];
     let rule_index = make_rule_index(&rules);
@@ -1038,7 +1261,12 @@ fn test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_reject
     for cluster in 0..N_FILLER {
         let x = cluster * SPACING;
         for rule_idx in 0..3usize {
-            matches.push(RuleMatch { x, y: 0, head: CellType(1), rule_idx });
+            matches.push(RuleMatch {
+                x,
+                y: 0,
+                head: CellType(1),
+                rule_idx,
+            });
         }
     }
 
@@ -1058,7 +1286,10 @@ fn test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_reject
     // Полоса 0 -- НЕ последняя (num_bands >= 2), значит её правая граница
     // считается обычной формулой, не спецслучаем "max_x + 1" последней полосы.
     let band0_end = min_x + band_width;
-    assert!(band_width > 20, "band 0 must be wide enough that dist_left(x_pocket) is trivially >= margin -- got band_width={band_width}");
+    assert!(
+        band_width > 20,
+        "band 0 must be wide enough that dist_left(x_pocket) is trivially >= margin -- got band_width={band_width}"
+    );
 
     // C стоит так, что dist_right(C) == margin (core, но не safe: margin <=
     // dist_right < safe_margin). C+2 (B) стоит так, что dist_right(C+2) <
@@ -1069,7 +1300,10 @@ fn test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_reject
     let dist_right_c = (band0_end - 1).saturating_sub(x_c);
     let dist_right_b = (band0_end - 1).saturating_sub(x_b);
     assert!(dist_right_c >= margin && dist_right_c < safe_margin, "C must be core but at-risk (not safe) -- got dist_right={dist_right_c}, margin={margin}, safe_margin={safe_margin}");
-    assert!(dist_right_b < margin, "C+2 must be classified boundary outright -- got dist_right={dist_right_b}, margin={margin}");
+    assert!(
+        dist_right_b < margin,
+        "C+2 must be classified boundary outright -- got dist_right={dist_right_b}, margin={margin}"
+    );
 
     // Защита от случайного совпадения с наполнителем (SPACING=1000 -- при
     // band_width, не кратном 1000 практически невозможно, но проверяем
@@ -1091,16 +1325,44 @@ fn test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_reject
     // ролей (обнаружено эмпирически: первая версия этого теста проходила,
     // но выяснилось, что она из-за этой путаницы вообще не строила
     // задуманный сценарий).
-    matches.push(RuleMatch { x: x_c, y: 0, head: CellType(1), rule_idx: 2 }); // L (priority 0 -> index 2 after sort)
-    matches.push(RuleMatch { x: x_c, y: 0, head: CellType(1), rule_idx: 1 }); // W (priority 1 -> index 1 after sort)
-    matches.push(RuleMatch { x: x_b, y: 0, head: CellType(1), rule_idx: 0 }); // B (priority 2 -> index 0 after sort)
+    matches.push(RuleMatch {
+        x: x_c,
+        y: 0,
+        head: CellType(1),
+        rule_idx: 2,
+    }); // L (priority 0 -> index 2 after sort)
+    matches.push(RuleMatch {
+        x: x_c,
+        y: 0,
+        head: CellType(1),
+        rule_idx: 1,
+    }); // W (priority 1 -> index 1 after sort)
+    matches.push(RuleMatch {
+        x: x_b,
+        y: 0,
+        head: CellType(1),
+        rule_idx: 0,
+    }); // B (priority 2 -> index 0 after sort)
 
     // Все priority различны (0/1/2) -- возраст не участвует в разрешении,
     // берём константу, чтобы не вносить лишнюю степень свободы.
     let get_age = |_x: usize, _y: usize| 0u32;
 
-    let centralized = arbitrate(matches.clone(), &rule_index, &rule_cache, (usize::MAX, usize::MAX), get_age);
-    let spatial = arbitrate_spatial(matches, &rule_index, &rule_cache, (usize::MAX, usize::MAX), reach, get_age);
+    let centralized = arbitrate(
+        matches.clone(),
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        get_age,
+    );
+    let spatial = arbitrate_spatial(
+        matches,
+        &rule_index,
+        &rule_cache,
+        (usize::MAX, usize::MAX),
+        reach,
+        get_age,
+    );
 
     let centralized_set: HashSet<(u32, u32, usize)> = centralized.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
     let spatial_set: HashSet<(u32, u32, usize)> = spatial.iter().map(|m| (m.x, m.y, m.rule_idx)).collect();
@@ -1149,21 +1411,36 @@ fn test_multiple_engines_run_concurrently_on_shared_rayon_pool_without_cross_con
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         };
         let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
         rule_index.insert(CellType(1), vec![rule]);
         let mut grid = Grid::new(VecStorage::new(side, side), HashSet::new());
         for y in 0..side {
             for x in 0..side {
-                grid.set_cell(x, y, Cell { value: CellValue(CellType(1)), born_at: 0 });
+                grid.set_cell(
+                    x,
+                    y,
+                    Cell {
+                        value: CellValue(CellType(1)),
+                        born_at: 0,
+                    },
+                );
             }
         }
         cellaria::engine::Engine::new(grid, rule_index)
     }
 
     fn dump(engine: &cellaria::engine::Engine<VecStorage>, side: usize) -> Vec<Cell> {
-        (0..side).flat_map(|y| (0..side).map(move |x| (x, y))).map(|(x, y)| engine.grid().get_cell(x, y).copied().unwrap_or_default()).collect()
+        (0..side)
+            .flat_map(|y| (0..side).map(move |x| (x, y)))
+            .map(|(x, y)| engine.grid().get_cell(x, y).copied().unwrap_or_default())
+            .collect()
     }
 
     const SIDE: usize = 90; // 8100 клеток > SPATIAL_THRESHOLD=4096 -- band-split реально включается
@@ -1191,7 +1468,9 @@ fn test_multiple_engines_run_concurrently_on_shared_rayon_pool_without_cross_con
         .collect();
 
     for (i, handle) in handles.into_iter().enumerate() {
-        let result = handle.join().unwrap_or_else(|e| panic!("engine {i} thread panicked (likely reentrancy): {e:?}"));
+        let result = handle
+            .join()
+            .unwrap_or_else(|e| panic!("engine {i} thread panicked (likely reentrancy): {e:?}"));
         assert_eq!(result, reference_dump, "engine {i}, run concurrently with {} others on the shared rayon pool, diverged from the same scenario run alone -- cross-instance interference", N_ENGINES - 1);
     }
 }

@@ -39,12 +39,12 @@ const GEN_ID: u8 = 66; // id правила, которое решётка сг�
 // Фиксированные байты пакета (см. rule_store.rs::deserialize_packet), кроме
 // "steps" — он и есть посчитанное число.
 const PACKET_FIXED: [(usize, u8); 6] = [
-    (0, 10),        // priority
-    (1, 1),         // id_len
-    (2, GEN_ID),    // id_byte
-    (3, 0xFE),      // SHIFT_FLAG
-    (4, 3),         // dir_byte = Right
-    (6, 0xFF),      // terminator
+    (0, 10),     // priority
+    (1, 1),      // id_len
+    (2, GEN_ID), // id_byte
+    (3, 0xFE),   // SHIFT_FLAG
+    (4, 3),      // dir_byte = Right
+    (6, 0xFF),   // terminator
 ];
 // Каждому фиксированному байту — свой зарезервированный тип клетки-перевозчика.
 const CARRIER_TYPES: [u8; 6] = [121, 122, 123, 124, 125, 126];
@@ -66,7 +66,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
 
@@ -92,7 +97,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         });
 
         // Тихо (никто не прилетал QUIET_THRESHOLD тиков) — перевести
@@ -112,7 +122,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             });
         }
         idx.insert(counter_id, rules);
@@ -134,7 +149,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(0),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }],
         );
     }
@@ -154,7 +174,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }],
         );
     }
@@ -170,10 +195,24 @@ fn run_experiment(num_pulses: usize) -> Option<(u8, ShiftSpec)> {
     output_buf.direction = "output".to_string();
     grid.set_boundary(WIDTH - 1, 0, output_buf);
 
-    grid.set_cell(COUNTER_X, 0, Cell { value: CellValue(CellType(COUNTER_BASE)), born_at: 0 });
+    grid.set_cell(
+        COUNTER_X,
+        0,
+        Cell {
+            value: CellValue(CellType(COUNTER_BASE)),
+            born_at: 0,
+        },
+    );
     for j in 0..num_pulses {
         let x = COUNTER_X + 2 * (j + 1);
-        grid.set_cell(x, 0, Cell { value: CellValue(CellType(PULSE)), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(PULSE)),
+                born_at: 0,
+            },
+        );
     }
 
     let mut engine = Engine::new(grid, build_rule_index());
@@ -198,7 +237,10 @@ fn run_experiment(num_pulses: usize) -> Option<(u8, ShiftSpec)> {
         }
     }
     let (dynamic_x, k) = dynamic?;
-    println!("Решётка сама насчитала: {} (клетка со значением {} стоит на x={})", k, k, dynamic_x);
+    println!(
+        "Решётка сама насчитала: {} (клетка со значением {} стоит на x={})",
+        k, k, dynamic_x
+    );
 
     // Фаза 2: ставим 6 перевозчиков фиксированных байт вокруг уже
     // посчитанного числа, в порядке, который сложится в правильный пакет.
@@ -207,9 +249,20 @@ fn run_experiment(num_pulses: usize) -> Option<(u8, ShiftSpec)> {
         // значит стоят БЛИЖЕ к выходу (больше x). Терминатор (byte_index 6)
         // идёт ПОСЛЕ — дальше от выхода.
         let offset = if byte_index < 5 { 2 * (5 - byte_index) } else { 2 };
-        let x = if byte_index < 5 { dynamic_x + offset } else { dynamic_x.saturating_sub(offset) };
+        let x = if byte_index < 5 {
+            dynamic_x + offset
+        } else {
+            dynamic_x.saturating_sub(offset)
+        };
         let gen = engine.grid().generation();
-        engine.grid_mut().set_cell(x, 0, Cell { value: CellValue(CellType(CARRIER_TYPES[i])), born_at: gen });
+        engine.grid_mut().set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(CARRIER_TYPES[i])),
+                born_at: gen,
+            },
+        );
     }
 
     for _ in 1..=(WIDTH as u32) {

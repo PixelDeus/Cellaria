@@ -43,23 +43,49 @@ fn build_universal_machine() -> HashMap<CellType, Vec<Rule>> {
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
     for v in 1u16..=254 {
         let t = CellType(v as u8);
-        idx.insert(t, vec![Rule {
-            id: vec![t], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
-            changes: vec![], active_only: false, priority: 10, min_age: 0,
-            overflow: OverflowAction::Write(0), // неси своё значение как есть
+        idx.insert(
+            t,
+            vec![Rule {
+                id: vec![t],
+                pattern: vec![],
+                shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+                changes: vec![],
+                active_only: false,
+                priority: 10,
+                min_age: 0,
+                overflow: OverflowAction::Write(0), // неси своё значение как есть
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            }],
+        );
+    }
+    idx.insert(
+        CellType(255),
+        vec![Rule {
+            id: vec![CellType(255)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: OverflowAction::WriteLiteral(0), // единственный, кому нужен буквальный 0
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        }]);
-    }
-    idx.insert(CellType(255), vec![Rule {
-        id: vec![CellType(255)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0,
-        overflow: OverflowAction::WriteLiteral(0), // единственный, кому нужен буквальный 0
-        cam: None,
-        tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-    }]);
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
+        }],
+    );
     idx
 }
 
@@ -73,7 +99,14 @@ fn place_carriers(grid: &mut Grid<VecStorage>, data: &[u8]) {
         // чтобы цель сдвига одного носителя не совпадала с исходной клеткой
         // соседа (см. обсуждение в strength_self_modification.rs).
         let start_x = 2 * (data.len() - 1 - i);
-        grid.set_cell(start_x, 0, Cell { value: CellValue(carrier), born_at: 0 });
+        grid.set_cell(
+            start_x,
+            0,
+            Cell {
+                value: CellValue(carrier),
+                born_at: 0,
+            },
+        );
     }
 }
 
@@ -102,7 +135,8 @@ fn main() {
         "До передачи: правило для типа {} — это правило-ретранслятор универсальной машины\n\
          (тип {} тоже используется как обычный носитель байта; после установки R оно будет\n\
          замещено настоящим поведением R — это ожидаемо, не ошибка): {:?}\n",
-        target_id, target_id,
+        target_id,
+        target_id,
         engine.rule_index().get(&CellType(target_id)).and_then(|v| v.first())
     );
 
@@ -120,7 +154,13 @@ fn main() {
             if let Some(q) = buf.queues.get(&0) {
                 if !q.is_empty() {
                     bytes_seen += q.len();
-                    println!("тик {:>3}: пришло {:?} (всего данных получено: {}/{})", tick, q.iter().map(|c| c.value.0.0).collect::<Vec<_>>(), bytes_seen, data.len());
+                    println!(
+                        "тик {:>3}: пришло {:?} (всего данных получено: {}/{})",
+                        tick,
+                        q.iter().map(|c| c.value.0 .0).collect::<Vec<_>>(),
+                        bytes_seen,
+                        data.len()
+                    );
                 }
             }
         }
@@ -130,7 +170,13 @@ fn main() {
         // только все байты данных получены.
         if !terminator_sent && bytes_seen >= data.len() {
             if let Some(buf) = engine.grid_mut().get_boundary_mut(WIDTH - 1, 0) {
-                buf.enqueue(0, Cell { value: CellValue(CellType(255)), born_at: 0 });
+                buf.enqueue(
+                    0,
+                    Cell {
+                        value: CellValue(CellType(255)),
+                        born_at: 0,
+                    },
+                );
                 terminator_sent = true;
                 println!("тик {:>3}: терминатор дописан", tick);
             }
@@ -163,7 +209,8 @@ fn main() {
                 && rule.changes == vec![(0, 0, cellaria::types::ChangeValue::Literal(new_value))];
             println!(
                 "Установленное правило: {:?}\nСовпадает с задуманным R: {}",
-                rule, if ok { "ДА" } else { "НЕТ" }
+                rule,
+                if ok { "ДА" } else { "НЕТ" }
             );
         }
         None => println!("Правило не установилось."),

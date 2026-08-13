@@ -26,11 +26,25 @@ fn build_cellaria_array(n: usize) -> Grid<VecStorage> {
     // лишняя дефолтная клетка внутри решётки, дающая один лишний тик.
     let storage = VecStorage::new(n + 1, 1);
     let mut grid = Grid::new(storage, Default::default());
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType(10)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(10)),
+            born_at: 0,
+        },
+    );
     // Массив без единой инверсии (все нули) — худший случай: маркер
     // проходит ВЕСЬ массив, ни разу не найдя пару (1,0).
     for i in 0..n {
-        grid.set_cell(i + 1, 0, Cell { value: CellValue(CellType(0)), born_at: 0 });
+        grid.set_cell(
+            i + 1,
+            0,
+            Cell {
+                value: CellValue(CellType(0)),
+                born_at: 0,
+            },
+        );
     }
     grid
 }
@@ -47,10 +61,18 @@ fn cellaria_sort_pass_rules() -> Vec<Rule> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     vec![
-        mk(vec![10, 1, 0], vec![(0, 0, ChangeValue::Literal(0)), (1, 0, ChangeValue::Literal(1))]),
+        mk(
+            vec![10, 1, 0],
+            vec![(0, 0, ChangeValue::Literal(0)), (1, 0, ChangeValue::Literal(1))],
+        ),
         mk(vec![10, 0, 1], vec![(0, 0, ChangeValue::Literal(10))]),
         mk(vec![10, 0, 0], vec![(0, 0, ChangeValue::Literal(10))]),
         mk(vec![10, 1, 1], vec![(0, 0, ChangeValue::Literal(10))]),
@@ -136,13 +158,19 @@ fn run_native_pass(n: usize) -> (u128, u64) {
 
 fn main() {
     println!("Пузырьковая сортировка: 'найти первую инверсию' — Cellaria vs прямой скан\n");
-    println!("{:>10} | {:>18} | {:>18} | {:>12}", "N (элем.)", "Cellaria (шаг/с)", "Native (шаг/с)", "во сколько раз");
+    println!(
+        "{:>10} | {:>18} | {:>18} | {:>12}",
+        "N (элем.)", "Cellaria (шаг/с)", "Native (шаг/с)", "во сколько раз"
+    );
     println!("{}", "-".repeat(68));
 
     for &n in &[10usize, 100, 1_000, 10_000, 100_000] {
         let (_, c_steps_once) = run_cellaria_pass_once(n);
         let (_, n_steps_once) = run_native_pass_once(n);
-        assert_eq!(c_steps_once, n_steps_once, "число сравнений должно совпадать — иначе алгоритмы не эквивалентны");
+        assert_eq!(
+            c_steps_once, n_steps_once,
+            "число сравнений должно совпадать — иначе алгоритмы не эквивалентны"
+        );
 
         let (c_ns, c_steps) = run_cellaria_pass(n);
         let (n_ns, n_steps) = run_native_pass(n);

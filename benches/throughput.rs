@@ -1,5 +1,5 @@
 use std::time::Instant;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use criterion::Criterion;
 
@@ -47,15 +47,19 @@ fn window_micros(normal: u128) -> u128 {
 /// и исправлен для 1E, просто не перенесён сюда при добавлении 1A.
 fn setup_no_shift(n: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
     let storage = VecStorage::new(n, n);
-    let mut grid = Grid::new(storage, HashSet::new());
+    let mut grid = Grid::from_storage(storage);
 
     for y in 0..n {
         for x in 0..n {
             let v = if (x + y) % 2 == 0 { 1 } else { 2 };
-            grid.set_cell(x, y, Cell {
-                value: CellValue(CellType(v)),
-                born_at: 0,
-            });
+            grid.set_cell(
+                x,
+                y,
+                Cell {
+                    value: CellValue(CellType(v)),
+                    born_at: 0,
+                },
+            );
         }
     }
 
@@ -63,33 +67,37 @@ fn setup_no_shift(n: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) 
         id: vec![CellType(1), CellType(2)],
         pattern: vec![(0i8, 0i8, CellType(1)), (1i8, 0i8, CellType(2))],
         shifts: vec![],
-        changes: vec![
-            (0, 0, ChangeValue::Literal(3)),
-            (1, 0, ChangeValue::Literal(4)),
-        ],
+        changes: vec![(0, 0, ChangeValue::Literal(3)), (1, 0, ChangeValue::Literal(4))],
         active_only: false,
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let backward = Rule {
         id: vec![CellType(3), CellType(4)],
         pattern: vec![(0i8, 0i8, CellType(3)), (1i8, 0i8, CellType(4))],
         shifts: vec![],
-        changes: vec![
-            (0, 0, ChangeValue::Literal(1)),
-            (1, 0, ChangeValue::Literal(2)),
-        ],
+        changes: vec![(0, 0, ChangeValue::Literal(1)), (1, 0, ChangeValue::Literal(2))],
         active_only: false,
         priority: 10,
         min_age: 0,
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
 
     (grid, helpers::make_rule_index(vec![forward, backward]))
@@ -105,21 +113,22 @@ fn setup_no_shift(n: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) 
 /// throughput. На безграничной решётке той же лишний край просто
 /// отсутствует — активность подтверждена сохраняющейся 2000+ тиков подряд.
 fn setup_with_shift(n: usize) -> (Grid<ChunkStorage>, HashMap<CellType, Vec<Rule>>) {
-    let mut grid = Grid::new(ChunkStorage::new(), Default::default());
+    let mut grid = Grid::from_storage(ChunkStorage::new());
     for i in 0..n {
-        grid.set_cell(i, 0, Cell {
-            value: CellValue(CellType(1)),
-            born_at: 0,
-        });
+        grid.set_cell(
+            i,
+            0,
+            Cell {
+                value: CellValue(CellType(1)),
+                born_at: 0,
+            },
+        );
     }
 
     let rules = (0..n)
         .map(|i| Rule {
             id: vec![CellType(1), CellType(i as u8 % 4)],
-            pattern: vec![
-                (0i8, 0i8, CellType(1)),
-                (1i8, 0i8, CellType(i as u8 % 4)),
-            ],
+            pattern: vec![(0i8, 0i8, CellType(1)), (1i8, 0i8, CellType(i as u8 % 4))],
             shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
             changes: vec![(1, 0, ChangeValue::Literal(1))],
             active_only: false,
@@ -128,7 +137,12 @@ fn setup_with_shift(n: usize) -> (Grid<ChunkStorage>, HashMap<CellType, Vec<Rule
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect();
 
@@ -138,10 +152,14 @@ fn setup_with_shift(n: usize) -> (Grid<ChunkStorage>, HashMap<CellType, Vec<Rule
 fn setup_conflict(m: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
     let rules = helpers::priority_conflict_rules(m);
     let mut grid = helpers::make_grid(1, 1);
-    grid.set_cell(0, 0, Cell {
-        value: CellValue(CellType(1)),
-        born_at: 0,
-    });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(1)),
+            born_at: 0,
+        },
+    );
     (grid, helpers::make_rule_index(rules))
 }
 
@@ -154,10 +172,14 @@ fn setup_conflict(m: usize) -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) 
 /// осциллятор 1⇄2 держит правило активным всё окно измерения.
 fn setup_single_cell() -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
     let mut grid = helpers::make_grid(1, 1);
-    grid.set_cell(0, 0, Cell {
-        value: CellValue(CellType(1)),
-        born_at: 0,
-    });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(1)),
+            born_at: 0,
+        },
+    );
 
     let rule_1_to_2 = Rule {
         id: vec![CellType(1)],
@@ -170,7 +192,12 @@ fn setup_single_cell() -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let rule_2_to_1 = Rule {
         id: vec![CellType(2)],
@@ -183,7 +210,12 @@ fn setup_single_cell() -> (Grid<VecStorage>, HashMap<CellType, Vec<Rule>>) {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     (grid, helpers::make_rule_index(vec![rule_1_to_2, rule_2_to_1]))
 }
@@ -263,7 +295,7 @@ pub fn empty_tick_bench() -> (u128, u128) {
         run_tick(&mut grid, &rule_index);
         total_ticks += 1;
     }
-    let elapsed_ns = start.elapsed().as_nanos() as u128;
+    let elapsed_ns = start.elapsed().as_nanos();
     (elapsed_ns, total_ticks)
 }
 

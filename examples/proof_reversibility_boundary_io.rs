@@ -52,7 +52,12 @@ fn shift_rule(direction: Direction, overflow: OverflowAction) -> HashMap<CellTyp
             overflow,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
     idx
@@ -60,7 +65,14 @@ fn shift_rule(direction: Direction, overflow: OverflowAction) -> HashMap<CellTyp
 
 fn build_grid() -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
-    grid.set_cell(START_X, 0, Cell { value: CellValue::new(TOKEN), born_at: 0 });
+    grid.set_cell(
+        START_X,
+        0,
+        Cell {
+            value: CellValue::new(TOKEN),
+            born_at: 0,
+        },
+    );
     let mut out = BoundaryBuffer::new();
     out.direction = "output".to_string();
     grid.set_boundary(EXIT_X, 0, out);
@@ -68,13 +80,17 @@ fn build_grid() -> Grid<VecStorage> {
 }
 
 fn snapshot(engine: &Engine<VecStorage>) -> Vec<u8> {
-    (0..WIDTH).map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+    (0..WIDTH)
+        .map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+        .collect()
 }
 
 fn main() {
     let initial_snapshot: Vec<u8> = {
         let g = build_grid();
-        (0..WIDTH).map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+        (0..WIDTH)
+            .map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+            .collect()
     };
 
     // ── Прямой прогон: токен едет вправо, на границе Write(0) выводит СВОЁ
@@ -96,12 +112,21 @@ fn main() {
         exit_value.expect("если токен вышел, значение обязано быть захвачено вместе с тиком"),
     );
     println!("Исходная решётка:     {:?}", initial_snapshot);
-    println!("После {TOTAL_TICKS} тиков вперёд: {:?} (токен вышел на тике {exit_tick} со значением {exit_value})", final_snapshot);
-    assert!(final_snapshot.iter().all(|&v| v == 0), "токен должен был физически покинуть решётку — она обязана быть полностью пустой");
+    println!(
+        "После {TOTAL_TICKS} тиков вперёд: {:?} (токен вышел на тике {exit_tick} со значением {exit_value})",
+        final_snapshot
+    );
+    assert!(
+        final_snapshot.iter().all(|&v| v == 0),
+        "токен должен был физически покинуть решётку — она обязана быть полностью пустой"
+    );
 
     // ── Наивный реверс: обращаем сдвиг, прогоняем на финальной (пустой)
     // решётке, ИГНОРИРУЯ то, что было выведено ─────────────────────────────
-    let mut naive_reverse = Engine::new(build_reverse_grid(&final_snapshot), shift_rule(Direction::Left, OverflowAction::Discard));
+    let mut naive_reverse = Engine::new(
+        build_reverse_grid(&final_snapshot),
+        shift_rule(Direction::Left, OverflowAction::Discard),
+    );
     for _ in 1..=TOTAL_TICKS {
         naive_reverse.run_tick();
     }
@@ -109,7 +134,11 @@ fn main() {
     println!("\n[Наивный реверс, без учёта output] Восстановлено: {:?}", naive_result);
     println!(
         "Совпадает с исходной: {} — ожидаемо НЕТ: токен вышел через границу, реверс-правилам нечего двигать назад",
-        if naive_result == initial_snapshot { "ДА" } else { "НЕТ" }
+        if naive_result == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
     assert_ne!(naive_result, initial_snapshot, "наивный реверс, игнорирующий output, НЕ ДОЛЖЕН восстановить исходное состояние — иначе демонстрация ничего не показывает");
 
@@ -117,7 +146,10 @@ fn main() {
     // прямом прогоне, вводится обратно через ТУ ЖЕ границу в момент,
     // зеркальный моменту выхода (реверс-тик = TOTAL_TICKS - exit_tick + 1) ─
     let reinject_at = TOTAL_TICKS - exit_tick + 1;
-    let mut closed_reverse = Engine::new(build_reverse_grid(&final_snapshot), shift_rule(Direction::Left, OverflowAction::Discard));
+    let mut closed_reverse = Engine::new(
+        build_reverse_grid(&final_snapshot),
+        shift_rule(Direction::Left, OverflowAction::Discard),
+    );
     for tick in 1..=TOTAL_TICKS {
         closed_reverse.run_tick();
         if tick == reinject_at {
@@ -128,14 +160,28 @@ fn main() {
             // он появился — иначе реверс-правило сдвига успело бы
             // среагировать немедленно и увести токен на одну клетку дальше.
             let gen = closed_reverse.grid().generation();
-            closed_reverse.grid_mut().set_cell(EXIT_X, 0, Cell { value: CellValue::new(exit_value), born_at: gen });
+            closed_reverse.grid_mut().set_cell(
+                EXIT_X,
+                0,
+                Cell {
+                    value: CellValue::new(exit_value),
+                    born_at: gen,
+                },
+            );
         }
     }
     let closed_result = snapshot(&closed_reverse);
-    println!("\n[Закрытый реверс: output прямого прогона -> input обратного, на тике {reinject_at}] Восстановлено: {:?}", closed_result);
+    println!(
+        "\n[Закрытый реверс: output прямого прогона -> input обратного, на тике {reinject_at}] Восстановлено: {:?}",
+        closed_result
+    );
     println!(
         "Совпадает с исходной побитово: {}",
-        if closed_result == initial_snapshot { "ДА" } else { "НЕТ (!)" }
+        if closed_result == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ (!)"
+        }
     );
     assert_eq!(closed_result, initial_snapshot, "реверс, вернувший output прямого прогона как input в ту же точку, ОБЯЗАН побитово восстановить исходное состояние");
 
@@ -155,7 +201,14 @@ fn build_reverse_grid(snapshot: &[u8]) -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
     for (x, &v) in snapshot.iter().enumerate() {
         if v != 0 {
-            grid.set_cell(x, 0, Cell { value: CellValue::new(v), born_at: 0 });
+            grid.set_cell(
+                x,
+                0,
+                Cell {
+                    value: CellValue::new(v),
+                    born_at: 0,
+                },
+            );
         }
     }
     let mut out = BoundaryBuffer::new();

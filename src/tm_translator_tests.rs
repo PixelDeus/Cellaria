@@ -27,14 +27,8 @@ fn make_rule_index(rules: Vec<Rule>) -> HashMap<CellType, Vec<Rule>> {
 
 /// Запустить симуляцию до стабилизации.
 /// Возвращает финальное состояние решётки.
-fn run_to_completion(
-    grid: &mut Grid<VecStorage>,
-    rule_index: &HashMap<CellType, Vec<Rule>>,
-) {
-    let mut engine = Engine::new(
-        std::mem::take(grid),
-        rule_index.clone(),
-    );
+fn run_to_completion(grid: &mut Grid<VecStorage>, rule_index: &HashMap<CellType, Vec<Rule>>) {
+    let mut engine = Engine::new(std::mem::take(grid), rule_index.clone());
 
     loop {
         let matches = engine.detect_matches();
@@ -72,8 +66,8 @@ fn test_tm_translator_bit_invert() {
     //   (q₀, 0) → (q₀, 1, R): a_idx=1 (бит "0"=тип2), a'_idx=0 (бит "1"=тип1)
     //   (q₀, 1) → (q₀, 0, R): a_idx=0 (бит "1"=тип1), a'_idx=1 (бит "0"=тип2)
     let delta = &[
-        (0usize, 1usize, 0usize, 0usize, 'R'),  // (q₀, 0) → (q₀, 1, R) — над типом 2 пишем тип 1
-        (0usize, 0usize, 0usize, 1usize, 'R'),  // (q₀, 1) → (q₀, 0, R) — над типом 1 пишем тип 2
+        (0usize, 1usize, 0usize, 0usize, 'R'), // (q₀, 0) → (q₀, 1, R) — над типом 2 пишем тип 1
+        (0usize, 0usize, 0usize, 1usize, 'R'), // (q₀, 1) → (q₀, 0, R) — над типом 1 пишем тип 2
     ];
     let final_states: &[usize] = &[];
 
@@ -103,22 +97,38 @@ fn test_tm_translator_bit_invert() {
     // Запуск симуляции
     let mut grid = make_grid(16, 1);
     // Головка (тип 10) на позиции 0, лента 1 0 1 на позициях 1-3
-    grid.set_cell(0, 0, Cell {
-        value: CellValue(CellType::new(10)),
-        born_at: 0,
-    });
-    grid.set_cell(1, 0, Cell {
-        value: CellValue(CellType::new(1)),
-        born_at: 0,
-    });
-    grid.set_cell(2, 0, Cell {
-        value: CellValue(CellType::new(2)),
-        born_at: 0,
-    });
-    grid.set_cell(3, 0, Cell {
-        value: CellValue(CellType::new(1)),
-        born_at: 0,
-    });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType::new(10)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType::new(1)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        2,
+        0,
+        Cell {
+            value: CellValue(CellType::new(2)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        3,
+        0,
+        Cell {
+            value: CellValue(CellType::new(1)),
+            born_at: 0,
+        },
+    );
 
     let rule_index = make_rule_index(rules);
     run_to_completion(&mut grid, &rule_index);
@@ -151,8 +161,8 @@ fn test_tm_translator_bit_invert_4bit() {
     let states = &[10u8];
     let symbols = &[1u8, 2u8];
     let delta = &[
-        (0usize, 1usize, 0usize, 0usize, 'R'),  // (q₀, 0) → (q₀, 1, R)
-        (0usize, 0usize, 0usize, 1usize, 'R'),  // (q₀, 1) → (q₀, 0, R)
+        (0usize, 1usize, 0usize, 0usize, 'R'), // (q₀, 0) → (q₀, 1, R)
+        (0usize, 0usize, 0usize, 1usize, 'R'), // (q₀, 1) → (q₀, 0, R)
     ];
     let final_states: &[usize] = &[];
 
@@ -160,11 +170,46 @@ fn test_tm_translator_bit_invert_4bit() {
     assert_eq!(rules.len(), 2);
 
     let mut grid = make_grid(16, 1);
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType::new(10)), born_at: 0 });
-    grid.set_cell(1, 0, Cell { value: CellValue(CellType::new(1)), born_at: 0 });
-    grid.set_cell(2, 0, Cell { value: CellValue(CellType::new(1)), born_at: 0 });
-    grid.set_cell(3, 0, Cell { value: CellValue(CellType::new(2)), born_at: 0 });
-    grid.set_cell(4, 0, Cell { value: CellValue(CellType::new(2)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType::new(10)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType::new(1)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        2,
+        0,
+        Cell {
+            value: CellValue(CellType::new(1)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        3,
+        0,
+        Cell {
+            value: CellValue(CellType::new(2)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        4,
+        0,
+        Cell {
+            value: CellValue(CellType::new(2)),
+            born_at: 0,
+        },
+    );
 
     let rule_index = make_rule_index(rules);
     run_to_completion(&mut grid, &rule_index);
@@ -200,8 +245,8 @@ fn test_tm_translator_no_final() {
     let states = &[10u8];
     let symbols = &[1u8, 2u8];
     let delta = &[
-        (0usize, 0usize, 0usize, 1usize, 'R'),  // (q₀, 1) → (q₀, 0, R)
-        (0usize, 1usize, 0usize, 0usize, 'R'),  // (q₀, 0) → (q₀, 1, R)
+        (0usize, 0usize, 0usize, 1usize, 'R'), // (q₀, 1) → (q₀, 0, R)
+        (0usize, 1usize, 0usize, 0usize, 'R'), // (q₀, 0) → (q₀, 1, R)
     ];
     let final_states: &[usize] = &[];
 
@@ -209,8 +254,22 @@ fn test_tm_translator_no_final() {
     assert_eq!(rules.len(), 2);
 
     let mut grid = make_grid(8, 1);
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType::new(10)), born_at: 0 });
-    grid.set_cell(1, 0, Cell { value: CellValue(CellType::new(1)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType::new(10)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType::new(1)),
+            born_at: 0,
+        },
+    );
 
     let rule_index = make_rule_index(rules);
     run_to_completion(&mut grid, &rule_index);
@@ -241,7 +300,7 @@ fn test_tm_translator_no_left_rule_match() {
     let symbols = &[1u8, 2u8];
     // Только R-правила, чтоб убедиться что R-кодировка корректна
     let delta = &[
-        (0usize, 0usize, 0usize, 0usize, 'R'),  // (q₀, 1) → (q₀, 1, R)
+        (0usize, 0usize, 0usize, 0usize, 'R'), // (q₀, 1) → (q₀, 1, R)
     ];
     let final_states: &[usize] = &[];
 
@@ -251,12 +310,9 @@ fn test_tm_translator_no_left_rule_match() {
     // Проверяем L-правило (если бы такое было): убеждаемся что функции корректно
     // обрабатывают L-направление на уровне структуры правил.
     // Создадим L-правило вручную и проверим его структуру.
-    let pattern: Vec<(i8, i8, CellType)> = vec![
-        (0i8, 0i8, CellType::new(2)),
-        (1i8, 0i8, CellType::new(10)),
-    ];
+    let pattern: Vec<(i8, i8, CellType)> = vec![(0i8, 0i8, CellType::new(2)), (1i8, 0i8, CellType::new(10))];
     let l_rule = Rule {
-        id: vec![CellType::new(2), CellType::new(10)],  // [a, q] для (q₀, 0) с L
+        id: vec![CellType::new(2), CellType::new(10)], // [a, q] для (q₀, 0) с L
         pattern,
         shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
         changes: vec![
@@ -269,7 +325,12 @@ fn test_tm_translator_no_left_rule_match() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     assert_eq!(l_rule.id, vec![CellType::new(2), CellType::new(10)]);
     assert_eq!(l_rule.shifts[0][0].direction, Direction::Left);
@@ -353,14 +414,14 @@ fn test_tm_translator_final_via_l() {
     let states = &[10u8, 11u8, 12u8];
     let symbols = &[1u8, 2u8];
     let delta = &[
-        (0usize, 0usize, 1usize, 0usize, 'R'),  // (q₀, 1) → (q₁, 1, R)
-        (1usize, 0usize, 2usize, 0usize, 'L'),  // (q₁, 1) → (q₂, 1, L), q₂ final
-        // halt-правило для q₂ не нужно — оно не сработает, так как q₂
-        // является финальным и для него нет правила в delta.
-        // Вместо этого, halt-правило генерируется translate_tm с id [12, 1].
-        // Это halt-правило срабатывает на tick 4 и поглощает головку.
+        (0usize, 0usize, 1usize, 0usize, 'R'), // (q₀, 1) → (q₁, 1, R)
+        (1usize, 0usize, 2usize, 0usize, 'L'), // (q₁, 1) → (q₂, 1, L), q₂ final
+                                               // halt-правило для q₂ не нужно — оно не сработает, так как q₂
+                                               // является финальным и для него нет правила в delta.
+                                               // Вместо этого, halt-правило генерируется translate_tm с id [12, 1].
+                                               // Это halt-правило срабатывает на tick 4 и поглощает головку.
     ];
-    let final_states = &[2usize];  // q₂ — финальное
+    let final_states = &[2usize]; // q₂ — финальное
 
     let rules = translate_tm(states, symbols, delta, 0, final_states);
     // Должно быть: 1 не-финальное R-правило + 1 halt-правило для q₂ = 2
@@ -374,16 +435,38 @@ fn test_tm_translator_final_via_l() {
     // Halt-правило [11, 1] совпадает на позициях 1-2: q₁=11 справа, a=1 слева.
 
     // Проверяем halt-правило: id [q_type, a_type] = [11, 1]
-    let halt_rule = rules.iter().find(|r| {
-        r.id == vec![CellType::new(11), CellType::new(1)]
-    }).expect("Expected halt rule for (q1, 1) from final transition");
+    let halt_rule = rules
+        .iter()
+        .find(|r| r.id == vec![CellType::new(11), CellType::new(1)])
+        .expect("Expected halt rule for (q1, 1) from final transition");
     assert!(halt_rule.shifts.is_empty());
 
     // Запуск симуляции
     let mut grid = make_grid(8, 1);
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType::new(10)), born_at: 0 });
-    grid.set_cell(1, 0, Cell { value: CellValue(CellType::new(1)), born_at: 0 });
-    grid.set_cell(2, 0, Cell { value: CellValue(CellType::new(1)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType::new(10)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType::new(1)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        2,
+        0,
+        Cell {
+            value: CellValue(CellType::new(1)),
+            born_at: 0,
+        },
+    );
 
     let rule_index = make_rule_index(rules);
     run_to_completion(&mut grid, &rule_index);

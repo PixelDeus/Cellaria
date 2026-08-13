@@ -19,7 +19,12 @@ fn mixed_group_rule_index() -> HashMap<CellType, Vec<Rule>> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let wildcard = Rule {
         id: vec![CellType(10)],
@@ -32,7 +37,12 @@ fn mixed_group_rule_index() -> HashMap<CellType, Vec<Rule>> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
     idx.insert(CellType(10), vec![full, wildcard]);
@@ -50,7 +60,10 @@ fn test_mixed_group_exact_lookup_covers_fully_specified_rule() {
     );
     let lookup = gd.exact_lookup.as_ref().unwrap();
     let total_exact_rules: usize = lookup.values().map(|v| v.len()).sum();
-    assert_eq!(total_exact_rules, 1, "ровно одно (rule_idx=0) правило должно быть покрыто exact_lookup");
+    assert_eq!(
+        total_exact_rules, 1,
+        "ровно одно (rule_idx=0) правило должно быть покрыто exact_lookup"
+    );
 }
 
 #[test]
@@ -59,7 +72,8 @@ fn test_mixed_group_fallback_rules_covers_only_wildcard() {
     let gd = group_cache.get(&CellType(10)).expect("head 10 must have GroupData");
 
     assert_eq!(
-        gd.fallback_rules, vec![1],
+        gd.fallback_rules,
+        vec![1],
         "только wildcard-правило (rule_idx=1) должно остаться в fallback_rules"
     );
 }
@@ -80,19 +94,56 @@ fn test_mixed_group_matches_correctly_despite_split() {
     // условие на соседа выполнено, wildcard — оно вообще не смотрит на
     // соседа, значит совпадает всегда).
     let mut grid1 = Grid::new(VecStorage::new(2, 1), Default::default());
-    grid1.set_cell(0, 0, Cell { value: CellValue(CellType(10)), born_at: 0 });
-    grid1.set_cell(1, 0, Cell { value: CellValue(CellType(20)), born_at: 0 });
+    grid1.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(10)),
+            born_at: 0,
+        },
+    );
+    grid1.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType(20)),
+            born_at: 0,
+        },
+    );
     let mut rule_idxs1: Vec<usize> = detect_matches(&grid1, &rule_index, &vec![(0, 0)])
-        .iter().map(|m| m.rule_idx).collect();
+        .iter()
+        .map(|m| m.rule_idx)
+        .collect();
     rule_idxs1.sort_unstable();
-    assert_eq!(rule_idxs1, vec![0, 1], "сосед=20: и точное (0), и wildcard (1) правило должны совпасть");
+    assert_eq!(
+        rule_idxs1,
+        vec![0, 1],
+        "сосед=20: и точное (0), и wildcard (1) правило должны совпасть"
+    );
 
     // Сценарий 2: сосед НЕ 20 -> только wildcard-правило (rule_idx=1) совпадает,
     // точное (rule_idx=0) требует конкретно 20 и не срабатывает.
     let mut grid2 = Grid::new(VecStorage::new(2, 1), Default::default());
-    grid2.set_cell(0, 0, Cell { value: CellValue(CellType(10)), born_at: 0 });
-    grid2.set_cell(1, 0, Cell { value: CellValue(CellType(99)), born_at: 0 });
+    grid2.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(10)),
+            born_at: 0,
+        },
+    );
+    grid2.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType(99)),
+            born_at: 0,
+        },
+    );
     let matches2 = detect_matches(&grid2, &rule_index, &vec![(0, 0)]);
     assert_eq!(matches2.len(), 1);
-    assert_eq!(matches2[0].rule_idx, 1, "сосед!=20 должен совпасть только с wildcard-правилом (rule_idx=1)");
+    assert_eq!(
+        matches2[0].rule_idx, 1,
+        "сосед!=20 должен совпасть только с wildcard-правилом (rule_idx=1)"
+    );
 }

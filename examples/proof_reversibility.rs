@@ -34,33 +34,100 @@ const TICKS: u32 = 20;
 fn cycle_rules(forward: bool) -> HashMap<CellType, Vec<Rule>> {
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
     for s in 0..CYCLE_LEN {
-        let next = if forward { (s + 1) % CYCLE_LEN } else { (s + CYCLE_LEN - 1) % CYCLE_LEN };
-        idx.insert(CellType(CYCLE_BASE + s), vec![Rule {
-            id: vec![CellType(CYCLE_BASE + s)], pattern: vec![], shifts: vec![],
-            changes: vec![(0, 0, ChangeValue::Literal(CYCLE_BASE + next))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        }]);
+        let next = if forward {
+            (s + 1) % CYCLE_LEN
+        } else {
+            (s + CYCLE_LEN - 1) % CYCLE_LEN
+        };
+        idx.insert(
+            CellType(CYCLE_BASE + s),
+            vec![Rule {
+                id: vec![CellType(CYCLE_BASE + s)],
+                pattern: vec![],
+                shifts: vec![],
+                changes: vec![(0, 0, ChangeValue::Literal(CYCLE_BASE + next))],
+                active_only: false,
+                priority: 10,
+                min_age: 0,
+                overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            }],
+        );
     }
     let dir = if forward { Direction::Right } else { Direction::Left };
-    idx.insert(CellType(TOKEN), vec![Rule {
-        id: vec![CellType(TOKEN)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(dir, 1)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-    }]);
+    idx.insert(
+        CellType(TOKEN),
+        vec![Rule {
+            id: vec![CellType(TOKEN)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(dir, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
+        }],
+    );
     idx
 }
 
 fn build_grid() -> Grid<VecStorage> {
     let storage = VecStorage::new(WIDTH, 1);
     let mut grid = Grid::new(storage, Default::default());
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType(CYCLE_BASE + 0)), born_at: 0 });
-    grid.set_cell(4, 0, Cell { value: CellValue(CellType(CYCLE_BASE + 2)), born_at: 0 });
-    grid.set_cell(8, 0, Cell { value: CellValue(CellType(CYCLE_BASE + 4)), born_at: 0 });
-    grid.set_cell(15, 0, Cell { value: CellValue(CellType(TOKEN)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(CYCLE_BASE + 0)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        4,
+        0,
+        Cell {
+            value: CellValue(CellType(CYCLE_BASE + 2)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        8,
+        0,
+        Cell {
+            value: CellValue(CellType(CYCLE_BASE + 4)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        15,
+        0,
+        Cell {
+            value: CellValue(CellType(TOKEN)),
+            born_at: 0,
+        },
+    );
     grid
 }
 
 fn snapshot(engine: &Engine<VecStorage>) -> Vec<u8> {
-    (0..WIDTH).map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+    (0..WIDTH)
+        .map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+        .collect()
 }
 
 fn main() {
@@ -83,7 +150,14 @@ fn main() {
     let mut reverse_grid = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
     for (x, &v) in final_snapshot.iter().enumerate() {
         if v != 0 {
-            reverse_grid.set_cell(x, 0, Cell { value: CellValue(CellType(v)), born_at: 0 });
+            reverse_grid.set_cell(
+                x,
+                0,
+                Cell {
+                    value: CellValue(CellType(v)),
+                    born_at: 0,
+                },
+            );
         }
     }
     let mut reverse_engine = Engine::new(reverse_grid, cycle_rules(false));
@@ -95,6 +169,10 @@ fn main() {
     println!("После {} тиков назад:  {:?}", TICKS, recovered_snapshot);
     println!(
         "\nВосстановленная решётка совпадает с исходной клетка в клетку: {}",
-        if recovered_snapshot == initial_snapshot { "ДА" } else { "НЕТ" }
+        if recovered_snapshot == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
 }

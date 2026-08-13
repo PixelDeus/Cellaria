@@ -57,8 +57,7 @@ use std::collections::HashMap;
 
 use cellaria::engine::Engine;
 use cellaria::types::{
-    Cell, CellType, CellValue, ChangeValue, Direction, MemorySpec, RecordTrigger, RecordedValue,
-    Rule, ShiftSpec,
+    Cell, CellType, CellValue, ChangeValue, Direction, MemorySpec, RecordTrigger, RecordedValue, Rule, ShiftSpec,
 };
 use cellaria::{Grid, VecStorage};
 
@@ -86,7 +85,9 @@ fn base_rule(id: u8, priority: u32) -> Rule {
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
@@ -114,24 +115,30 @@ const TOKEN1: u8 = 60;
 const DECOY1: u8 = 61;
 const START_X1: usize = 5;
 const DECOY_X1: usize = 25; // заведомо вне пути токена (максимум ~TICKS1/2 шагов вправо)
-// НЕЧЁТНОЕ специально: при чётном TICKS1 (проверено эмпирически на 12/14/16/18)
-// периодичность часов (период 2) делает наивный реверс СЛУЧАЙНО побитово
-// совпадающим с исходной решёткой — не потому что наивный рецепт верен, а
-// из-за симметрии открыт/закрыт-расписания при чётном числе тиков туда и
-// обратно. Нечётное TICKS1 (проверено на 11/13/15/17) ломает эту
-// случайную симметрию и делает ассерт "наивный реверс НЕ должен был
-// случайно восстановить решётку" содержательным, а не тавтологией.
+                            // НЕЧЁТНОЕ специально: при чётном TICKS1 (проверено эмпирически на 12/14/16/18)
+                            // периодичность часов (период 2) делает наивный реверс СЛУЧАЙНО побитово
+                            // совпадающим с исходной решёткой — не потому что наивный рецепт верен, а
+                            // из-за симметрии открыт/закрыт-расписания при чётном числе тиков туда и
+                            // обратно. Нечётное TICKS1 (проверено на 11/13/15/17) ломает эту
+                            // случайную симметрию и делает ассерт "наивный реверс НЕ должен был
+                            // случайно восстановить решётку" содержательным, а не тавтологией.
 const TICKS1: u32 = 15;
 
 fn clock_rules() -> HashMap<CellType, Vec<Rule>> {
     let mut idx = HashMap::new();
     idx.insert(
         CellType(CLOCK_A),
-        vec![Rule { changes: vec![(0, 0, ChangeValue::Literal(CLOCK_B))], ..base_rule(CLOCK_A, 5) }],
+        vec![Rule {
+            changes: vec![(0, 0, ChangeValue::Literal(CLOCK_B))],
+            ..base_rule(CLOCK_A, 5)
+        }],
     );
     idx.insert(
         CellType(CLOCK_B),
-        vec![Rule { changes: vec![(0, 0, ChangeValue::Literal(CLOCK_A))], ..base_rule(CLOCK_B, 5) }],
+        vec![Rule {
+            changes: vec![(0, 0, ChangeValue::Literal(CLOCK_A))],
+            ..base_rule(CLOCK_B, 5)
+        }],
     );
     idx
 }
@@ -145,7 +152,10 @@ fn forward_rules_section1() -> HashMap<CellType, Vec<Rule>> {
             memory: Some(MemorySpec {
                 window: 2,
                 record_trigger: RecordTrigger::NeighborType(Direction::Up),
-                match_pattern: vec![RecordedValue::Type(CellType(CLOCK_A)), RecordedValue::Type(CellType(CLOCK_B))],
+                match_pattern: vec![
+                    RecordedValue::Type(CellType(CLOCK_A)),
+                    RecordedValue::Type(CellType(CLOCK_B)),
+                ],
             }),
             ..base_rule(TOKEN1, 10)
         }],
@@ -165,7 +175,10 @@ fn naive_reverse_rules_section1() -> HashMap<CellType, Vec<Rule>> {
             memory: Some(MemorySpec {
                 window: 2,
                 record_trigger: RecordTrigger::NeighborType(Direction::Up),
-                match_pattern: vec![RecordedValue::Type(CellType(CLOCK_A)), RecordedValue::Type(CellType(CLOCK_B))],
+                match_pattern: vec![
+                    RecordedValue::Type(CellType(CLOCK_A)),
+                    RecordedValue::Type(CellType(CLOCK_B)),
+                ],
             }),
             ..base_rule(TOKEN1, 10)
         }],
@@ -179,7 +192,13 @@ fn naive_reverse_rules_section1() -> HashMap<CellType, Vec<Rule>> {
 fn reverse_step_rules_section1(direction: Option<Direction>) -> HashMap<CellType, Vec<Rule>> {
     let mut idx = clock_rules();
     if let Some(d) = direction {
-        idx.insert(CellType(TOKEN1), vec![Rule { shifts: vec![vec![ShiftSpec::new(d, 1)]], ..base_rule(TOKEN1, 10) }]);
+        idx.insert(
+            CellType(TOKEN1),
+            vec![Rule {
+                shifts: vec![vec![ShiftSpec::new(d, 1)]],
+                ..base_rule(TOKEN1, 10)
+            }],
+        );
     }
     idx
 }
@@ -187,10 +206,31 @@ fn reverse_step_rules_section1(direction: Option<Direction>) -> HashMap<CellType
 fn build_grid1(token_x: usize) -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH1, 2), Default::default());
     for x in 0..WIDTH1 {
-        grid.set_cell(x, CLOCK_ROW, Cell { value: CellValue(CellType(CLOCK_A)), born_at: 0 });
+        grid.set_cell(
+            x,
+            CLOCK_ROW,
+            Cell {
+                value: CellValue(CellType(CLOCK_A)),
+                born_at: 0,
+            },
+        );
     }
-    grid.set_cell(token_x, TOKEN_ROW, Cell { value: CellValue(CellType(TOKEN1)), born_at: 0 });
-    grid.set_cell(DECOY_X1, TOKEN_ROW, Cell { value: CellValue(CellType(DECOY1)), born_at: 0 });
+    grid.set_cell(
+        token_x,
+        TOKEN_ROW,
+        Cell {
+            value: CellValue(CellType(TOKEN1)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        DECOY_X1,
+        TOKEN_ROW,
+        Cell {
+            value: CellValue(CellType(DECOY1)),
+            born_at: 0,
+        },
+    );
     grid
 }
 
@@ -200,7 +240,14 @@ fn grid_from_snapshot1(snap: &[u8]) -> Grid<VecStorage> {
         for x in 0..WIDTH1 {
             let v = snap[y * WIDTH1 + x];
             if v != 0 {
-                g.set_cell(x, y, Cell { value: CellValue(CellType(v)), born_at: 0 });
+                g.set_cell(
+                    x,
+                    y,
+                    Cell {
+                        value: CellValue(CellType(v)),
+                        born_at: 0,
+                    },
+                );
             }
         }
     }
@@ -222,7 +269,10 @@ fn section1() {
     println!("========== Раздел 1: RecordTrigger::NeighborType ==========\n");
     let initial_snapshot: Vec<u8> = {
         let g = build_grid1(START_X1);
-        (0..2).flat_map(|y| (0..WIDTH1).map(move |x| (x, y))).map(|(x, y)| g.get_cell(x, y).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+        (0..2)
+            .flat_map(|y| (0..WIDTH1).map(move |x| (x, y)))
+            .map(|(x, y)| g.get_cell(x, y).map(|c| c.value.0 .0).unwrap_or(0))
+            .collect()
     };
     println!(
         "Токен на x={START_X1} (строка {TOKEN_ROW}), декой на x={DECOY_X1}. Часы (строка {CLOCK_ROW}) — обычное \
@@ -239,15 +289,24 @@ NeighborType(Up), match_pattern=[CLOCK_A, CLOCK_B]."
     }
     let final_snapshot = snapshot1(&forward);
     println!("\nПозиции токена по тикам: {:?}", positions);
-    assert_eq!(final_snapshot[TOKEN_ROW * WIDTH1 + DECOY_X1], DECOY1, "декой обязан пережить прямой прогон нетронутым");
+    assert_eq!(
+        final_snapshot[TOKEN_ROW * WIDTH1 + DECOY_X1],
+        DECOY1,
+        "декой обязан пережить прямой прогон нетронутым"
+    );
 
-    let fired: Vec<bool> = (1..=TICKS1 as usize).map(|i| positions[i] != positions[i - 1]).collect();
+    let fired: Vec<bool> = (1..=TICKS1 as usize)
+        .map(|i| positions[i] != positions[i - 1])
+        .collect();
     let open_ticks = fired.iter().filter(|&&f| f).count();
     println!(
         "Расписание гейта (по дельтам позиции, публичный API, БЕЗ доступа к `memory_buffers`): {} тиков открыт \
 из {TICKS1} — {:?}",
         open_ticks,
-        fired.iter().map(|&f| if f { "открыт" } else { "закрыт" }).collect::<Vec<_>>()
+        fired
+            .iter()
+            .map(|&f| if f { "открыт" } else { "закрыт" })
+            .collect::<Vec<_>>()
     );
     assert!(
         open_ticks > 0 && open_ticks < TICKS1 as usize,
@@ -263,7 +322,11 @@ NeighborType(Up), match_pattern=[CLOCK_A, CLOCK_B]."
     let naive_snapshot = snapshot1(&naive);
     println!(
         "\nНаивный реверс (тот же memory-гейт, свежий буфер, Left вместо Right) совпал с исходной решёткой: {}",
-        if naive_snapshot == initial_snapshot { "ДА" } else { "НЕТ" }
+        if naive_snapshot == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
     assert_ne!(
         naive_snapshot, initial_snapshot,
@@ -278,14 +341,25 @@ NeighborType(Up), match_pattern=[CLOCK_A, CLOCK_B]."
     // порядке ОБЫЧНЫМИ (без memory) правилами ───────────────────────────────
     let mut smart_snapshot = final_snapshot.clone();
     for i in (0..TICKS1 as usize).rev() {
-        let direction = if fired[i] { Some(reverse_direction(Direction::Right)) } else { None };
-        let mut step = Engine::new(grid_from_snapshot1(&smart_snapshot), reverse_step_rules_section1(direction));
+        let direction = if fired[i] {
+            Some(reverse_direction(Direction::Right))
+        } else {
+            None
+        };
+        let mut step = Engine::new(
+            grid_from_snapshot1(&smart_snapshot),
+            reverse_step_rules_section1(direction),
+        );
         step.run_tick();
         smart_snapshot = snapshot1(&step);
     }
     println!(
         "\nУмный реверс (записанное по дельтам расписание, без memory на реверсе) совпал с исходной решёткой: {}",
-        if smart_snapshot == initial_snapshot { "ДА" } else { "НЕТ" }
+        if smart_snapshot == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
     assert_eq!(
         smart_snapshot, initial_snapshot,
@@ -323,13 +397,24 @@ fn section2a() {
         CellType(TOKEN4),
         vec![Rule {
             shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
-            memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::RuleOutcome, match_pattern: vec![RecordedValue::Applied] }),
+            memory: Some(MemorySpec {
+                window: 1,
+                record_trigger: RecordTrigger::RuleOutcome,
+                match_pattern: vec![RecordedValue::Applied],
+            }),
             ..base_rule(TOKEN4, 10)
         }],
     );
 
     let mut grid = Grid::new(VecStorage::new(WIDTH2, 1), Default::default());
-    grid.set_cell(START_X4, 0, Cell { value: CellValue(CellType(TOKEN4)), born_at: 0 });
+    grid.set_cell(
+        START_X4,
+        0,
+        Cell {
+            value: CellValue(CellType(TOKEN4)),
+            born_at: 0,
+        },
+    );
     let mut engine = Engine::new(grid, idx);
     for _ in 1..=TICKS4 {
         engine.run_tick();
@@ -344,7 +429,11 @@ fn outcome_rule(priority: u32) -> Rule {
     Rule {
         pattern: vec![(0, 0, CellType(63))],
         changes: vec![(0, 0, ChangeValue::Literal(63))], // idempotent: пишет то же значение, что уже есть
-        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::RuleOutcome, match_pattern: vec![RecordedValue::Missed] }),
+        memory: Some(MemorySpec {
+            window: 1,
+            record_trigger: RecordTrigger::RuleOutcome,
+            match_pattern: vec![RecordedValue::Missed],
+        }),
         ..base_rule(63, priority)
     }
 }
@@ -363,13 +452,29 @@ const TOKEN3_X: usize = 3;
 
 fn build_grid2() -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH2, 1), Default::default());
-    grid.set_cell(TOKEN3_X, 0, Cell { value: CellValue(CellType(63)), born_at: 0 });
-    grid.set_cell(DECOY_X2, 0, Cell { value: CellValue(CellType(DECOY2)), born_at: 0 });
+    grid.set_cell(
+        TOKEN3_X,
+        0,
+        Cell {
+            value: CellValue(CellType(63)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        DECOY_X2,
+        0,
+        Cell {
+            value: CellValue(CellType(DECOY2)),
+            born_at: 0,
+        },
+    );
     grid
 }
 
 fn snapshot2(engine: &Engine<VecStorage>) -> Vec<u8> {
-    (0..WIDTH2).map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+    (0..WIDTH2)
+        .map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+        .collect()
 }
 
 /// 2b: решающий пример. Сценарий A — гейтованное правило (приоритет 10)
@@ -390,7 +495,9 @@ fn section2b() {
 
     let initial_snapshot: Vec<u8> = {
         let g = build_grid2();
-        (0..WIDTH2).map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+        (0..WIDTH2)
+            .map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+            .collect()
     };
 
     let mut engine_a = Engine::new(build_grid2(), rules_a);

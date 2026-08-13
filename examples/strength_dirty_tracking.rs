@@ -45,12 +45,40 @@ fn build_grid(n: usize) -> Grid<VecStorage> {
     // Весь провод — WIRE: активная (не-дефолтная) клетка без единого
     // привязанного правила. Раздувает active_coords, не раздувая dirty.
     for i in 0..n {
-        grid.set_cell(i, 0, Cell { value: CellValue(CellType(WIRE)), born_at: 0 });
+        grid.set_cell(
+            i,
+            0,
+            Cell {
+                value: CellValue(CellType(WIRE)),
+                born_at: 0,
+            },
+        );
     }
     // Стены и челнок — в фиксированном окне в начале, не зависят от N.
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType(WALL)), born_at: 0 });
-    grid.set_cell(SHUTTLE_WIDTH + 1, 0, Cell { value: CellValue(CellType(WALL)), born_at: 0 });
-    grid.set_cell(1, 0, Cell { value: CellValue(CellType(HEAD_R)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(WALL)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        SHUTTLE_WIDTH + 1,
+        0,
+        Cell {
+            value: CellValue(CellType(WALL)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType(HEAD_R)),
+            born_at: 0,
+        },
+    );
     grid
 }
 
@@ -62,7 +90,18 @@ fn shuttle_rules() -> Vec<Rule> {
             pattern: vec![(0, 0, CellType(HEAD_R)), (1, 0, CellType(WALL))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(HEAD_L))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 20,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         // Едет вправо; обычное движение.
         Rule {
@@ -70,7 +109,18 @@ fn shuttle_rules() -> Vec<Rule> {
             pattern: vec![],
             shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
             changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         // Едет влево; следующая клетка — стена -> разворот на месте.
         Rule {
@@ -78,7 +128,18 @@ fn shuttle_rules() -> Vec<Rule> {
             pattern: vec![(0, 0, CellType(HEAD_L)), (-1, 0, CellType(WALL))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(HEAD_R))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 20,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         // Едет влево; обычное движение.
         Rule {
@@ -86,7 +147,18 @@ fn shuttle_rules() -> Vec<Rule> {
             pattern: vec![],
             shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
             changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -142,8 +214,10 @@ fn run_naive(n: usize, ticks: u32) -> u128 {
 }
 
 fn main() {
-    println!("Разреженный челнок в огромном 'проводе' — Cellaria (dirty-tracking)\n\
-              vs наивный движок (полный пересчёт активного набора каждый тик)\n");
+    println!(
+        "Разреженный челнок в огромном 'проводе' — Cellaria (dirty-tracking)\n\
+              vs наивный движок (полный пересчёт активного набора каждый тик)\n"
+    );
     println!(
         "{:>12} | {:>16} | {:>16} | {:>12}",
         "N (провод)", "Cellaria (нс/тик)", "Наивный (нс/тик)", "во сколько раз"
@@ -155,10 +229,7 @@ fn main() {
         let smart_ns = run_smart(n, ticks) as f64 / ticks as f64;
         let naive_ns = run_naive(n, ticks) as f64 / ticks as f64;
         let ratio = naive_ns / smart_ns;
-        println!(
-            "{:>12} | {:>16.1} | {:>16.1} | {:>10.1}x",
-            n, smart_ns, naive_ns, ratio
-        );
+        println!("{:>12} | {:>16.1} | {:>16.1} | {:>10.1}x", n, smart_ns, naive_ns, ratio);
     }
 
     println!(

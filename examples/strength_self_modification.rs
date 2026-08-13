@@ -56,7 +56,14 @@ fn main() {
     for (i, &byte) in packet.iter().enumerate() {
         let carrier = CellType((101 + i) as u8);
         let start_x = 2 * (packet.len() - 1 - i);
-        grid.set_cell(start_x, 0, Cell { value: CellValue(carrier), born_at: 0 });
+        grid.set_cell(
+            start_x,
+            0,
+            Cell {
+                value: CellValue(carrier),
+                born_at: 0,
+            },
+        );
         rule_index.insert(
             carrier,
             vec![Rule {
@@ -70,7 +77,12 @@ fn main() {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }],
         );
     }
@@ -78,7 +90,10 @@ fn main() {
     let mut engine = Engine::new(grid, rule_index);
     engine.enable_self_modification();
 
-    println!("Пакет для передачи (решётка сама его вытолкнет клетка за клеткой): {:?}", packet);
+    println!(
+        "Пакет для передачи (решётка сама его вытолкнет клетка за клеткой): {:?}",
+        packet
+    );
     println!(
         "До передачи: правило для типа {} существует? {}\n",
         TARGET_ID,
@@ -99,13 +114,21 @@ fn main() {
             // свежую клетку типа TARGET_ID, которая раньше никогда не
             // существовала на решётке, и продолжаем тикать как ни в чём не
             // бывало.
-            engine.grid_mut().set_cell(0, 0, Cell { value: CellValue(CellType(TARGET_ID)), born_at: 0 });
+            engine.grid_mut().set_cell(
+                0,
+                0,
+                Cell {
+                    value: CellValue(CellType(TARGET_ID)),
+                    born_at: 0,
+                },
+            );
             println!("тик {:>2}: тут же ставим свежую клетку типа {} на x=0", tick, TARGET_ID);
         }
         was_installed = now_installed;
 
         if was_installed {
-            if let Some(x) = (0..WIDTH).find(|&x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0) == Some(TARGET_ID)) {
+            if let Some(x) = (0..WIDTH).find(|&x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0) == Some(TARGET_ID))
+            {
                 if x > 0 {
                     println!(
                         "тик {:>2}: клетка типа {} сдвинулась на x={} — сгенерированное решёткой правило реально работает, всё в одном непрерывном прогоне",

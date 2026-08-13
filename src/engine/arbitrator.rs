@@ -51,7 +51,7 @@ thread_local! {
     /// пережившая один вызов `arbitrate_with_cam`, не только один матч
     /// внутри него — та же цена холодного старта, что и у `used_cells`).
     static AFFECTED_BUF: std::cell::RefCell<Vec<(i32, i32)>> =
-        std::cell::RefCell::new(Vec::new());
+        const { std::cell::RefCell::new(Vec::new()) };
     /// Персистентный (на весь OS-поток) буфер для `keyed` — decorate-фаза
     /// сортировки в `arbitrate_with_cam` (см. её doc-комментарий у
     /// `USED_CELLS_BUF` про причину `thread_local!`, не поля `Engine`).
@@ -59,12 +59,20 @@ thread_local! {
     /// `Vec::new()`+`collect()` на каждый вызов, реалистичный объём
     /// CA-пробки, вместе с самой сортировкой): -30.6%.
     static KEYED_BUF: std::cell::RefCell<Vec<KeyedEntry>> =
-        std::cell::RefCell::new(Vec::new());
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Тип одного элемента `keyed` -- см. `KEYED_BUF`/`arbitrate_with_cam`.
 type KeyedEntry = (
-    (Reverse<u32>, Reverse<u32>, Reverse<u32>, Reverse<RuleIdKey>, Reverse<u32>, Reverse<u32>, Reverse<usize>),
+    (
+        Reverse<u32>,
+        Reverse<u32>,
+        Reverse<u32>,
+        Reverse<RuleIdKey>,
+        Reverse<u32>,
+        Reverse<u32>,
+        Reverse<usize>,
+    ),
     RuleMatch,
     u32,
     u32,
@@ -295,31 +303,19 @@ pub(crate) fn arbitrate_with_cam(
     // кандидата с владельцем занятой клетки, а не только для построения
     // ключа сортировки.
     //
-    // `resolve_sort_fields` находит `&Rule` для тай-брейка (см. её doc-
-    // комментарий), и `get_match_affected_cells` ниже находит его ЖЕ ещё
-    // раз (для affected cells) — на первый взгляд дублирующийся lookup.
-    // Проверено (сессия 2026-08-09, список "вопросы" п.2): перенос
-    // найденного `&Rule` через `sorted`, чтобы убрать повторный поиск, дал
-    // -1.7% (шум, не выигрыш — измерено A/B на CA-сценарии "пробка",
-    // 89700 матчей, интерливинг old/new/new против погрешности прогрева).
-    // Не тот lookup доминирует в стоимости цикла — оставлено как есть.
-    // РЕАЛЬНЫЙ БАГ, найден 2026-08-11 при замере плотной производительности
-    // на масштабе ~1M клеток (`__investigate_city_scale_dense_perf`):
-    // "RefCell already borrowed" panic — `keyed.par_sort_unstable_by` ниже
-    // раньше вызывался ВНУТРИ `KEYED_BUF.with_borrow_mut(...)`, держа
-    // заимствование на всё время параллельной сортировки. rayon's
-    // work-stealing может увести ТОТ ЖЕ OS-поток на ДРУГОЙ вызов
-    // `arbitrate_with_cam` (соседняя полоса ИЛИ вообще другой тест/движок,
-    // делящий один и тот же глобальный rayon-пул) ПОКА исходный вызов ещё
-    // не вернулся из сортировки (ждёт свои подзадачи через `join`) —
-    // второй вызов пытается занять ТОТ ЖЕ `RefCell` на ТОМ ЖЕ потоке и
-    // падает. Раньше не проявлялось: `PARALLEL_SORT_THRESHOLD=1024`
-    // редко превышался per-полосным числом матчей до сегодняшнего замера
-    // на 1000×1000. Фикс: заимствование берётся ТОЛЬКО на мгновенный
-    // `take`/возврат (`std::mem::take`/присваивание) — сама сортировка
-    // (и вообще весь текст функции) выполняется на ЛОКАЛЬНОЙ переменной,
-    // без удержания `RefCell`-заимствования, значит reentrancy через
-    // work-stealing больше не видит "уже занято".
+    // `resolve_sort_fields`/`get_match_affected_cells` оба ищут `&Rule` —
+    // выглядит как дублирующийся lookup, но A/B-замер показал, что
+    // переносить найденное между ними не стоит (шум, не выигрыш, не тот
+    // lookup доминирует стоимость цикла) — см. `CHANGELOG.md`.
+    //
+    // НЕ держать `RefCell`-заимствование `KEYED_BUF` во время сортировки
+    // ниже — только мгновенный `take`/возврат, сортировка целиком на
+    // ЛОКАЛЬНОЙ переменной. Иначе: rayon's work-stealing может увести тот
+    // же OS-поток на ДРУГОЙ вызов `arbitrate_with_cam` (соседняя полоса
+    // или другой тест/движок на общем пуле) ПОКА исходный вызов ждёт
+    // подзадачи через `join`, второй вызов пытается занять тот же
+    // `RefCell` на том же потоке и падает "RefCell already borrowed" —
+    // реальный баг, найден на масштабе ~1M клеток, см. `CHANGELOG.md`.
     let mut keyed: Vec<KeyedEntry> = KEYED_BUF.with_borrow_mut(std::mem::take);
     keyed.clear();
     keyed.extend(all_matches.iter().map(|m| {
@@ -350,7 +346,10 @@ pub(crate) fn arbitrate_with_cam(
     } else {
         keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     }
-    let sorted: Vec<(RuleMatch, u32, u32)> = keyed.drain(..).map(|(_, m, priority, age)| (m, priority, age)).collect();
+    let sorted: Vec<(RuleMatch, u32, u32)> = keyed
+        .drain(..)
+        .map(|(_, m, priority, age)| (m, priority, age))
+        .collect();
     // Возвращаем (теперь снова пустой, но с сохранённой capacity) буфер в
     // thread_local для следующего вызова -- та же персистентность, что и
     // раньше, просто без удержания заимствования во время сортировки.
@@ -378,7 +377,15 @@ pub(crate) fn arbitrate_with_cam(
         AFFECTED_BUF.with_borrow_mut(|affected| {
             for (m, priority, age) in sorted {
                 // Получаем предвычисленные affected cells из кэша
-                get_match_affected_cells(&m, &head_index, rule_cache, bounds, cam_positions, feedback_counters, affected);
+                get_match_affected_cells(
+                    &m,
+                    &head_index,
+                    rule_cache,
+                    bounds,
+                    cam_positions,
+                    feedback_counters,
+                    affected,
+                );
 
                 // Заодно с проверкой конфликта собираем владельцев занятых
                 // клеток -- если хоть один из них равен этому кандидату по
@@ -494,30 +501,60 @@ pub(crate) fn arbitrate_spatial_with_cam(
     get_cell_age: impl Fn(usize, usize) -> u32 + Sync,
 ) -> (Vec<RuleMatch>, TieBreakDecidedWins) {
     if all_matches.len() < SPATIAL_THRESHOLD || reach <= 0 {
-        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &[], get_cell_age);
+        return arbitrate_with_cam(
+            all_matches,
+            rule_index,
+            rule_cache,
+            bounds,
+            cam_positions,
+            generation,
+            starvation_counters,
+            feedback_counters,
+            &[],
+            get_cell_age,
+        );
     }
 
     let margin = (2 * reach) as u32;
-    let (min_x, max_x) = all_matches.iter().fold((u32::MAX, 0u32), |(lo, hi), m| (lo.min(m.x), hi.max(m.x)));
+    let (min_x, max_x) = all_matches
+        .iter()
+        .fold((u32::MAX, 0u32), |(lo, hi), m| (lo.min(m.x), hi.max(m.x)));
     let spread = max_x.saturating_sub(min_x);
 
     // Число полос: не больше потоков rayon, и каждая полоса должна быть
     // хотя бы вдвое шире запаса (иначе в ней в принципе не может быть core-
     // совпадений — вся полоса окажется boundary, разбиение того не стоит).
-    let max_bands_by_spread = if margin == 0 { usize::MAX } else { (spread / (margin * 2)).max(1) as usize };
+    let max_bands_by_spread = if margin == 0 {
+        usize::MAX
+    } else {
+        (spread / (margin * 2)).max(1) as usize
+    };
     let num_bands = rayon::current_num_threads().min(max_bands_by_spread).max(1);
 
     if num_bands < 2 {
-        return arbitrate_with_cam(all_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &[], get_cell_age);
+        return arbitrate_with_cam(
+            all_matches,
+            rule_index,
+            rule_cache,
+            bounds,
+            cam_positions,
+            generation,
+            starvation_counters,
+            feedback_counters,
+            &[],
+            get_cell_age,
+        );
     }
 
     let band_width = (spread / num_bands as u32).max(1);
-    let band_of = |x: u32| -> usize {
-        (((x - min_x) / band_width) as usize).min(num_bands - 1)
-    };
+    let band_of = |x: u32| -> usize { (((x - min_x) / band_width) as usize).min(num_bands - 1) };
     let band_range = |band: usize| -> (u32, u32) {
         let start = min_x + band as u32 * band_width;
-        let end = if band == num_bands - 1 { max_x + 1 } else { min_x + (band as u32 + 1) * band_width };
+        let end = if band == num_bands - 1 {
+            max_x + 1
+        } else {
+            min_x + (band as u32 + 1) * band_width
+        };
         (start, end)
     };
 
@@ -579,77 +616,29 @@ pub(crate) fn arbitrate_spatial_with_cam(
             if band_matches.is_empty() {
                 (Vec::new(), FxHashSet::default())
             } else {
-                arbitrate_with_cam(band_matches, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &[], &get_cell_age)
+                arbitrate_with_cam(
+                    band_matches,
+                    rule_index,
+                    rule_cache,
+                    bounds,
+                    cam_positions,
+                    generation,
+                    starvation_counters,
+                    feedback_counters,
+                    &[],
+                    &get_cell_age,
+                )
             }
         })
         .collect();
 
-    // РЕАЛЬНЫЙ БАГ, найден 2026-08-10, исправлен здесь: раньше `core`
-    // (принятые в полосах, параллельно) и `boundary` (арбитрированный
-    // ОТДЕЛЬНО, сам с собой) просто СКЛЕИВАЛИСЬ (`result.extend(...)` для
-    // обоих) — БЕЗ перекрёстной проверки. `margin = 2*reach` доказывает
-    // только "core из РАЗНЫХ полос не пересекаются" (Lemma 6, всё ещё
-    // верно) — про boundary-против-соседнего-core (в том числе того же
-    // самого band'а!) теорема ничего не говорит и не может: boundary-матч
-    // прямо на границе своей зоны (dist = margin-1) физически может писать
-    // ещё на `reach` клеток дальше, вглубь соседней core-зоны (которая
-    // начинается сразу на dist = margin) — ни один конечный margin с этой
-    // простой пороговой схемой (dist >= margin ⟹ core) не может это
-    // исключить в общем случае (доказано конструктивно: worst-case boundary
-    // достигает margin-1+reach, core начинается на margin, и margin-1+reach
-    // >= margin для любого reach >= 1). Конкретный репро:
-    // `tests/property_arbitration.rs`'s
-    // `test_arbitrate_spatial_matches_centralized_recursion_dense_overlapping_writes`
-    // — x=7 (boundary) и x=8 (core), запись обоих по 4 клетки, пересечение
-    // на {8,9,10}, оба были приняты. Раньше не ловилось НИ РАЗУ, потому что
-    // все прежние Lemma-6-тесты писали в одну точку (без сдвигов и без
-    // recursion) — точка не может дотянуться через границу вне
-    // зависимости от margin.
-    //
-    // Фикс: КАЖДАЯ полоса уже арбитрировала СВОЙ ПОЛНЫЙ core-набор целиком
-    // (см. правку выше) — значит матчи одной полосы уже корректно сверены
-    // друг с другом, включая пары вроде x=103/x=104 (оба core одной полосы,
-    // но близко к границе), которые сломала бы предварительная делёжка на
-    // safe/at_risk ДО арбитража. Теперь, из УЖЕ ПРИНЯТЫХ результатов
-    // каждой полосы, делим на `safe_accepted` (>= safe_margin от ОБЕИХ
-    // границ СВОЕЙ полосы — доказанно недостижимы НИКАКИМ boundary-матчем,
-    // см. doc-комментарий `safe_margin` выше) и `at_risk_accepted`
-    // (оставшиеся core-победители, теоретически достижимые boundary).
-    // `safe_accepted` — окончательный, без дальнейших проверок (та часть
-    // выигрыша от параллелизации, которую фикс бага не обязан приносить в
-    // жертву — первая версия фикса сливала ВСЕ core-матчи обратно,
-    // измеренная регрессия ~30-50% на CA-пробке даже для reach=1, где
-    // риска никогда не было). `at_risk_accepted` идёт ОДНИМ дополнительным
-    // проходом `arbitrate_with_cam` вместе с `boundary`, как СЫРЫЕ
-    // кандидаты (уже победившие локально, но не факт, что переживут
-    // встречу с boundary) — тем же детерминированным тотальным порядком.
-    // Lemma 6 гарантирует, что at_risk_accepted-vs-at_risk_accepted (разные
-    // полосы) здесь никогда не найдёт конфликт (это ещё core по ИСХОДНОМУ
-    // определению) — проход тратит на них время впустую, но не портит
-    // результат; единственные РЕАЛЬНЫЕ решения этого прохода —
-    // boundary-vs-at_risk_accepted и boundary-vs-boundary, ровно то, чего
-    // не хватало.
-    //
-    // (`at_risk_accepted` — переменная ИЗ ЭТОЙ, уже исторической версии
-    // фикса, в текущем коде ниже её нет — см. фикс бага #2 сразу дальше,
-    // заменивший её на `at_risk_zone_by_band`.)
-    //
-    // РЕАЛЬНЫЙ БАГ #2, найден 2026-08-1X целенаправленным тестом
-    // (`test_arbitrate_spatial_matches_centralized_at_risk_loser_frees_locally_rejected_weaker_candidate`,
-    // сконструированным именно под остаточный риск, задокументированный
-    // выше при фиксе бага #1 -- и подтвердившимся: не гипотетический.
-    // Раньше в `at_risk_accepted` шли только ПОБЕДИТЕЛИ этапа локального
-    // арбитража полосы (`accepted`, отфильтрованный по позиции). Если
-    // такой победитель (W) проигрывал boundary-конкуренту (B) в финальном
-    // merge-проходе — W отклонялся ЦЕЛИКОМ (греди, не частично), но более
-    // слабый кандидат ТОЙ ЖЕ клетки (L), отвергнутый W ещё на этапе
-    // локального арбитража полосы, уже не участвовал в финальном проходе
-    // вообще -- он не пережил в `accepted`, значит физически не мог
-    // попасть в `at_risk_accepted`. Централизованный арбитраж той же
-    // тройки (порядок B > W > L): B принят, W отклонён (клетка B занята),
-    // L ПРОВЕРЯЕТСЯ НЕЗАВИСИМО -- его клетка так и осталась свободной (W
-    // её не забирал, будучи отклонён целиком) -- L принят. Расхождение
-    // реально: spatial теряет L, centralized его находит.
+    // НЕ склеивать `core` (принятые в полосах) и `boundary` без
+    // перекрёстной проверки — `margin=2*reach` (Lemma 6) доказывает только
+    // "core из РАЗНЫХ полос не пересекаются", ничего не говорит про
+    // boundary-против-соседнего-core. Два реальных найденных бага и их
+    // фиксы (safe/at_risk-разбиение по `safe_margin`, затем
+    // `at_risk_zone_by_band` вместо `at_risk_accepted`) — полный формальный
+    // разбор с конструктивными контрпримерами в `specs/architecture.md` §5.
     //
     // Фикс: в финальный merge-проход идут не `accepted`-победители полосы,
     // а `at_risk_zone_by_band` -- ИСХОДНЫЕ кандидаты at-risk зоны (и
@@ -715,7 +704,15 @@ pub(crate) fn arbitrate_spatial_with_cam(
     let mut reserved_cells: Vec<(i32, i32)> = Vec::new();
     let mut reserved_scratch: Vec<(i32, i32)> = Vec::new();
     for m in &safe_accepted {
-        get_match_affected_cells(m, &head_index, rule_cache, bounds, cam_positions, feedback_counters, &mut reserved_scratch);
+        get_match_affected_cells(
+            m,
+            &head_index,
+            rule_cache,
+            bounds,
+            cam_positions,
+            feedback_counters,
+            &mut reserved_scratch,
+        );
         reserved_cells.extend(reserved_scratch.iter().copied());
     }
 
@@ -723,8 +720,18 @@ pub(crate) fn arbitrate_spatial_with_cam(
     for band_matches in at_risk_zone_by_band {
         merge_candidates.extend(band_matches);
     }
-    let (merge_accepted, merge_tie_break_decided) =
-        arbitrate_with_cam(merge_candidates, rule_index, rule_cache, bounds, cam_positions, generation, starvation_counters, feedback_counters, &reserved_cells, get_cell_age);
+    let (merge_accepted, merge_tie_break_decided) = arbitrate_with_cam(
+        merge_candidates,
+        rule_index,
+        rule_cache,
+        bounds,
+        cam_positions,
+        generation,
+        starvation_counters,
+        feedback_counters,
+        &reserved_cells,
+        get_cell_age,
+    );
 
     let mut result = safe_accepted;
     result.extend(merge_accepted);
@@ -757,7 +764,11 @@ fn resolve_sort_fields(
     match lookup_rule(head_index, m.head, m.rule_idx) {
         Some(rule) => {
             let priority = match rule.starvation_after {
-                Some(threshold) if starvation_counters.get(&(m.x, m.y, m.rule_idx)).copied().unwrap_or(0) >= threshold => u32::MAX,
+                Some(threshold)
+                    if starvation_counters.get(&(m.x, m.y, m.rule_idx)).copied().unwrap_or(0) >= threshold =>
+                {
+                    u32::MAX
+                }
                 _ => rule.priority,
             };
             (priority, rule.tie_break, RuleIdKey::from_id(&rule.id))
@@ -914,20 +925,31 @@ fn get_match_affected_cells(
         let (cells, direction) = if latched {
             (&rule_data.feedback_alt_write_cells, spec.new_direction)
         } else {
-            let declared = matched_rule.and_then(|rule| rule.shifts.iter().flatten().next()).map(|s| s.direction);
-            (&rule_data.feedback_normal_write_cells, declared.unwrap_or(spec.new_direction))
+            let declared = matched_rule
+                .and_then(|rule| rule.shifts.iter().flatten().next())
+                .map(|s| s.direction);
+            (
+                &rule_data.feedback_normal_write_cells,
+                declared.unwrap_or(spec.new_direction),
+            )
         };
         let target = direction_delta(direction);
-        out.extend(cells.iter().map(|&(dx, dy)| clamp_shift_target(m, (dx, dy), (dx, dy) == target, overflow, w, h)));
+        out.extend(
+            cells
+                .iter()
+                .map(|&(dx, dy)| clamp_shift_target(m, (dx, dy), (dx, dy) == target, overflow, w, h)),
+        );
         return;
     }
 
     // Правило с несколькими сдвигами реплицирует значение в КАЖДУЮ цель
     // независимо (см. RuleData::shift_targets) — клэмпинг при
     // OverflowAction::Write применим к любой из них, не только к первой.
-    out.extend(rule_data.write_cells.iter().map(|&(dx, dy)| {
-        clamp_shift_target(m, (dx, dy), rule_data.shift_targets.contains(&(dx, dy)), overflow, w, h)
-    }));
+    out.extend(
+        rule_data.write_cells.iter().map(|&(dx, dy)| {
+            clamp_shift_target(m, (dx, dy), rule_data.shift_targets.contains(&(dx, dy)), overflow, w, h)
+        }),
+    );
 }
 
 /// (dx, dy) направления сдвига — та же таблица, что и везде в проекте
@@ -945,7 +967,14 @@ pub(crate) fn direction_delta(direction: crate::types::Direction) -> (i32, i32) 
 /// Клэмпинг одной относительной ячейки записи на границу решётки при
 /// `OverflowAction::Write`/`WriteLiteral` — общая логика для обычного пути и
 /// `Rule::feedback`'а, см. doc-комментарий `get_match_affected_cells`.
-fn clamp_shift_target(m: &RuleMatch, (dx, dy): (i32, i32), is_shift_target: bool, overflow: Option<OverflowAction>, w: i32, h: i32) -> (i32, i32) {
+fn clamp_shift_target(
+    m: &RuleMatch,
+    (dx, dy): (i32, i32),
+    is_shift_target: bool,
+    overflow: Option<OverflowAction>,
+    w: i32,
+    h: i32,
+) -> (i32, i32) {
     let abs = (m.x as i32 + dx, m.y as i32 + dy);
     if w > 0 && h > 0 && is_shift_target {
         if let Some(OverflowAction::Write(_) | OverflowAction::WriteLiteral(_)) = overflow {

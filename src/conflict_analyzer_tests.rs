@@ -10,7 +10,9 @@ fn make_rule(
     min_age: u64,
 ) -> Rule {
     // Строим pattern из id: [(0,0, id[0]), (1,0, id[1]), ...]
-    let pattern: Vec<(i8, i8, CellType)> = id.iter().enumerate()
+    let pattern: Vec<(i8, i8, CellType)> = id
+        .iter()
+        .enumerate()
         .map(|(i, &v)| (i as i8, 0i8, CellType(v)))
         .collect();
     Rule {
@@ -25,21 +27,29 @@ fn make_rule(
                     .collect()
             })
             .collect(),
-        changes: changes.into_iter().map(|(dx, dy, v)| (dx, dy, crate::types::ChangeValue::Literal(v))).collect(),
+        changes: changes
+            .into_iter()
+            .map(|(dx, dy, v)| (dx, dy, crate::types::ChangeValue::Literal(v)))
+            .collect(),
         active_only: false,
         priority,
         min_age,
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
 /// Загрузить правила из YAML-файла конфига через load_config.
 fn load_rules_from_config(path: &str) -> Vec<Rule> {
-    let (_, rule_index) = crate::config::load_config(path)
-        .unwrap_or_else(|e| panic!("Не удалось загрузить {}: {}", path, e));
+    let (_, rule_index) =
+        crate::config::load_config(path).unwrap_or_else(|e| panic!("Не удалось загрузить {}: {}", path, e));
     // Извлекаем все правила из индекса
     let mut rules: Vec<Rule> = Vec::new();
     for (_, rules_vec) in rule_index {
@@ -157,20 +167,8 @@ fn test_different_head_and_min_age_no_conflict() {
     // Правило 1: pattern=[(0,0,1)], min_age=0
     // Правило 2: pattern=[(0,0,2)], min_age=10
     let rules = vec![
-        make_rule(
-            vec![1],
-            vec![],
-            vec![(0, 0, 0)],
-            10,
-            0,
-        ),
-        make_rule(
-            vec![2],
-            vec![],
-            vec![(0, 0, 0)],
-            5,
-            10,
-        ),
+        make_rule(vec![1], vec![], vec![(0, 0, 0)], 10, 0),
+        make_rule(vec![2], vec![], vec![(0, 0, 0)], 5, 10),
     ];
 
     let graph = ConflictGraph::build(&rules);
@@ -189,20 +187,8 @@ fn test_overlap_incompatible_types_no_conflict() {
     // Правило 1: pattern = [(0,0,1), (1,0,2)]
     // Правило 2: pattern = [(0,0,1), (1,0,3)]
     let rules = vec![
-        make_rule(
-            vec![1, 2],
-            vec![],
-            vec![(0, 0, 5)],
-            10,
-            0,
-        ),
-        make_rule(
-            vec![1, 3],
-            vec![],
-            vec![(0, 0, 6)],
-            10,
-            0,
-        ),
+        make_rule(vec![1, 2], vec![], vec![(0, 0, 5)], 10, 0),
+        make_rule(vec![1, 3], vec![], vec![(0, 0, 6)], 10, 0),
     ];
 
     let graph = ConflictGraph::build(&rules);
@@ -219,25 +205,15 @@ fn test_overlap_incompatible_types_no_conflict() {
 #[test]
 fn test_overlap_compatible_types_has_conflict() {
     let rules = vec![
-        make_rule(
-            vec![1, 2],
-            vec![vec![(Direction::Right, 1)]],
-            vec![(0, 0, 5)],
-            10,
-            0,
-        ),
-        make_rule(
-            vec![2, 3],
-            vec![vec![(Direction::Left, 1)]],
-            vec![(0, 0, 6)],
-            10,
-            0,
-        ),
+        make_rule(vec![1, 2], vec![vec![(Direction::Right, 1)]], vec![(0, 0, 5)], 10, 0),
+        make_rule(vec![2, 3], vec![vec![(Direction::Left, 1)]], vec![(0, 0, 6)], 10, 0),
     ];
 
     let graph = ConflictGraph::build(&rules);
     if graph.is_conflict_free() {
-        println!("ПРЕДУПРЕЖДЕНИЕ: тест overlap_compatible_types не обнаружил конфликт (возможно, алгоритм консервативен)");
+        println!(
+            "ПРЕДУПРЕЖДЕНИЕ: тест overlap_compatible_types не обнаружил конфликт (возможно, алгоритм консервативен)"
+        );
     } else {
         assert!(
             graph.edges.contains(&(0, 1)),
@@ -255,10 +231,7 @@ fn test_overlap_compatible_types_has_conflict() {
 fn test_cascade_rules_have_potential_conflict() {
     let rules = load_rules_from_config("configs/cascade.yaml");
     let graph = ConflictGraph::build(&rules);
-    assert!(
-        rules.len() >= 2,
-        "cascade.yaml должен содержать минимум 2 правила"
-    );
+    assert!(rules.len() >= 2, "cascade.yaml должен содержать минимум 2 правила");
     assert_eq!(graph.rule_count, rules.len());
     if !graph.is_conflict_free() {
         println!(
@@ -318,40 +291,16 @@ fn test_priority_rules() {
 
 #[test]
 fn test_composition_unique_head() {
-    let rules_a = vec![make_rule(
-        vec![10],
-        vec![],
-        vec![(0, 0, 0)],
-        10,
-        0,
-    )];
-    let rules_b = vec![make_rule(
-        vec![20],
-        vec![],
-        vec![(0, 0, 0)],
-        10,
-        0,
-    )];
+    let rules_a = vec![make_rule(vec![10], vec![], vec![(0, 0, 0)], 10, 0)];
+    let rules_b = vec![make_rule(vec![20], vec![], vec![(0, 0, 0)], 10, 0)];
     let verdict = ConflictGraph::check_composition(&rules_a, &rules_b);
     assert_eq!(verdict, CompositionVerdict::Safe);
 }
 
 #[test]
 fn test_composition_same_head() {
-    let rules_a = vec![make_rule(
-        vec![10],
-        vec![],
-        vec![(0, 0, 5)],
-        10,
-        0,
-    )];
-    let rules_b = vec![make_rule(
-        vec![10],
-        vec![],
-        vec![(0, 0, 6)],
-        10,
-        0,
-    )];
+    let rules_a = vec![make_rule(vec![10], vec![], vec![(0, 0, 5)], 10, 0)];
+    let rules_b = vec![make_rule(vec![10], vec![], vec![(0, 0, 6)], 10, 0)];
     let verdict = ConflictGraph::check_composition(&rules_a, &rules_b);
     assert_eq!(
         verdict,
@@ -362,20 +311,8 @@ fn test_composition_same_head() {
 
 #[test]
 fn test_composition_min_age() {
-    let rules_a = vec![make_rule(
-        vec![10],
-        vec![],
-        vec![(0, 0, 5)],
-        10,
-        0,
-    )];
-    let rules_b = vec![make_rule(
-        vec![10],
-        vec![],
-        vec![(0, 0, 6)],
-        10,
-        10,
-    )];
+    let rules_a = vec![make_rule(vec![10], vec![], vec![(0, 0, 5)], 10, 0)];
+    let rules_b = vec![make_rule(vec![10], vec![], vec![(0, 0, 6)], 10, 10)];
     let verdict = ConflictGraph::check_composition(&rules_a, &rules_b);
     assert_eq!(
         verdict,
@@ -386,20 +323,8 @@ fn test_composition_min_age() {
 
 #[test]
 fn test_composition_spatial() {
-    let rules_a = vec![make_rule(
-        vec![1],
-        vec![],
-        vec![(0, 0, 0)],
-        10,
-        0,
-    )];
-    let rules_b = vec![make_rule(
-        vec![2],
-        vec![],
-        vec![(0, 0, 0)],
-        10,
-        0,
-    )];
+    let rules_a = vec![make_rule(vec![1], vec![], vec![(0, 0, 0)], 10, 0)];
+    let rules_b = vec![make_rule(vec![2], vec![], vec![(0, 0, 0)], 10, 0)];
     let verdict = ConflictGraph::check_composition(&rules_a, &rules_b);
     assert_eq!(verdict, CompositionVerdict::Safe);
 }
@@ -472,10 +397,14 @@ fn test_feedback_conflict_only_visible_via_alternate_direction_union() {
         cam: None,
         tie_break: 0,
         starvation_after: None,
-        feedback: Some(FeedbackSpec { timeout: 5, new_direction: Direction::Down }),
+        feedback: Some(FeedbackSpec {
+            timeout: 5,
+            new_direction: Direction::Down,
+        }),
         recursion: None,
         memory: None,
-        max_activations: None, cross_layer_reads: Vec::new(),
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     // Правило B: статичное self-change, без сдвигов — пишет только в (0,0)
     // ОТНОСИТЕЛЬНО СЕБЯ. Размещено (в терминах относительного офсета,
@@ -494,7 +423,11 @@ fn test_feedback_conflict_only_visible_via_alternate_direction_union() {
         cam: None,
         tie_break: 0,
         starvation_after: None,
-        feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
 
     let graph = ConflictGraph::build(&[rule_a, rule_b]);
@@ -538,13 +471,13 @@ fn test_analyze_conflicts_maps_flat_indices_back_to_head_and_local_idx() {
     let (_, rule_index) = crate::config::load_config("configs/conflict.yaml")
         .unwrap_or_else(|e| panic!("Не удалось загрузить conflict.yaml: {}", e));
     let report = analyze_conflicts(&rule_index);
-    assert!(
-        !report.is_conflict_free(),
-        "conflict.yaml: отчёт не должен быть пуст"
-    );
+    assert!(!report.is_conflict_free(), "conflict.yaml: отчёт не должен быть пуст");
     let cross_head = report.conflicts.iter().find(|p| p.head_a != p.head_b);
     let pair = cross_head.unwrap_or_else(|| {
-        panic!("ожидалась кросс-головная конфликтующая пара (1<->3), получено: {:?}", report.conflicts)
+        panic!(
+            "ожидалась кросс-головная конфликтующая пара (1<->3), получено: {:?}",
+            report.conflicts
+        )
     });
     let heads: (CellType, CellType) = (pair.head_a, pair.head_b);
     assert!(
@@ -552,6 +485,14 @@ fn test_analyze_conflicts_maps_flat_indices_back_to_head_and_local_idx() {
         "ожидались головы 1 и 3, получено: {:?}",
         pair
     );
-    assert_eq!(pair.rule_idx_a, 0, "у каждой головы ровно одно правило — локальный индекс обязан быть 0: {:?}", pair);
-    assert_eq!(pair.rule_idx_b, 0, "у каждой головы ровно одно правило — локальный индекс обязан быть 0: {:?}", pair);
+    assert_eq!(
+        pair.rule_idx_a, 0,
+        "у каждой головы ровно одно правило — локальный индекс обязан быть 0: {:?}",
+        pair
+    );
+    assert_eq!(
+        pair.rule_idx_b, 0,
+        "у каждой головы ровно одно правило — локальный индекс обязан быть 0: {:?}",
+        pair
+    );
 }

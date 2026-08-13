@@ -48,11 +48,27 @@ fn build_engine() -> Engine<VecStorage> {
     grid.set_boundary(BOUNDARY_X, 0, out);
 
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
-    idx.insert(CellType(RAD), vec![Rule {
-        id: vec![CellType(RAD)], pattern: vec![], shifts: vec![],
-        changes: vec![(0, 0, ChangeValue::Literal(MID))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-    }]);
+    idx.insert(
+        CellType(RAD),
+        vec![Rule {
+            id: vec![CellType(RAD)],
+            pattern: vec![],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(MID))],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
+        }],
+    );
 
     let mut engine = Engine::new(grid, idx);
     engine.enable_guarded_self_modification();
@@ -69,7 +85,13 @@ fn inject_packet(engine: &mut Engine<VecStorage>, target_id: u8, new_value: u8) 
     let packet: [u8; 7] = [10, 1, target_id, 0, 0, new_value, 0xFF]; // priority, id_len, id_byte, dx=0, dy=0, value, terminator
     if let Some(buf) = engine.grid_mut().get_boundary_mut(BOUNDARY_X, 0) {
         for &b in &packet {
-            buf.enqueue(0, Cell { value: CellValue(CellType(b)), born_at: 0 });
+            buf.enqueue(
+                0,
+                Cell {
+                    value: CellValue(CellType(b)),
+                    born_at: 0,
+                },
+            );
         }
     }
     engine.run_tick();
@@ -77,7 +99,10 @@ fn inject_packet(engine: &mut Engine<VecStorage>, target_id: u8, new_value: u8) 
 
 fn main() {
     let mut engine = build_engine();
-    println!("Модуль A (распад, id={}) на месте. Проверка охраны совместной самомодификации.\n", RAD);
+    println!(
+        "Модуль A (распад, id={}) на месте. Проверка охраны совместной самомодификации.\n",
+        RAD
+    );
 
     inject_packet(&mut engine, 50, 77);
     println!(
@@ -97,7 +122,14 @@ fn main() {
     // Убеждаемся, что модуль A на самом деле продолжает работать, а не
     // просто "выглядит нетронутым" в rule_index.
     let mut check_grid = Grid::new(VecStorage::new(1, 1), Default::default());
-    check_grid.set_cell(0, 0, Cell { value: CellValue(CellType(RAD)), born_at: 0 });
+    check_grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(RAD)),
+            born_at: 0,
+        },
+    );
     let mut check_engine = Engine::new(check_grid, {
         let mut idx = HashMap::new();
         idx.insert(CellType(RAD), a_rule.clone());
@@ -106,7 +138,8 @@ fn main() {
     check_engine.run_tick();
     println!(
         "\nМодуль A всё ещё превращает {} в {}: {}",
-        RAD, MID,
+        RAD,
+        MID,
         check_engine.grid().get_cell(0, 0).map(|c| c.value.0 .0) == Some(MID)
     );
 }

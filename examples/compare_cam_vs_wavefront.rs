@@ -35,30 +35,69 @@ const TARGET: u8 = 3;
 /// (без сдвига); FOUND едет влево обратно к магниту (позиция 0).
 fn wavefront_rules() -> HashMap<CellType, Vec<Rule>> {
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
-    idx.insert(CellType(SEEK), vec![
-        // Более специфичный паттерн — выше приоритет, побеждает "слепой" сдвиг.
-        Rule {
-            id: vec![CellType(SEEK)],
-            pattern: vec![(0, 0, CellType(SEEK)), (1, 0, CellType(TARGET))],
-            shifts: vec![],
-            changes: vec![(0, 0, ChangeValue::Literal(FOUND))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        },
-        Rule {
-            id: vec![CellType(SEEK)],
-            pattern: vec![(0, 0, CellType(SEEK))],
-            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+    idx.insert(
+        CellType(SEEK),
+        vec![
+            // Более специфичный паттерн — выше приоритет, побеждает "слепой" сдвиг.
+            Rule {
+                id: vec![CellType(SEEK)],
+                pattern: vec![(0, 0, CellType(SEEK)), (1, 0, CellType(TARGET))],
+                shifts: vec![],
+                changes: vec![(0, 0, ChangeValue::Literal(FOUND))],
+                active_only: false,
+                priority: 10,
+                min_age: 0,
+                overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            },
+            Rule {
+                id: vec![CellType(SEEK)],
+                pattern: vec![(0, 0, CellType(SEEK))],
+                shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+                changes: vec![],
+                active_only: false,
+                priority: 0,
+                min_age: 0,
+                overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            },
+        ],
+    );
+    idx.insert(
+        CellType(FOUND),
+        vec![Rule {
+            id: vec![CellType(FOUND)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
             changes: vec![],
-            active_only: false, priority: 0, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        },
-    ]);
-    idx.insert(CellType(FOUND), vec![Rule {
-        id: vec![CellType(FOUND)],
-        pattern: vec![],
-        shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
-        changes: vec![],
-        active_only: false, priority: 0, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-    }]);
+            active_only: false,
+            priority: 0,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
+        }],
+    );
     idx
 }
 
@@ -72,8 +111,22 @@ fn run_wavefront(radius: usize) -> (u32, std::time::Duration) {
     let width = radius + 2;
     let storage = VecStorage::new(width, 1);
     let mut grid = Grid::new(storage, Default::default());
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType(SEEK)), born_at: 0 });
-    grid.set_cell(radius, 0, Cell { value: CellValue(CellType(TARGET)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(SEEK)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        radius,
+        0,
+        Cell {
+            value: CellValue(CellType(TARGET)),
+            born_at: 0,
+        },
+    );
     let mut engine = Engine::new(grid, wavefront_rules());
 
     let start = Instant::now();
@@ -95,7 +148,12 @@ fn run_wavefront(radius: usize) -> (u32, std::time::Duration) {
 /// таймингом — один сплошной проход по диску радиуса R.
 fn run_cam_scan(radius: i32, n_targets: usize) -> std::time::Duration {
     let targets: Vec<(i32, i32)> = (0..n_targets)
-        .map(|i| ((i as i32 * 37) % (radius * 4 + 1) - radius * 2, (i as i32 * 53) % (radius * 4 + 1) - radius * 2))
+        .map(|i| {
+            (
+                (i as i32 * 37) % (radius * 4 + 1) - radius * 2,
+                (i as i32 * 53) % (radius * 4 + 1) - radius * 2,
+            )
+        })
         .collect();
     let magnet = (0i32, 0i32);
 
@@ -118,7 +176,11 @@ fn main() {
         let cam_time = run_cam_scan(radius as i32, (2 * radius + 1).pow(2).min(2000));
         let (wave_ticks, wave_time) = run_wavefront(radius);
 
-        let verdict = if cam_time < wave_time { "CAM быстрее" } else { "волна быстрее" };
+        let verdict = if cam_time < wave_time {
+            "CAM быстрее"
+        } else {
+            "волна быстрее"
+        };
         println!(
             "{radius:>6} | {:>17.2?} | {:>35.2?} | {wave_ticks:>13} | {verdict}",
             cam_time, wave_time,

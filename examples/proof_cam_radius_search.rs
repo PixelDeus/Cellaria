@@ -61,9 +61,7 @@ struct Magnet {
 fn search_nearest(magnet: &Magnet, targets: &[Pos]) -> Option<Pos> {
     targets
         .iter()
-        .filter(|t| {
-            (t.x - magnet.pos.x).abs() <= magnet.radius && (t.y - magnet.pos.y).abs() <= magnet.radius
-        })
+        .filter(|t| (t.x - magnet.pos.x).abs() <= magnet.radius && (t.y - magnet.pos.y).abs() <= magnet.radius)
         .copied()
         .min_by_key(|t| {
             let dist = (t.x - magnet.pos.x).abs().max((t.y - magnet.pos.y).abs());
@@ -135,7 +133,12 @@ impl Rng {
 }
 
 fn random_targets(rng: &mut Rng, n: usize) -> Vec<Pos> {
-    (0..n).map(|_| Pos { x: rng.range(0, GRID_W), y: rng.range(0, GRID_H) }).collect()
+    (0..n)
+        .map(|_| Pos {
+            x: rng.range(0, GRID_W),
+            y: rng.range(0, GRID_H),
+        })
+        .collect()
 }
 
 fn main() {
@@ -146,7 +149,10 @@ fn main() {
     let mut check1_found = 0u32;
     for _ in 0..20_000 {
         let magnet = Magnet {
-            pos: Pos { x: rng.range(0, GRID_W), y: rng.range(0, GRID_H) },
+            pos: Pos {
+                x: rng.range(0, GRID_W),
+                y: rng.range(0, GRID_H),
+            },
             radius: RADIUS,
             priority: 0,
             age: 0,
@@ -158,7 +164,10 @@ fn main() {
             check1_found += 1;
             let dx = (found.x - magnet.pos.x).abs();
             let dy = (found.y - magnet.pos.y).abs();
-            assert!(dx <= RADIUS && dy <= RADIUS, "найденная клетка вне радиуса: dx={dx} dy={dy} R={RADIUS}");
+            assert!(
+                dx <= RADIUS && dy <= RADIUS,
+                "найденная клетка вне радиуса: dx={dx} dy={dy} R={RADIUS}"
+            );
         }
     }
     println!(
@@ -172,14 +181,20 @@ fn main() {
     let mut check2_real_conflicts_within_bound = 0u32;
     for _ in 0..5_000 {
         let m1 = Magnet {
-            pos: Pos { x: rng.range(0, GRID_W), y: rng.range(0, GRID_H) },
+            pos: Pos {
+                x: rng.range(0, GRID_W),
+                y: rng.range(0, GRID_H),
+            },
             radius: RADIUS,
             priority: 0,
             age: 0,
             id: 1,
         };
         let m2 = Magnet {
-            pos: Pos { x: rng.range(0, GRID_W), y: rng.range(0, GRID_H) },
+            pos: Pos {
+                x: rng.range(0, GRID_W),
+                y: rng.range(0, GRID_H),
+            },
             radius: RADIUS,
             priority: 0,
             age: 0,
@@ -201,7 +216,10 @@ fn main() {
             // Главное утверждение: граница сказала "не пересекаются" ⇒
             // реального пересечения НЕ БЫВАЕТ, ни при каком содержимом
             // решётки — если это нарушится хоть раз, граница несостоятельна.
-            assert!(!real_overlap, "ложноотрицательный результат: диски не пересекались, но affected-cells пересеклись");
+            assert!(
+                !real_overlap,
+                "ложноотрицательный результат: диски не пересекались, но affected-cells пересеклись"
+            );
         } else if real_overlap {
             check2_real_conflicts_within_bound += 1;
         }
@@ -218,10 +236,25 @@ fn main() {
     let shared_target = Pos { x: 20, y: 20 };
     let targets = vec![shared_target];
     let magnets = vec![
-        Magnet { pos: Pos { x: 18, y: 20 }, radius: RADIUS, priority: 5, age: 0, id: 100 }, // ниже priority
-        Magnet { pos: Pos { x: 22, y: 20 }, radius: RADIUS, priority: 9, age: 0, id: 200 }, // выше priority — должен победить
+        Magnet {
+            pos: Pos { x: 18, y: 20 },
+            radius: RADIUS,
+            priority: 5,
+            age: 0,
+            id: 100,
+        }, // ниже priority
+        Magnet {
+            pos: Pos { x: 22, y: 20 },
+            radius: RADIUS,
+            priority: 9,
+            age: 0,
+            id: 200,
+        }, // выше priority — должен победить
     ];
-    assert!(discs_could_conflict(&magnets[0], &magnets[1]), "тестовый сценарий должен попадать внутрь границы конфликта");
+    assert!(
+        discs_could_conflict(&magnets[0], &magnets[1]),
+        "тестовый сценарий должен попадать внутрь границы конфликта"
+    );
 
     let accepted = arbitrate(&magnets, &targets);
     assert_eq!(accepted.len(), 1, "ровно один магнит должен победить (all-or-nothing)");
@@ -232,8 +265,10 @@ fn main() {
          тот же all-or-nothing тай-брейк, что и arbitrator::arbitrate ✓"
     );
 
-    println!("\nВывод: CAM с ограничением радиуса R теоретически совместим с моделью — статическая \
+    println!(
+        "\nВывод: CAM с ограничением радиуса R теоретически совместим с моделью — статическая \
 разрешимость конфликтов сохраняется, арбитраж конкретных матчей не требует новой логики. \
 Цена: новый вид сопоставления (не текущий pattern), O(R²) на клетку-кандидата, и более \
-консервативный (не обязательно более медленный) граф конфликтов для правил, использующих этот механизм.");
+консервативный (не обязательно более медленный) граф конфликтов для правил, использующих этот механизм."
+    );
 }

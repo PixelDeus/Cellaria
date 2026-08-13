@@ -6,8 +6,8 @@ use crate::fast_hash::FxHashMap;
 use crate::grid::Grid;
 use crate::storage::GridStorage;
 use crate::types::{
-    AffectedRegion, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction,
-    RecordTrigger, RecordedValue, Rule, RuleMatch, ShiftSpec,
+    AffectedRegion, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, RecordTrigger, RecordedValue,
+    Rule, RuleMatch, ShiftSpec,
 };
 
 /// Буфер изменений: координата → новое значение ячейки.
@@ -142,7 +142,16 @@ pub(crate) fn apply_matches_with_cam<S: GridStorage>(
             // гарантирует отсутствие пересечения записей между matches, так
             // что объединять нечего, а лишний HashMap на каждый match — это
             // лишняя аллокация и хэширование на пустом месте.
-            let (region, outputs) = apply_rule_buffered(grid, &m, rule, rule_data, write_buffer, feedback_counters, memory_buffers, pattern_buffer);
+            let (region, outputs) = apply_rule_buffered(
+                grid,
+                &m,
+                rule,
+                rule_data,
+                write_buffer,
+                feedback_counters,
+                memory_buffers,
+                pattern_buffer,
+            );
             regions.push(region);
             pending_boundary.extend(outputs);
         }
@@ -219,8 +228,20 @@ fn apply_cam_buffered<S: GridStorage>(
     let magnet = (m.x, m.y);
     let found = (fx, fy);
 
-    write_buffer.insert(found, Cell { value: CellValue::default(), born_at: gen });
-    write_buffer.insert(magnet, Cell { value: CellValue(cam.target_type), born_at: gen });
+    write_buffer.insert(
+        found,
+        Cell {
+            value: CellValue::default(),
+            born_at: gen,
+        },
+    );
+    write_buffer.insert(
+        magnet,
+        Cell {
+            value: CellValue(cam.target_type),
+            born_at: gen,
+        },
+    );
 
     let mut xs = vec![found.0, magnet.0];
     let mut ys = vec![found.1, magnet.1];
@@ -256,8 +277,20 @@ fn apply_cam_buffered<S: GridStorage>(
             };
             let level_magnet = (cx as u32, cy as u32);
             let level_found = (nfx as u32, nfy as u32);
-            write_buffer.insert(level_found, Cell { value: CellValue::default(), born_at: gen });
-            write_buffer.insert(level_magnet, Cell { value: CellValue(cam.target_type), born_at: gen });
+            write_buffer.insert(
+                level_found,
+                Cell {
+                    value: CellValue::default(),
+                    born_at: gen,
+                },
+            );
+            write_buffer.insert(
+                level_magnet,
+                Cell {
+                    value: CellValue(cam.target_type),
+                    born_at: gen,
+                },
+            );
             xs.push(level_found.0);
             xs.push(level_magnet.0);
             ys.push(level_found.1);
@@ -268,10 +301,22 @@ fn apply_cam_buffered<S: GridStorage>(
     }
 
     AffectedRegion {
-        x_start: *xs.iter().min().expect("xs always has at least the level-0 pair, never empty"),
-        x_end: *xs.iter().max().expect("xs always has at least the level-0 pair, never empty"),
-        y_start: *ys.iter().min().expect("ys always has at least the level-0 pair, never empty"),
-        y_end: *ys.iter().max().expect("ys always has at least the level-0 pair, never empty"),
+        x_start: *xs
+            .iter()
+            .min()
+            .expect("xs always has at least the level-0 pair, never empty"),
+        x_end: *xs
+            .iter()
+            .max()
+            .expect("xs always has at least the level-0 pair, never empty"),
+        y_start: *ys
+            .iter()
+            .min()
+            .expect("ys always has at least the level-0 pair, never empty"),
+        y_end: *ys
+            .iter()
+            .max()
+            .expect("ys always has at least the level-0 pair, never empty"),
         has_changes: false,
         written_cells,
     }
@@ -428,8 +473,18 @@ fn apply_rule_buffered<S: GridStorage>(
                 None => *shift,
             };
             apply_shift_buffered(
-                grid, cx, cy, &effective_shift, rule, m.rule_idx, feedback_counters, memory_buffers, &mut affected,
-                write_buffer, &mut pending_outputs, gen,
+                grid,
+                cx,
+                cy,
+                &effective_shift,
+                rule,
+                m.rule_idx,
+                feedback_counters,
+                memory_buffers,
+                &mut affected,
+                write_buffer,
+                &mut pending_outputs,
+                gen,
             );
         }
     }
@@ -455,10 +510,30 @@ fn apply_rule_buffered<S: GridStorage>(
         };
 
         if shift_targets.is_empty() {
-            apply_changes_at(rule, pattern_buffer.as_slice(), cx, cy, (0, 0), grid, gen, write_buffer, &mut affected);
+            apply_changes_at(
+                rule,
+                pattern_buffer.as_slice(),
+                cx,
+                cy,
+                (0, 0),
+                grid,
+                gen,
+                write_buffer,
+                &mut affected,
+            );
         } else {
             for &target in shift_targets {
-                apply_changes_at(rule, pattern_buffer.as_slice(), cx, cy, target, grid, gen, write_buffer, &mut affected);
+                apply_changes_at(
+                    rule,
+                    pattern_buffer.as_slice(),
+                    cx,
+                    cy,
+                    target,
+                    grid,
+                    gen,
+                    write_buffer,
+                    &mut affected,
+                );
             }
         }
     }
@@ -502,9 +577,9 @@ fn apply_rule_buffered<S: GridStorage>(
             if let Some(mem_spec) = &rule.memory {
                 if let RecordTrigger::NeighborType(dir) = mem_spec.record_trigger {
                     let key = (ox as u32, oy as u32, m.rule_idx);
-                    let gate_open = memory_buffers
-                        .get(&key)
-                        .is_some_and(|buf| buf.len() == mem_spec.window && buf.iter().eq(mem_spec.match_pattern.iter()));
+                    let gate_open = memory_buffers.get(&key).is_some_and(|buf| {
+                        buf.len() == mem_spec.window && buf.iter().eq(mem_spec.match_pattern.iter())
+                    });
                     let (ndx, ndy) = crate::engine::arbitrator::direction_delta(dir);
                     let neighbor_type = read_cell_effective(grid, write_buffer, ox + ndx, oy + ndy).0;
                     let buf = memory_buffers.entry(key).or_default();
@@ -518,7 +593,17 @@ fn apply_rule_buffered<S: GridStorage>(
                 }
             }
             let level_pattern_buffer = read_pattern_buffer_effective(grid, write_buffer, &rule.pattern, ox, oy);
-            apply_changes_at(rule, &level_pattern_buffer, ox, oy, (0, 0), grid, gen, write_buffer, &mut affected);
+            apply_changes_at(
+                rule,
+                &level_pattern_buffer,
+                ox,
+                oy,
+                (0, 0),
+                grid,
+                gen,
+                write_buffer,
+                &mut affected,
+            );
         }
     }
 
@@ -537,7 +622,9 @@ fn read_cell_effective<S: GridStorage>(grid: &Grid<S>, write_buffer: &WriteBuffe
     if let Some(cell) = write_buffer.get(&(x as u32, y as u32)) {
         return cell.value;
     }
-    grid.get_cell(x as usize, y as usize).map(|c| c.value).unwrap_or_default()
+    grid.get_cell(x as usize, y as usize)
+        .map(|c| c.value)
+        .unwrap_or_default()
 }
 
 /// Вычислить возраст ОДНОЙ ячейки, учитывая уже накопленный `write_buffer` —
@@ -565,7 +652,11 @@ fn read_age_effective<S: GridStorage>(grid: &Grid<S>, write_buffer: &WriteBuffer
         return 0;
     }
     if let Some(cell) = write_buffer.get(&(x as u32, y as u32)) {
-        return if cell.is_default() { 0 } else { gen.saturating_sub(cell.born_at) };
+        return if cell.is_default() {
+            0
+        } else {
+            gen.saturating_sub(cell.born_at)
+        };
     }
     grid.get_age(x as usize, y as usize)
 }
@@ -591,7 +682,9 @@ fn pattern_matches_effective<S: GridStorage>(
     if min_age > 0 && read_age_effective(grid, write_buffer, ox, oy, gen) < min_age {
         return false;
     }
-    pattern.iter().all(|&(dx, dy, expected)| read_cell_effective(grid, write_buffer, ox + dx as i32, oy + dy as i32).0 == expected)
+    pattern.iter().all(|&(dx, dy, expected)| {
+        read_cell_effective(grid, write_buffer, ox + dx as i32, oy + dy as i32).0 == expected
+    })
 }
 
 /// Пересобрать буфер значений паттерна (для `$N`-ссылок в `changes`) для
@@ -605,7 +698,10 @@ fn read_pattern_buffer_effective<S: GridStorage>(
     ox: i32,
     oy: i32,
 ) -> Vec<CellValue> {
-    pattern.iter().map(|&(dx, dy, _)| read_cell_effective(grid, write_buffer, ox + dx as i32, oy + dy as i32)).collect()
+    pattern
+        .iter()
+        .map(|&(dx, dy, _)| read_cell_effective(grid, write_buffer, ox + dx as i32, oy + dy as i32))
+        .collect()
 }
 
 /// Рекурсивно вычислить значение `ChangeValue` — `Literal`/`Ref` листья,
@@ -796,18 +892,46 @@ fn apply_shift_buffered<S: GridStorage>(
             // конечных решётках) не меньше ширины/высоты — на ChunkStorage
             // верхняя граница практически недостижима, реальный overflow там
             // означает только уход в отрицательные координаты).
-            let bx = if nx < 0 { 0 } else { (nx as usize).min(w.saturating_sub(1)) };
-            let by = if ny < 0 { 0 } else { (ny as usize).min(h.saturating_sub(1)) };
+            let bx = if nx < 0 {
+                0
+            } else {
+                (nx as usize).min(w.saturating_sub(1))
+            };
+            let by = if ny < 0 {
+                0
+            } else {
+                (ny as usize).min(h.saturating_sub(1))
+            };
             match rule.overflow {
                 OverflowAction::Discard => {
                     // head cell is lost
                 }
                 OverflowAction::Write(value) => {
                     let output_value = if value != 0 { Some(value) } else { None };
-                    apply_overflow_write(grid, bx, by, output_value, head_cell, gen, write_buffer, affected, pending_outputs);
+                    apply_overflow_write(
+                        grid,
+                        bx,
+                        by,
+                        output_value,
+                        head_cell,
+                        gen,
+                        write_buffer,
+                        affected,
+                        pending_outputs,
+                    );
                 }
                 OverflowAction::WriteLiteral(value) => {
-                    apply_overflow_write(grid, bx, by, Some(value), head_cell, gen, write_buffer, affected, pending_outputs);
+                    apply_overflow_write(
+                        grid,
+                        bx,
+                        by,
+                        Some(value),
+                        head_cell,
+                        gen,
+                        write_buffer,
+                        affected,
+                        pending_outputs,
+                    );
                 }
             }
         }
@@ -832,18 +956,46 @@ fn apply_shift_buffered<S: GridStorage>(
             affected.y_start = affected.y_start.min(py as u32);
             affected.y_end = affected.y_end.max(py as u32 + 1);
         } else {
-            let bx = if px < 0 { 0 } else { (px as usize).min(w.saturating_sub(1)) };
-            let by = if py < 0 { 0 } else { (py as usize).min(h.saturating_sub(1)) };
+            let bx = if px < 0 {
+                0
+            } else {
+                (px as usize).min(w.saturating_sub(1))
+            };
+            let by = if py < 0 {
+                0
+            } else {
+                (py as usize).min(h.saturating_sub(1))
+            };
             match rule.overflow {
                 OverflowAction::Discard => {
                     // head cell is lost at this point of the path
                 }
                 OverflowAction::Write(value) => {
                     let output_value = if value != 0 { Some(value) } else { None };
-                    apply_overflow_write(grid, bx, by, output_value, head_cell, gen, write_buffer, affected, pending_outputs);
+                    apply_overflow_write(
+                        grid,
+                        bx,
+                        by,
+                        output_value,
+                        head_cell,
+                        gen,
+                        write_buffer,
+                        affected,
+                        pending_outputs,
+                    );
                 }
                 OverflowAction::WriteLiteral(value) => {
-                    apply_overflow_write(grid, bx, by, Some(value), head_cell, gen, write_buffer, affected, pending_outputs);
+                    apply_overflow_write(
+                        grid,
+                        bx,
+                        by,
+                        Some(value),
+                        head_cell,
+                        gen,
+                        write_buffer,
+                        affected,
+                        pending_outputs,
+                    );
                 }
             }
             break; // монотонный путь — дальше тоже вне границ

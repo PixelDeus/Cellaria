@@ -52,8 +52,12 @@ fn is_wall(x: usize, y: usize) -> bool {
     x == 5 && y <= 8
 }
 
-const DIRS: [(Direction, i8, i8); 4] =
-    [(Direction::Up, 0, -1), (Direction::Down, 0, 1), (Direction::Left, -1, 0), (Direction::Right, 1, 0)];
+const DIRS: [(Direction, i8, i8); 4] = [
+    (Direction::Up, 0, -1),
+    (Direction::Down, 0, 1),
+    (Direction::Left, -1, 0),
+    (Direction::Right, 1, 0),
+];
 
 fn dist_ct(d: u8) -> CellType {
     CellType(DIST_BASE + d)
@@ -80,7 +84,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             });
         }
         idx.insert(dist_ct(d), rules);
@@ -97,7 +106,11 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
     let mut token_rules = Vec::new();
     for &(direction, dx, dy) in &DIRS {
         for d in 0..MAX_DIST {
-            let changes = if d == 0 { vec![(0, 0, ChangeValue::Literal(ARRIVED))] } else { vec![] };
+            let changes = if d == 0 {
+                vec![(0, 0, ChangeValue::Literal(ARRIVED))]
+            } else {
+                vec![]
+            };
             token_rules.push(Rule {
                 id: vec![CellType(TOKEN)],
                 pattern: vec![(0, 0, CellType(TOKEN)), (dx, dy, dist_ct(d))],
@@ -109,7 +122,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             });
         }
     }
@@ -128,11 +146,25 @@ fn build_grid() -> Grid<VecStorage> {
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
             if is_wall(x, y) {
-                grid.set_cell(x, y, Cell { value: CellValue::new(WALL), born_at: 0 });
+                grid.set_cell(
+                    x,
+                    y,
+                    Cell {
+                        value: CellValue::new(WALL),
+                        born_at: 0,
+                    },
+                );
             }
         }
     }
-    grid.set_cell(TARGET.0, TARGET.1, Cell { value: CellValue::new(DIST_BASE), born_at: 0 }); // d=0
+    grid.set_cell(
+        TARGET.0,
+        TARGET.1,
+        Cell {
+            value: CellValue::new(DIST_BASE),
+            born_at: 0,
+        },
+    ); // d=0
     grid
 }
 
@@ -187,7 +219,11 @@ fn main() {
     for _ in 0..(MAX_DIST as u32) {
         engine.run_tick();
     }
-    let start_label = engine.grid().get_cell(START.0, START.1).map(|c| c.value.0 .0).unwrap_or(0);
+    let start_label = engine
+        .grid()
+        .get_cell(START.0, START.1)
+        .map(|c| c.value.0 .0)
+        .unwrap_or(0);
     assert_eq!(
         start_label as u32,
         DIST_BASE as u32 + expected,
@@ -197,7 +233,14 @@ fn main() {
     // Фаза 2: поле готово — впрыскиваем токен и даём ему идти, ведомым
     // ИСКЛЮЧИТЕЛЬНО приоритетом соседей (никакого pathfinding-кода).
     let gen = engine.grid().generation();
-    engine.grid_mut().set_cell(START.0, START.1, Cell { value: CellValue::new(TOKEN), born_at: gen });
+    engine.grid_mut().set_cell(
+        START.0,
+        START.1,
+        Cell {
+            value: CellValue::new(TOKEN),
+            born_at: gen,
+        },
+    );
 
     let mut ticks = 0u32;
     let mut arrived_at = None;
@@ -213,7 +256,9 @@ fn main() {
     }
 
     let (ticks_taken, final_pos) = arrived_at.expect("токен обязан был достичь цели за отведённые тики");
-    println!("Токен достиг цели за {ticks_taken} тиков (позиция {final_pos:?}), обходя стену чисто по приоритету соседей");
+    println!(
+        "Токен достиг цели за {ticks_taken} тиков (позиция {final_pos:?}), обходя стену чисто по приоритету соседей"
+    );
     assert_eq!(final_pos, TARGET, "финальная позиция обязана совпасть с целью");
     assert_eq!(
         ticks_taken as u64, expected as u64,

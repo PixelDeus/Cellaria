@@ -91,9 +91,7 @@ pub fn translate_tm(
         };
 
         // Строим pattern из id для обратной совместимости
-        let pattern: Vec<(i8, i8, CellType)> = id.iter().enumerate()
-            .map(|(i, &ct)| (i as i8, 0i8, ct))
-            .collect();
+        let pattern: Vec<(i8, i8, CellType)> = id.iter().enumerate().map(|(i, &ct)| (i as i8, 0i8, ct)).collect();
 
         rules.push(Rule {
             id,
@@ -106,7 +104,12 @@ pub fn translate_tm(
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         });
     }
 

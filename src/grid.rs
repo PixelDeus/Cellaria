@@ -88,8 +88,8 @@ impl<S: GridStorage + Default> Default for Grid<S> {
 }
 
 impl<S: GridStorage> Grid<S> {
-    /// Создать решётку с указанным хранилищем и предварительно заполненным
-    /// кэшем активных ячеек.
+    /// Решётка с готовым набором активных клеток — для пустого набора см.
+    /// [`Grid::from_storage`].
     pub fn new(storage: S, active_coords: HashSet<(usize, usize)>) -> Self {
         let active_coords_vec: Vec<(usize, usize)> = active_coords.iter().copied().collect();
         let active_index: FxHashMap<(usize, usize), usize> = active_coords_vec
@@ -113,7 +113,20 @@ impl<S: GridStorage> Grid<S> {
         }
     }
 
-    /// Вставить координату в кэш активных, если её там ещё нет. O(1).
+    /// [`Grid::new`] с пустым начальным набором активных клеток — найдено
+    /// эмпирически при поиске эргономических улучшений: 103 из 104
+    /// вызовов `Grid::new` в этой кодовой базе передают вторым аргументом
+    /// именно `HashSet::new()`/`Default::default()`, потому что клетки
+    /// затем выставляются через `set_cell` (который сам поддерживает
+    /// индекс активных клеток — предзаполнять его вручную незачем).
+    /// Непустой `active_coords` нужен ТОЛЬКО когда клетки уже стоят
+    /// НАПРЯМУЮ в `storage` в обход `set_cell` — единственный такой
+    /// случай во всей кодовой базе, `config.rs`'s YAML-загрузчик,
+    /// продолжает использовать полный `Grid::new`.
+    pub fn from_storage(storage: S) -> Self {
+        Self::new(storage, HashSet::new())
+    }
+
     fn active_insert(&mut self, coord: (usize, usize)) {
         if self.active_index.contains_key(&coord) {
             return;
@@ -123,7 +136,6 @@ impl<S: GridStorage> Grid<S> {
         self.active_index.insert(coord, idx);
     }
 
-    /// Убрать координату из кэша активных через swap_remove. O(1) амортизированно.
     fn active_remove(&mut self, coord: (usize, usize)) {
         if let Some(idx) = self.active_index.remove(&coord) {
             self.active_coords_vec.swap_remove(idx);
@@ -135,20 +147,17 @@ impl<S: GridStorage> Grid<S> {
         }
     }
 
-    /// Проверить, находится ли координата в кэше активных. O(1).
     fn active_contains(&self, coord: &(usize, usize)) -> bool {
         self.active_index.contains_key(coord)
     }
 
-    /// Получить ссылку на Vec активных координат для итерации.
-    /// Используется в detect_matches для быстрого линейного прохода.
+    /// Используется в `detect_matches` для быстрого линейного прохода.
     pub fn active_coords(&self) -> &Vec<(usize, usize)> {
         &self.active_coords_vec
     }
 
-    /// Извлечь и очистить множество "грязных" (изменённых с прошлого вызова)
-    /// координат. Используется `engine::run_tick` для построения
-    /// инкрементального кандидатного множества для detect_matches.
+    /// Используется `engine::run_tick` для построения инкрементального
+    /// кандидатного множества для `detect_matches`.
     pub(crate) fn take_dirty(&mut self) -> FxHashSet<(usize, usize)> {
         std::mem::take(&mut self.dirty_coords)
     }
@@ -191,13 +200,7 @@ impl<S: GridStorage> Grid<S> {
     pub fn get_age(&self, x: usize, y: usize) -> u64 {
         self.storage
             .get(x, y)
-            .map(|c| {
-                if c.is_default() {
-                    0
-                } else {
-                    self.generation - c.born_at
-                }
-            })
+            .map(|c| if c.is_default() { 0 } else { self.generation - c.born_at })
             .unwrap_or(0)
     }
 
@@ -217,7 +220,6 @@ impl<S: GridStorage> Grid<S> {
         self.storage.height()
     }
 
-    /// Получить ссылку на ячейку по координатам.
     pub fn get_cell(&self, x: usize, y: usize) -> Option<&Cell> {
         self.storage.get(x, y)
     }
@@ -229,7 +231,21 @@ impl<S: GridStorage> Grid<S> {
     ///
     /// Граничная ячейка (с привязанным BoundaryBuffer) никогда не считается дефолтной,
     /// даже если её значение 0 и возраст 0.
+    ///
+    /// Паникует, если `x`/`y` превышают `u32::MAX` — `RuleMatch::x`/`y`
+    /// (`matcher.rs`) хранят координату как `u32` ради памяти на hot path,
+    /// без этой проверки клетка за пределами `u32::MAX` на `ChunkStorage`
+    /// молча ПОРТИТ данные другой, far-меньшей клетки вместо того, чтобы
+    /// ошибиться явно (найдено целенаправленной адверсариальной проверкой,
+    /// см. `CHANGELOG.md`) — громкая паника здесь строго лучше тихого
+    /// усечения `cx as u32` дальше по пайплайну.
     pub fn set_cell(&mut self, x: usize, y: usize, cell: Cell) {
+        assert!(
+            x <= u32::MAX as usize && y <= u32::MAX as usize,
+            "Grid::set_cell: координата ({x}, {y}) превышает u32::MAX -- \
+             RuleMatch хранит координаты как u32, дальнейшая работа с такой клеткой \
+             тихо усекла бы координату и попортила данные другой клетки вместо явной ошибки"
+        );
         // Решение "вставить/убрать из active_coords" принимается по
         // ФАКТИЧЕСКОМУ членству в кэше (`was_in_active`), а не по
         // пересчитанному `is_default()` предыдущей ячейки — раньше здесь
@@ -266,54 +282,43 @@ impl<S: GridStorage> Grid<S> {
         self.active_coords_vec.iter().copied()
     }
 
-    /// Получить граничный буфер по координатам.
     pub fn get_boundary(&self, x: usize, y: usize) -> Option<&BoundaryBuffer> {
         self.boundaries.get(&(x, y))
     }
 
-    /// Получить мутабельную ссылку на граничный буфер по координатам.
     pub fn get_boundary_mut(&mut self, x: usize, y: usize) -> Option<&mut BoundaryBuffer> {
         self.boundaries.get_mut(&(x, y))
     }
 
-    /// Установить граничный буфер для координат.
-    /// Граничная ячейка всегда добавляется в active_coords.
+    /// Граничная ячейка всегда добавляется в `active_coords`.
     pub fn set_boundary(&mut self, x: usize, y: usize, buf: BoundaryBuffer) {
         self.active_insert((x, y));
         self.boundaries.insert((x, y), buf);
     }
 
-    /// Удалить граничный буфер по координатам.
-    /// Запись в active_coords не удаляется — если ячейка станет дефолтной,
-    /// следующий же set_cell уберёт её из кэша.
+    /// Запись в `active_coords` не удаляется — если ячейка станет дефолтной,
+    /// следующий же `set_cell` уберёт её из кэша.
     pub fn remove_boundary(&mut self, x: usize, y: usize) {
         self.boundaries.remove(&(x, y));
-        // Если ячейка стала дефолтной — убираем из active_coords
-        if self.storage.get(x, y).map_or(true, |c| c.is_default()) {
+        if self.storage.get(x, y).is_none_or(|c| c.is_default()) {
             self.active_remove((x, y));
         }
     }
 
-    /// Итератор по всем граничным буферам (координата + буфер).
     pub fn iter_boundaries(&self) -> impl Iterator<Item = (&(usize, usize), &BoundaryBuffer)> {
         self.boundaries.iter()
     }
 
-    /// Итератор по всем граничным буферам (mut).
-    pub fn iter_boundaries_mut(
-        &mut self,
-    ) -> impl Iterator<Item = (&(usize, usize), &mut BoundaryBuffer)> {
+    pub fn iter_boundaries_mut(&mut self) -> impl Iterator<Item = (&(usize, usize), &mut BoundaryBuffer)> {
         self.boundaries.iter_mut()
     }
 
-    /// Получить канал для координаты, если это граничная ячейка.
-    /// В текущей реализации канал определяется из конфигурации.
-    /// Для упрощения возвращаем `None` — логика каналов вынесена в RuleStore.
+    /// Канал не привязан к координате в текущей реализации — логика каналов
+    /// вынесена в `RuleStore`, здесь всегда `None`.
     pub fn get_channel(&self, _x: usize, _y: usize) -> Option<u32> {
         None
     }
 
-    /// Все координаты граничных ячеек.
     pub fn boundary_coords(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         self.boundaries.keys().copied()
     }
@@ -325,11 +330,20 @@ pub type SimpleGrid = Grid<crate::storage::VecStorage>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::VecStorage;
+    use crate::storage::{ChunkStorage, VecStorage};
 
     fn make_grid(w: usize, h: usize) -> Grid<VecStorage> {
-        let storage = VecStorage::new(w, h);
-        Grid::new(storage, HashSet::new())
+        Grid::from_storage(VecStorage::new(w, h))
+    }
+
+    #[test]
+    fn test_from_storage_matches_new_with_empty_active_coords() {
+        let via_from_storage = Grid::from_storage(VecStorage::new(3, 3));
+        let via_new = Grid::new(VecStorage::new(3, 3), HashSet::new());
+        assert_eq!(via_from_storage.iter_active().count(), 0);
+        assert_eq!(via_from_storage.iter_active().count(), via_new.iter_active().count());
+        assert_eq!(via_from_storage.width(), via_new.width());
+        assert_eq!(via_from_storage.height(), via_new.height());
     }
 
     #[test]
@@ -426,5 +440,33 @@ mod tests {
         // set_cell с дефолтом убирает
         grid.set_cell(7, 7, Cell::default());
         assert!(!grid.active_contains(&(7, 7)));
+    }
+
+    /// Регрессия для бага, найденного целенаправленной адверсариальной
+    /// проверкой (не автоматикой): `RuleMatch::x`/`y` — `u32`, построены
+    /// через `cx as u32` в `matcher.rs` без проверки диапазона. На
+    /// `ChunkStorage` (заявленно "почти безграничной") клетка на
+    /// `x = 2³²` (легальная `usize`-координата) раньше МОЛЧА усекалась до
+    /// `x = 0` при матчинге — конструктивно воспроизведено: правило,
+    /// сработавшее на клетке `x = 2³²`, применяло результат к координатам
+    /// клетки `x = 0` вместо своей собственной, портя ЧУЖИЕ данные без
+    /// единой ошибки. Теперь `Grid::set_cell` паникует СРАЗУ при попытке
+    /// создать клетку за пределами `u32::MAX` — громко и на границе входа,
+    /// а не тихо где-то в середине пайплайна арбитража.
+    #[test]
+    #[should_panic(expected = "превышает u32::MAX")]
+    fn test_set_cell_panics_instead_of_silently_truncating_coordinate_beyond_u32_max() {
+        let mut grid = Grid::from_storage(ChunkStorage::new());
+        grid.set_cell(u32::MAX as usize + 1, 5, Cell::new(1));
+    }
+
+    /// Симметричный контроль: `x == u32::MAX` (граница, не за ней) обязана
+    /// остаться легальной -- проверка `<=`, не `<`, у `Grid::set_cell`, не
+    /// должна случайно отсечь последнюю валидную координату.
+    #[test]
+    fn test_set_cell_at_exactly_u32_max_does_not_panic() {
+        let mut grid = Grid::from_storage(ChunkStorage::new());
+        grid.set_cell(u32::MAX as usize, 5, Cell::new(1));
+        assert_eq!(grid.get_cell(u32::MAX as usize, 5).map(|c| c.value.0 .0), Some(1));
     }
 }

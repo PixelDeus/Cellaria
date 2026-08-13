@@ -80,7 +80,12 @@ fn build_rule30_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         });
     }
     idx
@@ -92,9 +97,23 @@ fn build_rule30_index() -> HashMap<CellType, Vec<Rule>> {
 fn build_seeded_grid(seed_x: usize) -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
     for x in 0..WIDTH {
-        grid.set_cell(x, 0, Cell { value: CellValue::new(OFF), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue::new(OFF),
+                born_at: 0,
+            },
+        );
     }
-    grid.set_cell(seed_x, 0, Cell { value: CellValue::new(ON), born_at: 0 });
+    grid.set_cell(
+        seed_x,
+        0,
+        Cell {
+            value: CellValue::new(ON),
+            born_at: 0,
+        },
+    );
     grid
 }
 
@@ -122,9 +141,16 @@ fn main() {
     println!(
         "[1] {TICKS} тиков, центральная клетка: {ones} единиц ({:.1}%) — {}",
         ratio * 100.0,
-        if (0.40..=0.60).contains(&ratio) { "в пределах ожидаемого разброса ✓" } else { "ПОДОЗРИТЕЛЬНО НЕСБАЛАНСИРОВАНО" }
+        if (0.40..=0.60).contains(&ratio) {
+            "в пределах ожидаемого разброса ✓"
+        } else {
+            "ПОДОЗРИТЕЛЬНО НЕСБАЛАНСИРОВАНО"
+        }
     );
-    assert!((0.40..=0.60).contains(&ratio), "битовая последовательность слишком смещена для псевдослучайного источника");
+    assert!(
+        (0.40..=0.60).contains(&ratio),
+        "битовая последовательность слишком смещена для псевдослучайного источника"
+    );
 
     // Нет короткого периода в разумном окне (наивная проверка: последнее
     // окно длиной WINDOW не совпадает ПОЛНОСТЬЮ ни с одним предыдущим окном
@@ -139,20 +165,36 @@ fn main() {
             break;
         }
     }
-    println!("[1b] Короткий цикл (окно {WINDOW} бит) за {TICKS} тиков: {}", if short_cycle_found { "НАЙДЕН (плохо)" } else { "не найден ✓" });
-    assert!(!short_cycle_found, "последовательность зациклилась в разумном окне — не годится как источник хаоса");
+    println!(
+        "[1b] Короткий цикл (окно {WINDOW} бит) за {TICKS} тиков: {}",
+        if short_cycle_found {
+            "НАЙДЕН (плохо)"
+        } else {
+            "не найден ✓"
+        }
+    );
+    assert!(
+        !short_cycle_found,
+        "последовательность зациклилась в разумном окне — не годится как источник хаоса"
+    );
 
     // ── Проверка 2: детерминизм — один и тот же посев даёт побитово
     // идентичный результат в двух НЕЗАВИСИМЫХ прогонах ──────────────────
     let run_a = run_and_sample(CENTER, 300);
     let run_b = run_and_sample(CENTER, 300);
-    assert_eq!(run_a, run_b, "один и тот же посев должен давать побитово идентичную последовательность");
+    assert_eq!(
+        run_a, run_b,
+        "один и тот же посев должен давать побитово идентичную последовательность"
+    );
     println!("[2] Два независимых прогона с одним посевом: побитово идентичны ✓ (детерминизм, не настоящая энтропия — Аксиома 2)");
 
     // ── Проверка 3: разные посевы дают разные последовательности ────────
     let seed1 = run_and_sample(CENTER - 5, 300);
     let seed2 = run_and_sample(CENTER + 7, 300);
-    assert_ne!(seed1, seed2, "разные посевы должны давать разные последовательности — иначе посев ничего не определяет");
+    assert_ne!(
+        seed1, seed2,
+        "разные посевы должны давать разные последовательности — иначе посев ничего не определяет"
+    );
     println!("[3] Разные посевы -> разные последовательности ✓ (посев реально управляет исходом)");
 
     println!(

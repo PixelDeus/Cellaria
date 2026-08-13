@@ -55,7 +55,18 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 pattern: vec![(0, 0, CellType(ACC_BASE + acc)), (0, -1, CellType(d))],
                 shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
                 changes: vec![(0, 0, ChangeValue::Literal(ACC_BASE + next))],
-                active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                active_only: false,
+                priority: 20,
+                min_age: 0,
+                overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             });
         }
         // Данные закончились (под маркером — пусто, ни одно из правил выше
@@ -65,20 +76,43 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             pattern: vec![(0, 0, CellType(ACC_BASE + acc))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(FINAL_BASE + acc))],
-            active_only: false, priority: 10, min_age: QUIET_THRESHOLD, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: QUIET_THRESHOLD,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         });
         idx.insert(CellType(ACC_BASE + acc), rules);
 
         // Готовое число едет к выходу и несёт своё же значение.
-        idx.insert(CellType(FINAL_BASE + acc), vec![Rule {
-            id: vec![CellType(FINAL_BASE + acc)], pattern: vec![],
-            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
-            changes: vec![], active_only: false, priority: 10, min_age: 0,
-            overflow: OverflowAction::Write(0),
-            cam: None,
-            tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        }]);
+        idx.insert(
+            CellType(FINAL_BASE + acc),
+            vec![Rule {
+                id: vec![CellType(FINAL_BASE + acc)],
+                pattern: vec![],
+                shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+                changes: vec![],
+                active_only: false,
+                priority: 10,
+                min_age: 0,
+                overflow: OverflowAction::Write(0),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            }],
+        );
     }
     idx
 }
@@ -92,9 +126,23 @@ fn attest(data: &[u8]) -> u8 {
     grid.set_boundary(WIDTH - 1, MARKER_ROW, out);
 
     for (x, &d) in data.iter().enumerate() {
-        grid.set_cell(x, 0, Cell { value: CellValue(CellType(d)), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(d)),
+                born_at: 0,
+            },
+        );
     }
-    grid.set_cell(0, MARKER_ROW, Cell { value: CellValue(CellType(ACC_BASE)), born_at: 0 });
+    grid.set_cell(
+        0,
+        MARKER_ROW,
+        Cell {
+            value: CellValue(CellType(ACC_BASE)),
+            born_at: 0,
+        },
+    );
 
     let mut engine = Engine::new(grid, build_rule_index());
     for _ in 1..=(WIDTH as u32 * 2) {
@@ -120,10 +168,20 @@ fn main() {
     let checksum_honest = attest(&honest);
     let checksum_tampered = attest(&tampered);
 
-    println!("Честные данные:   {:?} -> контрольная сумма (mod 7): {}", honest, checksum_honest);
-    println!("Подменённые данные: {:?} -> контрольная сумма (mod 7): {}", tampered, checksum_tampered);
+    println!(
+        "Честные данные:   {:?} -> контрольная сумма (mod 7): {}",
+        honest, checksum_honest
+    );
+    println!(
+        "Подменённые данные: {:?} -> контрольная сумма (mod 7): {}",
+        tampered, checksum_tampered
+    );
     println!(
         "\nПодмена ОДНОЙ клетки изменила переданную сумму: {}",
-        if checksum_honest != checksum_tampered { "ДА — обнаружено" } else { "НЕТ (!)" }
+        if checksum_honest != checksum_tampered {
+            "ДА — обнаружено"
+        } else {
+            "НЕТ (!)"
+        }
     );
 }

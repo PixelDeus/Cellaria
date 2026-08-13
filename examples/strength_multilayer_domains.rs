@@ -30,15 +30,29 @@ fn main() {
     const WIDTH: usize = 8;
 
     // Слой 0 — конвейер: один груз стартует у левого края.
-    let mut conveyor = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
-    conveyor.set_cell(0, 0, cellaria::types::Cell { value: cellaria::types::CellValue(CellType(ITEM)), born_at: 0 });
+    let mut conveyor = Grid::from_storage(VecStorage::new(WIDTH, 1));
+    conveyor.set_cell(
+        0,
+        0,
+        cellaria::types::Cell {
+            value: cellaria::types::CellValue(CellType(ITEM)),
+            born_at: 0,
+        },
+    );
 
     // Слой 1 — сеть питания: вся решётка одинаково "включена" в начале, все
     // клетки мигают синхронно (одно и то же правило срабатывает на КАЖДОЙ
     // клетке независимо -- значит все они переключаются в унисон).
-    let mut power = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
+    let mut power = Grid::from_storage(VecStorage::new(WIDTH, 1));
     for x in 0..WIDTH {
-        power.set_cell(x, 0, cellaria::types::Cell { value: cellaria::types::CellValue(CellType(POWER_ON)), born_at: 0 });
+        power.set_cell(
+            x,
+            0,
+            cellaria::types::Cell {
+                value: cellaria::types::CellValue(CellType(POWER_ON)),
+                born_at: 0,
+            },
+        );
     }
 
     let conveyor_rule = Rule {
@@ -74,7 +88,12 @@ fn main() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let power_off_toggle = Rule {
         id: vec![CellType(POWER_OFF)],
@@ -87,7 +106,12 @@ fn main() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
 
     // ОДИН общий rule_index -- LayeredEngine's слои используют один и тот

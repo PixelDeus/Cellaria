@@ -13,27 +13,28 @@ use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Direction, Rule, S
 /// Создать пустую решётку w×h с активными клетками (через Grid<VecStorage>).
 pub fn make_grid(w: usize, h: usize) -> Grid<VecStorage> {
     let storage = VecStorage::new(w, h);
-    let mut grid = Grid::new(storage, std::collections::HashSet::new());
+    let mut grid = Grid::from_storage(storage);
     for y in 0..h {
         for x in 0..w {
-            grid.set_cell(x, y, Cell {
-                value: CellValue(CellType(0)),
-                born_at: 0,
-            });
+            grid.set_cell(
+                x,
+                y,
+                Cell {
+                    value: CellValue(CellType(0)),
+                    born_at: 0,
+                },
+            );
         }
     }
     grid
 }
 
-/// Создать RuleIndex (HashMap<CellType, Vec<Rule>>) из Vec<Rule>.
+/// Создать RuleIndex (HashMap<CellType, Vec<Rule>>) из Vec<Rule>. Тонкая
+/// обёртка над `cellaria::build_rule_index` (не собственная копия —
+/// найдено при подготовке модели к 1.0, что этот бенчмарк был одним из
+/// 20+ мест в кодовой базе, независимо переизобретавших эту логику).
 pub fn make_rule_index(rules: Vec<Rule>) -> HashMap<CellType, Vec<Rule>> {
-    let mut index: HashMap<CellType, Vec<Rule>> = HashMap::new();
-    for rule in rules {
-        if let Some(first) = rule.id.first() {
-            index.entry(*first).or_default().push(rule);
-        }
-    }
-    index
+    cellaria::build_rule_index(rules)
 }
 
 /// Создать одну группу сдвига вправо на 1 шаг.
@@ -71,7 +72,12 @@ pub fn turing_rules(n: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         });
         state += 1;
     }
@@ -92,7 +98,12 @@ pub fn simple_turing_rules(n: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect()
 }
@@ -115,7 +126,12 @@ pub fn tag_rules(len: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect()
 }
@@ -150,7 +166,12 @@ pub fn priority_conflict_rules(m: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect();
     rules.push(Rule {
@@ -164,7 +185,12 @@ pub fn priority_conflict_rules(m: usize) -> Vec<Rule> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     });
     rules
 }
@@ -191,13 +217,17 @@ pub fn storage_bench_vec(w: usize, h: usize) -> u128 {
 /// Замерить время итерации по ChunkStorage w×h.
 pub fn storage_bench_chunk(w: usize, h: usize) -> u128 {
     let storage = cellaria::ChunkStorage::new();
-    let mut grid = Grid::new(storage, std::collections::HashSet::new());
+    let mut grid = Grid::from_storage(storage);
     for y in 0..h {
         for x in 0..w {
-            grid.set_cell(x, y, Cell {
-                value: CellValue(CellType(0)),
-                born_at: 0,
-            });
+            grid.set_cell(
+                x,
+                y,
+                Cell {
+                    value: CellValue(CellType(0)),
+                    born_at: 0,
+                },
+            );
         }
     }
     let start = Instant::now();
@@ -239,10 +269,14 @@ pub fn rule_count_bench(k: usize) -> u128 {
 
     let mut grid = make_grid(k + 2, 1);
     for x in 0..k {
-        grid.set_cell(x, 0, Cell {
-            value: CellValue(CellType(x as u8 % 4)),
-            born_at: 0,
-        });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(x as u8 % 4)),
+                born_at: 0,
+            },
+        );
     }
 
     let start = Instant::now();
@@ -255,10 +289,7 @@ pub fn rule_count_bench(k: usize) -> u128 {
 // ============================================================================
 
 /// Найти подходящее правило по id в rule_index (используется в profile_find_rule).
-pub fn find_rule_bench<'a>(
-    id: &'a [CellType],
-    rule_index: &'a HashMap<CellType, Vec<Rule>>,
-) -> Option<&'a Rule> {
+pub fn find_rule_bench<'a>(id: &'a [CellType], rule_index: &'a HashMap<CellType, Vec<Rule>>) -> Option<&'a Rule> {
     let first = *id.first()?;
     let rules = rule_index.get(&first)?;
     rules.iter().find(|r| r.id == id)
@@ -282,7 +313,12 @@ pub fn replication_rules(len: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect()
 }
@@ -293,10 +329,14 @@ pub fn replication_bench(len: usize) -> u128 {
     let rule_index = make_rule_index(rules);
 
     let mut grid = make_grid(len + 1, 1);
-    grid.set_cell(0, 0, Cell {
-        value: CellValue(CellType(0)),
-        born_at: 0,
-    });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(0)),
+            born_at: 0,
+        },
+    );
 
     let start = Instant::now();
     for _ in 0..len {

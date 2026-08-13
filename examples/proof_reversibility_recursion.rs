@@ -55,8 +55,13 @@ fn cascade_rules() -> HashMap<CellType, Vec<Rule>> {
             tie_break: 0,
             starvation_after: None,
             feedback: None,
-            recursion: Some(RecursionSpec { max_depth: MAX_DEPTH, direction: Direction::Right }),
-            memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            recursion: Some(RecursionSpec {
+                max_depth: MAX_DEPTH,
+                direction: Direction::Right,
+            }),
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
     idx
@@ -87,7 +92,9 @@ fn eraser_rules() -> HashMap<CellType, Vec<Rule>> {
             starvation_after: None,
             feedback: None,
             recursion: None,
-            memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
     idx
@@ -95,9 +102,23 @@ fn eraser_rules() -> HashMap<CellType, Vec<Rule>> {
 
 fn build_grid() -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType(FILLED)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(FILLED)),
+            born_at: 0,
+        },
+    );
     for x in 1..WIDTH {
-        grid.set_cell(x, 0, Cell { value: CellValue(CellType(UNFILLED)), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(UNFILLED)),
+                born_at: 0,
+            },
+        );
     }
     grid
 }
@@ -105,19 +126,30 @@ fn build_grid() -> Grid<VecStorage> {
 fn grid_from_snapshot(snap: &[u8]) -> Grid<VecStorage> {
     let mut g = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
     for (x, &v) in snap.iter().enumerate() {
-        g.set_cell(x, 0, Cell { value: CellValue(CellType(v)), born_at: 0 });
+        g.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(v)),
+                born_at: 0,
+            },
+        );
     }
     g
 }
 
 fn snapshot(engine: &Engine<VecStorage>) -> Vec<u8> {
-    (0..WIDTH).map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(UNFILLED)).collect()
+    (0..WIDTH)
+        .map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(UNFILLED))
+        .collect()
 }
 
 fn main() {
     let initial_snapshot: Vec<u8> = {
         let g = build_grid();
-        (0..WIDTH).map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(UNFILLED)).collect()
+        (0..WIDTH)
+            .map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(UNFILLED))
+            .collect()
     };
     println!("Исходная решётка:  {:?}", initial_snapshot);
     println!("Затравка на x=0, `recursion` (max_depth={MAX_DEPTH}, Right) -- базовый матч + каскад заливают x=1..={} за ОДИН тик.", MAX_DEPTH as usize + 1);
@@ -134,20 +166,33 @@ fn main() {
     // итого залито x=0..=MAX_DEPTH+1.
     let last_filled = MAX_DEPTH as usize + 1;
     for x in 0..=last_filled {
-        assert_eq!(final_snapshot[x], FILLED, "клетка x={x} обязана быть залита (затравка или каскад) за один тик");
+        assert_eq!(
+            final_snapshot[x], FILLED,
+            "клетка x={x} обязана быть залита (затравка или каскад) за один тик"
+        );
     }
     for x in (last_filled + 1)..WIDTH {
-        assert_eq!(final_snapshot[x], UNFILLED, "клетка x={x} НЕ должна быть затронута -- каскад ограничен max_depth");
+        assert_eq!(
+            final_snapshot[x], UNFILLED,
+            "клетка x={x} НЕ должна быть затронута -- каскад ограничен max_depth"
+        );
     }
 
     // ── Обратный прогон: ОБЫЧНОЕ (без recursion) правило-ластик, ОДИН тик ──
     let mut reverse = Engine::new(grid_from_snapshot(&final_snapshot), eraser_rules());
     reverse.run_tick();
     let recovered_snapshot = snapshot(&reverse);
-    println!("\nПосле 1 тика реверса (ластик, без recursion): {:?}", recovered_snapshot);
+    println!(
+        "\nПосле 1 тика реверса (ластик, без recursion): {:?}",
+        recovered_snapshot
+    );
     println!(
         "Восстановленная решётка совпадает с исходной клетка в клетку: {}",
-        if recovered_snapshot == initial_snapshot { "ДА" } else { "НЕТ" }
+        if recovered_snapshot == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
     assert_eq!(
         recovered_snapshot, initial_snapshot,

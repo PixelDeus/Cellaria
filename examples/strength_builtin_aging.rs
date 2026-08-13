@@ -14,7 +14,14 @@ use cellaria::{Grid, VecStorage};
 fn main() {
     let storage = VecStorage::new(1, 1);
     let mut grid = Grid::new(storage, Default::default());
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType(1)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(1)),
+            born_at: 0,
+        },
+    );
 
     // Правило сработает, только когда клетка просидит без изменений 3 тика.
     let rule = Rule {
@@ -22,7 +29,18 @@ fn main() {
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(2))],
-        active_only: false, priority: 10, min_age: 3, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        active_only: false,
+        priority: 10,
+        min_age: 3,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);

@@ -62,7 +62,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }],
         );
         idx.insert(
@@ -78,7 +83,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }],
         );
     }
@@ -91,7 +101,11 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
     for k in 0..COUNTER_MOD {
         comparator_rules.push(Rule {
             id: vec![CellType(COMPARATOR)],
-            pattern: vec![(0, 0, CellType(COMPARATOR)), (-1, 0, CellType(CNT_A_BASE + k)), (1, 0, CellType(CNT_B_BASE + k))],
+            pattern: vec![
+                (0, 0, CellType(COMPARATOR)),
+                (-1, 0, CellType(CNT_A_BASE + k)),
+                (1, 0, CellType(CNT_B_BASE + k)),
+            ],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(COMPARATOR))],
             active_only: false,
@@ -100,7 +114,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         });
     }
     comparator_rules.push(Rule {
@@ -114,7 +133,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     });
     idx.insert(CellType(COMPARATOR), comparator_rules);
     // Для ALARM правил нет — защёлка: обнаруженный сбой навсегда виден,
@@ -125,14 +149,39 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
 
 fn build_grid() -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
-    grid.set_cell(POS_A, 0, Cell { value: CellValue::new(CNT_A_BASE), born_at: 0 });
-    grid.set_cell(POS_CMP, 0, Cell { value: CellValue::new(COMPARATOR), born_at: 0 });
-    grid.set_cell(POS_B, 0, Cell { value: CellValue::new(CNT_B_BASE), born_at: 0 });
+    grid.set_cell(
+        POS_A,
+        0,
+        Cell {
+            value: CellValue::new(CNT_A_BASE),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        POS_CMP,
+        0,
+        Cell {
+            value: CellValue::new(COMPARATOR),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        POS_B,
+        0,
+        Cell {
+            value: CellValue::new(CNT_B_BASE),
+            born_at: 0,
+        },
+    );
     grid
 }
 
 fn comparator_state(engine: &Engine<VecStorage>) -> u8 {
-    engine.grid().get_cell(POS_CMP, 0).map(|c| c.value.0 .0).expect("comparator cell always present")
+    engine
+        .grid()
+        .get_cell(POS_CMP, 0)
+        .map(|c| c.value.0 .0)
+        .expect("comparator cell always present")
 }
 
 fn main() {
@@ -148,9 +197,16 @@ fn main() {
     }
     println!(
         "[1] {CLEAN_TICKS} тиков без вмешательства: компаратор {}",
-        if ever_alarmed { "ЛОЖНО СРАБОТАЛ (!)" } else { "ни разу не сработал ✓" }
+        if ever_alarmed {
+            "ЛОЖНО СРАБОТАЛ (!)"
+        } else {
+            "ни разу не сработал ✓"
+        }
     );
-    assert!(!ever_alarmed, "без сбоя компаратор не должен переходить в ALARM ни разу — иначе это ложные срабатывания, а не самопроверка");
+    assert!(
+        !ever_alarmed,
+        "без сбоя компаратор не должен переходить в ALARM ни разу — иначе это ложные срабатывания, а не самопроверка"
+    );
 
     // ── Сценарий 2: точечная порча счётчика B в обход правил (имитация
     // аппаратного сбоя, как в proof_quorum_fault_tolerance.rs) ─────────────
@@ -166,7 +222,14 @@ fn main() {
             let current_k = (tick % COUNTER_MOD as u32) as u8;
             let wrong_k = (current_k + 1) % COUNTER_MOD; // заведомо другое значение
             let gen = engine.grid().generation();
-            engine.grid_mut().set_cell(POS_B, 0, Cell { value: CellValue::new(CNT_B_BASE + wrong_k), born_at: gen });
+            engine.grid_mut().set_cell(
+                POS_B,
+                0,
+                Cell {
+                    value: CellValue::new(CNT_B_BASE + wrong_k),
+                    born_at: gen,
+                },
+            );
             println!("[тик {tick}] прямая порча счётчика B в обход run_tick (сбой аппаратуры)");
         }
         let state = comparator_state(&engine);
@@ -183,7 +246,11 @@ fn main() {
         alarm_tick
     );
     assert_eq!(alarm_tick, Some(FAULT_TICK + 1), "компаратор должен зафиксировать расхождение РОВНО на следующем тике после сбоя (детект читает состояние ДО тика)");
-    assert_eq!(comparator_state(&engine), ALARM, "ALARM — защёлка: должен остаться сработавшим до конца прогона");
+    assert_eq!(
+        comparator_state(&engine),
+        ALARM,
+        "ALARM — защёлка: должен остаться сработавшим до конца прогона"
+    );
 
     println!(
         "\nВывод: обнаружение расхождения между двумя тактируемыми одним тиком счётчиками — ОБЫЧНОЕ правило \

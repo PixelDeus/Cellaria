@@ -52,7 +52,9 @@ fn direction_strategy() -> impl Strategy<Value = Direction> {
 /// `feedback` требует РОВНО один сдвиг (см. `config.rs::build_rule`),
 /// остальные (`starvation_after`/`memory`/`max_activations`) сдвигов не
 /// требуют вовсе.
-fn extensions_strategy(has_shift: bool) -> impl Strategy<Value = (Option<u32>, Option<FeedbackSpec>, Option<MemorySpec>, Option<u32>)> {
+fn extensions_strategy(
+    has_shift: bool,
+) -> impl Strategy<Value = (Option<u32>, Option<FeedbackSpec>, Option<MemorySpec>, Option<u32>)> {
     let starvation = prop_oneof![Just(None), (1u32..=3).prop_map(Some)];
     let max_activations = prop_oneof![Just(None), (1u32..=3).prop_map(Some)];
     let memory = prop_oneof![
@@ -62,12 +64,17 @@ fn extensions_strategy(has_shift: bool) -> impl Strategy<Value = (Option<u32>, O
             record_trigger: RecordTrigger::NeighborType(dir),
             match_pattern: vec![RecordedValue::Type(CellType(t))],
         })),
-        Just(Some(MemorySpec { window: 1, record_trigger: RecordTrigger::RuleOutcome, match_pattern: vec![RecordedValue::Applied] })),
+        Just(Some(MemorySpec {
+            window: 1,
+            record_trigger: RecordTrigger::RuleOutcome,
+            match_pattern: vec![RecordedValue::Applied]
+        })),
     ];
     if has_shift {
         let feedback = prop_oneof![
             Just(None),
-            (1u64..=3, direction_strategy()).prop_map(|(timeout, new_direction)| Some(FeedbackSpec { timeout, new_direction })),
+            (1u64..=3, direction_strategy())
+                .prop_map(|(timeout, new_direction)| Some(FeedbackSpec { timeout, new_direction })),
         ];
         (starvation, feedback, memory, max_activations).boxed()
     } else {
@@ -76,31 +83,29 @@ fn extensions_strategy(has_shift: bool) -> impl Strategy<Value = (Option<u32>, O
 }
 
 fn rule_strategy(head: u8) -> impl Strategy<Value = Rule> {
-    (
-        prop::option::of((direction_strategy(), 1u16..=1)),
-        1u32..=10,
-    )
-        .prop_flat_map(move |(shift, priority)| {
-            let has_shift = shift.is_some();
-            extensions_strategy(has_shift).prop_map(move |(starvation_after, feedback, memory, max_activations)| Rule {
-                id: vec![CellType(head)],
-                pattern: vec![],
-                shifts: shift.map(|(dir, steps)| vec![vec![ShiftSpec::new(dir, steps)]]).unwrap_or_default(),
-                changes: vec![],
-                active_only: false,
-                priority,
-                min_age: 0,
-                overflow: Default::default(),
-                cam: None,
-                tie_break: 0,
-                starvation_after,
-                feedback,
-                recursion: None,
-                memory,
-                max_activations,
-                cross_layer_reads: Vec::new(),
-            })
+    (prop::option::of((direction_strategy(), 1u16..=1)), 1u32..=10).prop_flat_map(move |(shift, priority)| {
+        let has_shift = shift.is_some();
+        extensions_strategy(has_shift).prop_map(move |(starvation_after, feedback, memory, max_activations)| Rule {
+            id: vec![CellType(head)],
+            pattern: vec![],
+            shifts: shift
+                .map(|(dir, steps)| vec![vec![ShiftSpec::new(dir, steps)]])
+                .unwrap_or_default(),
+            changes: vec![],
+            active_only: false,
+            priority,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after,
+            feedback,
+            recursion: None,
+            memory,
+            max_activations,
+            cross_layer_reads: Vec::new(),
         })
+    })
 }
 
 /// 1-2 головы, 1-2 конкурирующих правила на голову — достаточно для
@@ -111,7 +116,10 @@ fn rule_index_strategy() -> impl Strategy<Value = HashMap<CellType, Vec<Rule>>> 
         let mut heads: Vec<u8> = heads;
         heads.sort_unstable();
         heads.dedup();
-        let per_head: Vec<_> = heads.iter().map(|&h| prop::collection::vec(rule_strategy(h), 1..=2)).collect();
+        let per_head: Vec<_> = heads
+            .iter()
+            .map(|&h| prop::collection::vec(rule_strategy(h), 1..=2))
+            .collect();
         per_head.prop_map(move |groups| {
             let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
             for (h, rules) in heads.iter().zip(groups) {
@@ -129,13 +137,23 @@ fn grid_strategy() -> impl Strategy<Value = Vec<(usize, usize, u8)>> {
 fn build_engine(rule_index: &HashMap<CellType, Vec<Rule>>, cells: &[(usize, usize, u8)]) -> Engine<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(SIDE, SIDE), HashSet::new());
     for &(x, y, t) in cells {
-        grid.set_cell(x, y, Cell { value: CellValue::new(t), born_at: 0 });
+        grid.set_cell(
+            x,
+            y,
+            Cell {
+                value: CellValue::new(t),
+                born_at: 0,
+            },
+        );
     }
     Engine::new(grid, rule_index.clone())
 }
 
 fn dump_grid(engine: &Engine<VecStorage>) -> Vec<Cell> {
-    (0..SIDE).flat_map(|y| (0..SIDE).map(move |x| (x, y))).map(|(x, y)| engine.grid().get_cell(x, y).copied().unwrap_or_default()).collect()
+    (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .map(|(x, y)| engine.grid().get_cell(x, y).copied().unwrap_or_default())
+        .collect()
 }
 
 proptest! {

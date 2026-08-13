@@ -46,7 +46,12 @@ fn mover_rule(id: u8, direction: Direction) -> Rule {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
@@ -85,7 +90,14 @@ fn build_cpu_grid(n: usize, seed: &[u8]) -> Grid<VecStorage> {
         for x in 0..n {
             let v = seed[y * n + x];
             if v != 0 {
-                grid.set_cell(x, y, Cell { value: CellValue(CellType(v)), born_at: 0 });
+                grid.set_cell(
+                    x,
+                    y,
+                    Cell {
+                        value: CellValue(CellType(v)),
+                        born_at: 0,
+                    },
+                );
             }
         }
     }
@@ -98,11 +110,19 @@ fn build_gpu_engine(n: usize, seed: &[u8], rule_index: &HashMap<CellType, Vec<Ru
         for x in 0..n {
             let v = seed[y * n + x];
             if v != 0 {
-                initial.push((x, y, Cell { value: CellValue(CellType(v)), born_at: 0 }));
+                initial.push((
+                    x,
+                    y,
+                    Cell {
+                        value: CellValue(CellType(v)),
+                        born_at: 0,
+                    },
+                ));
             }
         }
     }
-    GpuEngine::new(n, n, &initial, rule_index).expect("mover rules (single Discard shift each) are within the GPU subset")
+    GpuEngine::new(n, n, &initial, rule_index)
+        .expect("mover rules (single Discard shift each) are within the GPU subset")
 }
 
 fn grid_to_flat(grid: &Grid<VecStorage>, n: usize) -> Vec<u8> {
@@ -140,7 +160,10 @@ fn main() {
     }
     println!("Корректность (N=24, плотности 10/30/50%, 8 тиков подряд): результаты идентичны побитово ✓\n");
 
-    println!("{:>10} | {:>18} | {:>18} | {:>12}", "N (сторона)", "Cellaria CPU (кл/с)", "Cellaria GPU (кл/с)", "во сколько раз");
+    println!(
+        "{:>10} | {:>18} | {:>18} | {:>12}",
+        "N (сторона)", "Cellaria CPU (кл/с)", "Cellaria GPU (кл/с)", "во сколько раз"
+    );
     println!("{}", "-".repeat(68));
 
     for &n in &[20usize, 50, 100, 200, 400] {
@@ -172,6 +195,9 @@ fn main() {
         let gpu_per_sec = cells * reps as f64 / (gpu_total_ns as f64 / 1e9);
 
         let ratio = gpu_per_sec / cpu_per_sec;
-        println!("{:>10} | {:>18.0} | {:>18.0} | {:>10.0}x", n, cpu_per_sec, gpu_per_sec, ratio);
+        println!(
+            "{:>10} | {:>18.0} | {:>18.0} | {:>10.0}x",
+            n, cpu_per_sec, gpu_per_sec, ratio
+        );
     }
 }

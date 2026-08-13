@@ -57,14 +57,36 @@ fn module_decay() -> Vec<Rule> {
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(MID))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(MID)],
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(STABLE))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -86,21 +108,54 @@ fn module_wire() -> Vec<Rule> {
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(TAIL))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(TAIL)],
             pattern: vec![],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(WIRE))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(WIRE)],
             pattern: vec![(0, 0, CellType(WIRE)), (-1, 0, CellType(HEAD))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(HEAD))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -118,7 +173,18 @@ fn module_bad() -> Vec<Rule> {
         pattern: vec![],
         shifts: vec![],
         changes: vec![(0, 0, ChangeValue::Literal(99))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        active_only: false,
+        priority: 10,
+        min_age: 0,
+        overflow: Default::default(),
+        cam: None,
+        tie_break: 0,
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }]
 }
 
@@ -161,22 +227,47 @@ fn main() {
     let storage = VecStorage::new(6, 1);
     let mut grid = Grid::new(storage, Default::default());
     // Модуль A: один радиоактивный атом в (0,0) — отдельно от провода.
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType(RAD)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(RAD)),
+            born_at: 0,
+        },
+    );
     // Модуль B: непрерывный провод в (1,0)..(5,0), та же строка решётки,
     // головка слева — оба модуля буквально делят одну строку, просто разные
     // клетки в ней, и это доказанно безопасно (см. вывод выше).
     for x in 1..6 {
-        grid.set_cell(x, 0, Cell { value: CellValue(CellType(WIRE)), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(WIRE)),
+                born_at: 0,
+            },
+        );
     }
-    grid.set_cell(1, 0, Cell { value: CellValue(CellType(HEAD)), born_at: 0 });
+    grid.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType(HEAD)),
+            born_at: 0,
+        },
+    );
 
     let mut engine = Engine::new(grid, rule_index);
     for tick in 0..4 {
         engine.run_tick();
         let atom = engine.grid().get_cell(0, 0).map(|c| c.value.0 .0);
-        let wire_head_x = (1..6usize)
-            .find(|&x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0) == Some(HEAD));
-        println!("  тик {}: атом(x=0)={:?}, головка провода на x={:?}", tick + 1, atom, wire_head_x);
+        let wire_head_x = (1..6usize).find(|&x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0) == Some(HEAD));
+        println!(
+            "  тик {}: атом(x=0)={:?}, головка провода на x={:?}",
+            tick + 1,
+            atom,
+            wire_head_x
+        );
     }
     println!(
         "\nОба независимо написанных, разделяющих ОДНУ строку решётки домена\n\

@@ -17,10 +17,10 @@ use std::time::Instant;
 mod ansi {
     pub const RESET: &str = "\x1b[0m";
     pub const GREEN: &str = "\x1b[32m";
-    pub const YELLOW:&str = "\x1b[33m";
-    pub const CYAN:  &str = "\x1b[36m";
-    pub const BOLD:  &str = "\x1b[1m";
-    pub const DIM:   &str = "\x1b[2m";
+    pub const YELLOW: &str = "\x1b[33m";
+    pub const CYAN: &str = "\x1b[36m";
+    pub const BOLD: &str = "\x1b[1m";
+    pub const DIM: &str = "\x1b[2m";
 }
 
 // ============================================================================
@@ -172,17 +172,17 @@ fn render_table(rows: &[TableRow], compact: bool) -> String {
         match row {
             TableRow::Header(h) => {
                 // Верхняя граница
-                out.push_str("┌");
+                out.push('┌');
                 for (i, w) in widths.iter().enumerate() {
                     out.push_str(&"─".repeat(*w));
                     if i < widths.len() - 1 {
-                        out.push_str("┬");
+                        out.push('┬');
                     }
                 }
                 out.push_str("┐\n");
 
                 // Заголовок
-                out.push_str("│");
+                out.push('│');
                 for (i, cell) in h.iter().enumerate() {
                     let w = widths[i];
                     let padding = w - cell.len() - 1;
@@ -194,22 +194,24 @@ fn render_table(rows: &[TableRow], compact: bool) -> String {
                 out.push('\n');
 
                 // Разделитель под заголовком
-                out.push_str("├");
+                out.push('├');
                 for (i, w) in widths.iter().enumerate() {
                     out.push_str(&"─".repeat(*w));
                     if i < widths.len() - 1 {
-                        out.push_str("┼");
+                        out.push('┼');
                     }
                 }
                 out.push_str("┤\n");
             }
             TableRow::Data(d) => {
-                out.push_str("│");
+                out.push('│');
                 for (i, cell) in d.iter().enumerate() {
                     let w = widths[i];
                     // Для чисел — выравнивание вправо
-                    let is_numeric = cell.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',' || c == ' ' || c == '│' || c == '└' || c == '┘');
-                    let (left, right) = if is_numeric && cell.trim().len() > 0 {
+                    let is_numeric = cell.chars().all(|c| {
+                        c.is_ascii_digit() || c == '.' || c == ',' || c == ' ' || c == '│' || c == '└' || c == '┘'
+                    });
+                    let (left, right) = if is_numeric && !cell.trim().is_empty() {
                         let trimmed = cell.trim();
                         let padding = w - trimmed.len() - 1;
                         (" ".repeat(padding), " ".to_string())
@@ -228,11 +230,11 @@ fn render_table(rows: &[TableRow], compact: bool) -> String {
     }
 
     // Нижняя граница
-    out.push_str("└");
+    out.push('└');
     for (i, w) in widths.iter().enumerate() {
         out.push_str(&"─".repeat(*w));
         if i < widths.len() - 1 {
-            out.push_str("┴");
+            out.push('┴');
         }
     }
     out.push_str("┘\n");
@@ -284,7 +286,11 @@ impl Reporter {
 
     /// ANSI-код, если цвет включён, иначе пустая строка.
     fn c<'a>(&self, code: &'a str) -> &'a str {
-        if self.use_color { code } else { "" }
+        if self.use_color {
+            code
+        } else {
+            ""
+        }
     }
 
     /// Включить JSON-вывод
@@ -311,10 +317,9 @@ impl Reporter {
     /// через --output, потом свериться через --check" падал на этапе
     /// загрузки. Теперь понимаются оба формата.
     pub fn load_baseline(&mut self, path: &str) -> Result<(), String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Не удалось прочитать {}: {}", path, e))?;
-        let parsed: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Не удалось распарсить {}: {}", path, e))?;
+        let content = std::fs::read_to_string(path).map_err(|e| format!("Не удалось прочитать {}: {}", path, e))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| format!("Не удалось распарсить {}: {}", path, e))?;
 
         let mut baseline: HashMap<String, f64> = HashMap::new();
 
@@ -365,7 +370,12 @@ impl Reporter {
         if self.json_output || self.quiet || self.compact {
             return;
         }
-        println!("\n{}{}═══════════════════════════════════════{}", self.c(ansi::BOLD), self.c(ansi::CYAN), self.c(ansi::RESET));
+        println!(
+            "\n{}{}═══════════════════════════════════════{}",
+            self.c(ansi::BOLD),
+            self.c(ansi::CYAN),
+            self.c(ansi::RESET)
+        );
         println!("  {}", title);
         println!("═══════════════════════════════════════{}", self.c(ansi::RESET));
     }
@@ -375,7 +385,13 @@ impl Reporter {
         if self.json_output || self.quiet || self.compact {
             return;
         }
-        println!("\n{}{}─── {} ───{}", self.c(ansi::BOLD), self.c(ansi::CYAN), title, self.c(ansi::RESET));
+        println!(
+            "\n{}{}─── {} ───{}",
+            self.c(ansi::BOLD),
+            self.c(ansi::CYAN),
+            title,
+            self.c(ansi::RESET)
+        );
     }
 
     /// Напечатать таблицу из результатов
@@ -398,9 +414,14 @@ impl Reporter {
                     String::new()
                 };
                 println!(
-                    "  {}{:<20} {}{:<10} {}{} {} {}",
-                    self.c(ansi::BOLD), r.group, self.c(ansi::DIM), r.param, self.c(ansi::RESET),
-                    format!("{}{}", r.value, r.unit),
+                    "  {}{:<20} {}{:<10} {}{}{} {} {}",
+                    self.c(ansi::BOLD),
+                    r.group,
+                    self.c(ansi::DIM),
+                    r.param,
+                    self.c(ansi::RESET),
+                    r.value,
+                    r.unit,
                     extra_str,
                     status_str,
                 );
@@ -411,9 +432,7 @@ impl Reporter {
         let mut rows: Vec<TableRow> = Vec::new();
 
         // Заголовок
-        rows.push(TableRow::Header(
-            columns.iter().map(|s| s.to_string()).collect()
-        ));
+        rows.push(TableRow::Header(columns.iter().map(|s| s.to_string()).collect()));
 
         // Данные
         for r in results {
@@ -466,7 +485,11 @@ impl Reporter {
     pub fn print_summary(&self) {
         let total = self.results.len();
         let passed = self.results.iter().filter(|r| r.status == BenchStatus::Pass).count();
-        let warnings: Vec<&BenchResult> = self.results.iter().filter(|r| matches!(r.status, BenchStatus::Warning(_))).collect();
+        let warnings: Vec<&BenchResult> = self
+            .results
+            .iter()
+            .filter(|r| matches!(r.status, BenchStatus::Warning(_)))
+            .collect();
         let peaks = self.results.iter().filter(|r| r.status == BenchStatus::Peak).count();
 
         let save_result = self.output_path.as_ref().map(|path| {
@@ -478,27 +501,48 @@ impl Reporter {
             // Вывод JSON
             let json = self.to_json();
             println!("{}", json);
-            if let Some((path, result)) = &save_result {
-                if let Err(e) = result {
-                    eprintln!("Ошибка сохранения JSON в {}: {}", path, e);
-                }
+            if let Some((path, Err(e))) = &save_result {
+                eprintln!("Ошибка сохранения JSON в {}: {}", path, e);
             }
             return;
         }
 
         // Компактная сводка
         if self.quiet || self.compact {
-            print!("{}{}═══ СВОДКА ═══{}", self.c(ansi::BOLD), self.c(ansi::CYAN), self.c(ansi::RESET));
+            print!(
+                "{}{}═══ СВОДКА ═══{}",
+                self.c(ansi::BOLD),
+                self.c(ansi::CYAN),
+                self.c(ansi::RESET)
+            );
             print!("  Всего: {}", total);
-            print!("  {}{}{}{}", self.c(ansi::GREEN), "✓", passed, self.c(ansi::RESET));
+            print!("  {}✓{}{}", self.c(ansi::GREEN), passed, self.c(ansi::RESET));
             if peaks > 0 {
-                print!("  {}{}★{} {}", self.c(ansi::CYAN), self.c(ansi::BOLD), self.c(ansi::RESET), peaks);
+                print!(
+                    "  {}{}★{} {}",
+                    self.c(ansi::CYAN),
+                    self.c(ansi::BOLD),
+                    self.c(ansi::RESET),
+                    peaks
+                );
             }
             if !warnings.is_empty() {
-                print!("  {}{}⚠{} {}", self.c(ansi::YELLOW), self.c(ansi::BOLD), self.c(ansi::RESET), warnings.len());
+                print!(
+                    "  {}{}⚠{} {}",
+                    self.c(ansi::YELLOW),
+                    self.c(ansi::BOLD),
+                    self.c(ansi::RESET),
+                    warnings.len()
+                );
             }
             let elapsed = self.start_time.elapsed();
-            println!("  {}{}.{:03}s{}", self.c(ansi::DIM), elapsed.as_secs(), elapsed.subsec_millis(), self.c(ansi::RESET));
+            println!(
+                "  {}{}.{:03}s{}",
+                self.c(ansi::DIM),
+                elapsed.as_secs(),
+                elapsed.subsec_millis(),
+                self.c(ansi::RESET)
+            );
             if let Some((path, result)) = &save_result {
                 match result {
                     Ok(()) => println!("  {}Сохранено в {}{}", self.c(ansi::DIM), path, self.c(ansi::RESET)),
@@ -508,26 +552,73 @@ impl Reporter {
             return;
         }
 
-        println!("\n{}═══════════════════════════════════════{}", self.c(ansi::BOLD), self.c(ansi::RESET));
-        println!("  {}{}СВОДКА{}", self.c(ansi::BOLD), self.c(ansi::CYAN), self.c(ansi::RESET));
+        println!(
+            "\n{}═══════════════════════════════════════{}",
+            self.c(ansi::BOLD),
+            self.c(ansi::RESET)
+        );
+        println!(
+            "  {}{}СВОДКА{}",
+            self.c(ansi::BOLD),
+            self.c(ansi::CYAN),
+            self.c(ansi::RESET)
+        );
         println!("═══════════════════════════════════════");
         println!("  Всего тестов:    {}", total);
-        println!("  {}{}Пройдено:        {}{}", self.c(ansi::GREEN), self.c(ansi::BOLD), passed, self.c(ansi::RESET));
-        println!("  {}{}Пиковых:         {}{}", self.c(ansi::CYAN), self.c(ansi::BOLD), peaks, self.c(ansi::RESET));
+        println!(
+            "  {}{}Пройдено:        {}{}",
+            self.c(ansi::GREEN),
+            self.c(ansi::BOLD),
+            passed,
+            self.c(ansi::RESET)
+        );
+        println!(
+            "  {}{}Пиковых:         {}{}",
+            self.c(ansi::CYAN),
+            self.c(ansi::BOLD),
+            peaks,
+            self.c(ansi::RESET)
+        );
         if !warnings.is_empty() {
-            println!("  {}{}Предупреждений:  {}{}", self.c(ansi::YELLOW), self.c(ansi::BOLD), warnings.len(), self.c(ansi::RESET));
+            println!(
+                "  {}{}Предупреждений:  {}{}",
+                self.c(ansi::YELLOW),
+                self.c(ansi::BOLD),
+                warnings.len(),
+                self.c(ansi::RESET)
+            );
             for w in &warnings {
                 if let BenchStatus::Warning(msg) = &w.status {
-                    println!("    {}{}⚠{} {}: {}", self.c(ansi::YELLOW), self.c(ansi::BOLD), self.c(ansi::RESET), w.group, msg);
+                    println!(
+                        "    {}{}⚠{} {}: {}",
+                        self.c(ansi::YELLOW),
+                        self.c(ansi::BOLD),
+                        self.c(ansi::RESET),
+                        w.group,
+                        msg
+                    );
                 }
             }
         }
         let elapsed = self.start_time.elapsed();
-        println!("  {}{}Время выполнения: {}.{:03}s{}", self.c(ansi::DIM), self.c(ansi::BOLD), elapsed.as_secs(), elapsed.subsec_millis(), self.c(ansi::RESET));
+        println!(
+            "  {}{}Время выполнения: {}.{:03}s{}",
+            self.c(ansi::DIM),
+            self.c(ansi::BOLD),
+            elapsed.as_secs(),
+            elapsed.subsec_millis(),
+            self.c(ansi::RESET)
+        );
 
         if let Some((path, result)) = &save_result {
             match result {
-                Ok(()) => println!("  {}{}Результаты сохранены в {}{}", self.c(ansi::GREEN), self.c(ansi::BOLD), path, self.c(ansi::RESET)),
+                Ok(()) => println!(
+                    "  {}{}Результаты сохранены в {}{}",
+                    self.c(ansi::GREEN),
+                    self.c(ansi::BOLD),
+                    path,
+                    self.c(ansi::RESET)
+                ),
                 Err(e) => eprintln!("  Ошибка сохранения JSON в {}: {}", path, e),
             }
         }

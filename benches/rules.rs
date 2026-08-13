@@ -31,7 +31,12 @@ pub fn make_pattern_rule(pattern_size: usize) -> Rule {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
@@ -40,10 +45,14 @@ pub fn pattern_size_bench(size: usize) -> u128 {
     let w = size + 2;
     let mut grid = helpers::make_grid(w, 1);
     for i in 0..size {
-        grid.set_cell(i, 0, Cell {
-            value: CellValue(CellType(i as u8 + 1)),
-            born_at: 0,
-        });
+        grid.set_cell(
+            i,
+            0,
+            Cell {
+                value: CellValue(CellType(i as u8 + 1)),
+                born_at: 0,
+            },
+        );
     }
     let rule = make_pattern_rule(size);
     let rule_index = helpers::make_rule_index(vec![rule]);
@@ -69,7 +78,12 @@ pub fn rules_per_head(k: usize) -> Vec<Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
         .collect()
 }
@@ -77,14 +91,22 @@ pub fn rules_per_head(k: usize) -> Vec<Rule> {
 /// Замерить время поиска правила среди K с одним head-типом.
 pub fn rules_per_head_bench(k: usize) -> u128 {
     let mut grid = helpers::make_grid(k + 2, 1);
-    grid.set_cell(0, 0, Cell {
-        value: CellValue(CellType(1)),
-        born_at: 0,
-    });
-    grid.set_cell(1, 0, Cell {
-        value: CellValue(CellType(2)), // подходит под первое правило
-        born_at: 0,
-    });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(1)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType(2)), // подходит под первое правило
+            born_at: 0,
+        },
+    );
 
     let rules = rules_per_head(k);
     let rule_index = helpers::make_rule_index(rules);
@@ -114,7 +136,7 @@ pub fn profile_find_rule(k: usize) -> (u128, usize) {
             found += 1;
         }
     }
-    let elapsed = start.elapsed().as_nanos() as u128;
+    let elapsed = start.elapsed().as_nanos();
     (elapsed / 10000, found) // среднее наносекунд на один поиск
 }
 

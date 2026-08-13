@@ -13,9 +13,10 @@
 //! Исходный код разделён на модули по функциональному признаку:
 //!
 //! - [`types`](mod@types) — базовые типы данных (ячейка, правило, сдвиг и т.д.).
-//! - [`storage`](mod@storage) — абстракция хранилища решётки и две реализации
-//!   ([`VecStorage`], [`ChunkStorage`]).
-//! - [`grid`](mod@grid) — обёртка [`Grid`] над хранилищем с унифицированным API.
+//! - `storage` (приватный модуль, типы реэкспортированы) — абстракция
+//!   хранилища решётки и две реализации ([`VecStorage`], [`ChunkStorage`]).
+//! - `grid` (приватный модуль, [`Grid`] реэкспортирован) — обёртка над
+//!   хранилищем с унифицированным API.
 //! - [`engine`](mod@engine) — пять фаз тика симуляции
 //!   (ввод, обнаружение, арбитраж, применение, сброс).
 //! - [`config`](mod@config) — загрузка правил и начального состояния из YAML.
@@ -24,14 +25,14 @@
 //!
 //! ## Хранение
 //!
-//! Два варианта хранилища через трейт [`GridStorage`](storage::GridStorage):
-//! - [`VecStorage`](storage::VecStorage) — конечная решётка фиксированного размера
-//! - [`ChunkStorage`](storage::ChunkStorage) — бесконечная решётка, разбитая на чанки 64×64
+//! Два варианта хранилища через трейт [`GridStorage`]:
+//! - [`VecStorage`] — конечная решётка фиксированного размера
+//! - [`ChunkStorage`] — бесконечная решётка, разбитая на чанки 64×64
 //!
 //! ## Конфигурация
 //!
 //! Правила и начальное состояние загружаются из YAML-файлов через
-//! [`load_config`](config::load_config). Примеры конфигов находятся в каталоге `configs/`.
+//! [`load_config`]. Примеры конфигов находятся в каталоге `configs/`.
 //!
 //! ## Примеры
 //!
@@ -133,10 +134,10 @@ pub use engine::{run_tick, Engine, TerminationVerdict, CompositionVerdict};
 pub use error::CellariaError;
 pub use grid::{Grid, SimpleGrid};
 pub use layered::LayeredEngine;
-pub use render::{render_grid, render_grid_json};
+pub use render::{render_grid, render_grid_json, render_layered_grid_json};
 pub use rule_store::RuleStore;
 pub use storage::{ChunkStorage, GridStorage, VecStorage};
 pub use types::{
-    AffectedRegion, BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction,
+    build_rule_index, AffectedRegion, BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction,
     OverflowAction, Rule, RuleId, RuleMatch, ShiftSpec,
 };

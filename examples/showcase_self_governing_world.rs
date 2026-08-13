@@ -30,9 +30,7 @@
 use std::collections::HashMap;
 
 use cellaria::engine::Engine;
-use cellaria::types::{
-    BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction, Rule, ShiftSpec,
-};
+use cellaria::types::{BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction, Rule, ShiftSpec};
 use cellaria::{Grid, VecStorage};
 
 // ============================================================================
@@ -50,15 +48,15 @@ const COUNTER_BASE: u8 = 150; // рабочий регион: счётчик и�
 const MAX_COUNT: u8 = 9;
 const QUIET_THRESHOLD: u64 = 20;
 const SAFE_NEW_ID: u8 = 66; // id правила, которое рабочий регион передаст себе
-// Фиксированные байты пакета (кроме "steps" — посчитанного числа) и их
-// перевозчики — точно как в strength_self_modification_computed.rs.
+                            // Фиксированные байты пакета (кроме "steps" — посчитанного числа) и их
+                            // перевозчики — точно как в strength_self_modification_computed.rs.
 const PACKET_FIXED: [(usize, u8); 6] = [
-    (0, 10),           // priority
-    (1, 1),            // id_len
-    (2, SAFE_NEW_ID),  // id_byte
-    (3, 0xFE),         // SHIFT_FLAG
-    (4, 3),            // dir_byte = Right
-    (6, 0xFF),         // terminator
+    (0, 10),          // priority
+    (1, 1),           // id_len
+    (2, SAFE_NEW_ID), // id_byte
+    (3, 0xFE),        // SHIFT_FLAG
+    (4, 3),           // dir_byte = Right
+    (6, 0xFF),        // terminator
 ];
 const CARRIER_TYPES: [u8; 6] = [121, 122, 123, 124, 125, 126];
 const WIDTH: usize = 200;
@@ -69,18 +67,51 @@ fn act1_rule_index() -> HashMap<CellType, Vec<Rule>> {
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
 
     // Существующий модуль — простой, статичный, никогда не меняется.
-    idx.insert(CellType(RAD), vec![Rule {
-        id: vec![CellType(RAD)], pattern: vec![], shifts: vec![],
-        changes: vec![(0, 0, ChangeValue::Literal(MID))],
-        active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-    }]);
+    idx.insert(
+        CellType(RAD),
+        vec![Rule {
+            id: vec![CellType(RAD)],
+            pattern: vec![],
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(MID))],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
+        }],
+    );
 
     // Импульс, считающий счётчик (та же конструкция, что в
     // strength_self_modification_computed.rs).
-    idx.insert(CellType(PULSE), vec![Rule {
-        id: vec![CellType(PULSE)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-    }]);
+    idx.insert(
+        CellType(PULSE),
+        vec![Rule {
+            id: vec![CellType(PULSE)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
+        }],
+    );
     for k in 0..MAX_COUNT {
         let counter_id = CellType(COUNTER_BASE + k);
         let mut rules = Vec::new();
@@ -88,37 +119,90 @@ fn act1_rule_index() -> HashMap<CellType, Vec<Rule>> {
             id: vec![counter_id],
             pattern: vec![(0, 0, counter_id), (1, 0, CellType(PULSE))],
             shifts: vec![],
-            changes: vec![(0, 0, ChangeValue::Literal(COUNTER_BASE + k + 1)), (1, 0, ChangeValue::Literal(0))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            changes: vec![
+                (0, 0, ChangeValue::Literal(COUNTER_BASE + k + 1)),
+                (1, 0, ChangeValue::Literal(0)),
+            ],
+            active_only: false,
+            priority: 20,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         });
         if k > 0 {
             rules.push(Rule {
-                id: vec![counter_id], pattern: vec![(0, 0, counter_id)], shifts: vec![],
+                id: vec![counter_id],
+                pattern: vec![(0, 0, counter_id)],
+                shifts: vec![],
                 changes: vec![(0, 0, ChangeValue::Literal(k))],
-                active_only: false, priority: 10, min_age: QUIET_THRESHOLD, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                active_only: false,
+                priority: 10,
+                min_age: QUIET_THRESHOLD,
+                overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             });
         }
         idx.insert(counter_id, rules);
     }
     for k in 1..MAX_COUNT {
-        idx.insert(CellType(k), vec![Rule {
-            id: vec![CellType(k)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
-            changes: vec![], active_only: false, priority: 10, min_age: 0,
-            overflow: cellaria::types::OverflowAction::Write(0),
-            cam: None,
-            tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        }]);
+        idx.insert(
+            CellType(k),
+            vec![Rule {
+                id: vec![CellType(k)],
+                pattern: vec![],
+                shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+                changes: vec![],
+                active_only: false,
+                priority: 10,
+                min_age: 0,
+                overflow: cellaria::types::OverflowAction::Write(0),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            }],
+        );
     }
     for (i, &(_, byte)) in PACKET_FIXED.iter().enumerate() {
-        idx.insert(CellType(CARRIER_TYPES[i]), vec![Rule {
-            id: vec![CellType(CARRIER_TYPES[i])], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
-            changes: vec![], active_only: false, priority: 10, min_age: 0,
-            overflow: cellaria::types::OverflowAction::Write(byte),
-            cam: None,
-            tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        }]);
+        idx.insert(
+            CellType(CARRIER_TYPES[i]),
+            vec![Rule {
+                id: vec![CellType(CARRIER_TYPES[i])],
+                pattern: vec![],
+                shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+                changes: vec![],
+                active_only: false,
+                priority: 10,
+                min_age: 0,
+                overflow: cellaria::types::OverflowAction::Write(byte),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            }],
+        );
     }
     idx
 }
@@ -130,11 +214,32 @@ fn act1() {
     let mut out = BoundaryBuffer::new();
     out.direction = "output".to_string();
     grid.set_boundary(WIDTH - 1, 0, out);
-    grid.set_cell(5, 0, Cell { value: CellValue(CellType(RAD)), born_at: 0 });
-    grid.set_cell(COUNTER_X, 0, Cell { value: CellValue(CellType(COUNTER_BASE)), born_at: 0 });
+    grid.set_cell(
+        5,
+        0,
+        Cell {
+            value: CellValue(CellType(RAD)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        COUNTER_X,
+        0,
+        Cell {
+            value: CellValue(CellType(COUNTER_BASE)),
+            born_at: 0,
+        },
+    );
     let num_pulses = 3usize;
     for j in 0..num_pulses {
-        grid.set_cell(COUNTER_X + 2 * (j + 1), 0, Cell { value: CellValue(CellType(PULSE)), born_at: 0 });
+        grid.set_cell(
+            COUNTER_X + 2 * (j + 1),
+            0,
+            Cell {
+                value: CellValue(CellType(PULSE)),
+                born_at: 0,
+            },
+        );
     }
 
     let mut engine = Engine::new(grid, act1_rule_index());
@@ -149,7 +254,10 @@ fn act1() {
     engine.enable_self_modification();
 
     println!("Существующий модуль (id={}) уже работает: {} -> {}.", RAD, RAD, MID);
-    println!("Рабочий регион считает импульсы ({} штук) и передаёт себе новое правило id={}.\n", num_pulses, SAFE_NEW_ID);
+    println!(
+        "Рабочий регион считает импульсы ({} штук) и передаёт себе новое правило id={}.\n",
+        num_pulses, SAFE_NEW_ID
+    );
 
     // Фаза A: считаем, пока не появится "чистое" число k.
     let mut dynamic: Option<(usize, u8)> = None;
@@ -159,7 +267,11 @@ fn act1() {
         // модуля (RAD=1 распадается в MID=3) тоже попадает в диапазон
         // 1..MAX_COUNT и ложно принимается за "досчитанный" счётчик.
         if let Some(x) = (COUNTER_X.saturating_sub(5)..COUNTER_X + 5).find(|&x| {
-            engine.grid().get_cell(x, 0).map(|c| c.value.0 .0 >= 1 && c.value.0 .0 < MAX_COUNT).unwrap_or(false)
+            engine
+                .grid()
+                .get_cell(x, 0)
+                .map(|c| c.value.0 .0 >= 1 && c.value.0 .0 < MAX_COUNT)
+                .unwrap_or(false)
         }) {
             let k = engine.grid().get_cell(x, 0).unwrap().value.0 .0;
             dynamic = Some((x, k));
@@ -174,9 +286,20 @@ fn act1() {
     // числа, точно как в strength_self_modification_computed.rs.
     for (i, &(byte_index, _)) in PACKET_FIXED.iter().enumerate() {
         let offset = if byte_index < 5 { 2 * (5 - byte_index) } else { 2 };
-        let x = if byte_index < 5 { dynamic_x + offset } else { dynamic_x.saturating_sub(offset) };
+        let x = if byte_index < 5 {
+            dynamic_x + offset
+        } else {
+            dynamic_x.saturating_sub(offset)
+        };
         let gen = engine.grid().generation();
-        engine.grid_mut().set_cell(x, 0, Cell { value: CellValue(CellType(CARRIER_TYPES[i])), born_at: gen });
+        engine.grid_mut().set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(CARRIER_TYPES[i])),
+                born_at: gen,
+            },
+        );
     }
 
     for _ in 1..=(WIDTH as u32) {
@@ -200,7 +323,13 @@ fn act1() {
     {
         let buf = engine.grid_mut().get_boundary_mut(WIDTH - 1, 0).unwrap();
         for &b in &[10u8, 1, RAD, 0, 0, 99, 0xFF] {
-            buf.enqueue(0, Cell { value: CellValue(CellType(b)), born_at: 0 });
+            buf.enqueue(
+                0,
+                Cell {
+                    value: CellValue(CellType(b)),
+                    born_at: 0,
+                },
+            );
         }
     }
     let rejected_before = engine.rejected_self_modifications;
@@ -217,7 +346,14 @@ fn act1() {
 
     // Убеждаемся, что существующий модуль ДЕЙСТВИТЕЛЬНО продолжает работать.
     let mut check = Grid::new(VecStorage::new(1, 1), Default::default());
-    check.set_cell(0, 0, Cell { value: CellValue(CellType(RAD)), born_at: 0 });
+    check.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(RAD)),
+            born_at: 0,
+        },
+    );
     let mut check_engine = Engine::new(check, {
         let mut i = HashMap::new();
         i.insert(CellType(RAD), rad_rule.clone());
@@ -226,7 +362,8 @@ fn act1() {
     check_engine.run_tick();
     println!(
         "Существующий модуль всё ещё превращает {} в {}: {}\n",
-        RAD, MID,
+        RAD,
+        MID,
         check_engine.grid().get_cell(0, 0).map(|c| c.value.0 .0) == Some(MID)
     );
 }
@@ -253,23 +390,60 @@ fn act2_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 pattern: vec![(0, 0, CellType(ACC_BASE2 + acc)), (0, -1, CellType(d))],
                 shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
                 changes: vec![(0, 0, ChangeValue::Literal(ACC_BASE2 + next))],
-                active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                active_only: false,
+                priority: 20,
+                min_age: 0,
+                overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             });
         }
         rules.push(Rule {
-            id: vec![CellType(ACC_BASE2 + acc)], pattern: vec![(0, 0, CellType(ACC_BASE2 + acc))], shifts: vec![],
+            id: vec![CellType(ACC_BASE2 + acc)],
+            pattern: vec![(0, 0, CellType(ACC_BASE2 + acc))],
+            shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(FINAL_BASE2 + acc))],
-            active_only: false, priority: 10, min_age: QUIET2, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        });
-        idx.insert(CellType(ACC_BASE2 + acc), rules);
-        idx.insert(CellType(FINAL_BASE2 + acc), vec![Rule {
-            id: vec![CellType(FINAL_BASE2 + acc)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
-            changes: vec![], active_only: false, priority: 10, min_age: 0,
-            overflow: cellaria::types::OverflowAction::Write(0),
+            active_only: false,
+            priority: 10,
+            min_age: QUIET2,
+            overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        }]);
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
+        });
+        idx.insert(CellType(ACC_BASE2 + acc), rules);
+        idx.insert(
+            CellType(FINAL_BASE2 + acc),
+            vec![Rule {
+                id: vec![CellType(FINAL_BASE2 + acc)],
+                pattern: vec![],
+                shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+                changes: vec![],
+                active_only: false,
+                priority: 10,
+                min_age: 0,
+                overflow: cellaria::types::OverflowAction::Write(0),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            }],
+        );
     }
     idx
 }
@@ -280,9 +454,23 @@ fn attest(data: &[u8]) -> u8 {
     out.direction = "output".to_string();
     grid.set_boundary(WIDTH2 - 1, MARKER_ROW, out);
     for (x, &d) in data.iter().enumerate() {
-        grid.set_cell(x, 0, Cell { value: CellValue(CellType(d)), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(d)),
+                born_at: 0,
+            },
+        );
     }
-    grid.set_cell(0, MARKER_ROW, Cell { value: CellValue(CellType(ACC_BASE2)), born_at: 0 });
+    grid.set_cell(
+        0,
+        MARKER_ROW,
+        Cell {
+            value: CellValue(CellType(ACC_BASE2)),
+            born_at: 0,
+        },
+    );
 
     let mut engine = Engine::new(grid, act2_rule_index());
     for _ in 1..=(WIDTH2 as u32 * 2) {
@@ -323,49 +511,126 @@ const TICKS3: u32 = 20;
 fn act3_rules(forward: bool) -> HashMap<CellType, Vec<Rule>> {
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
     for s in 0..CYCLE_LEN {
-        let next = if forward { (s + 1) % CYCLE_LEN } else { (s + CYCLE_LEN - 1) % CYCLE_LEN };
-        idx.insert(CellType(CYCLE_BASE + s), vec![Rule {
-            id: vec![CellType(CYCLE_BASE + s)], pattern: vec![], shifts: vec![],
-            changes: vec![(0, 0, ChangeValue::Literal(CYCLE_BASE + next))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-        }]);
+        let next = if forward {
+            (s + 1) % CYCLE_LEN
+        } else {
+            (s + CYCLE_LEN - 1) % CYCLE_LEN
+        };
+        idx.insert(
+            CellType(CYCLE_BASE + s),
+            vec![Rule {
+                id: vec![CellType(CYCLE_BASE + s)],
+                pattern: vec![],
+                shifts: vec![],
+                changes: vec![(0, 0, ChangeValue::Literal(CYCLE_BASE + next))],
+                active_only: false,
+                priority: 10,
+                min_age: 0,
+                overflow: Default::default(),
+                cam: None,
+                tie_break: 0,
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
+            }],
+        );
     }
     let dir = if forward { Direction::Right } else { Direction::Left };
-    idx.insert(CellType(TOKEN), vec![Rule {
-        id: vec![CellType(TOKEN)], pattern: vec![], shifts: vec![vec![ShiftSpec::new(dir, 1)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-    }]);
+    idx.insert(
+        CellType(TOKEN),
+        vec![Rule {
+            id: vec![CellType(TOKEN)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(dir, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
+        }],
+    );
     idx
 }
 
 fn act3() {
     println!("========== ДЕЙСТВИЕ 3: часть мира можно прокрутить назад буквально ==========\n");
     let mut grid = Grid::new(VecStorage::new(WIDTH3, 1), Default::default());
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType(CYCLE_BASE)), born_at: 0 });
-    grid.set_cell(4, 0, Cell { value: CellValue(CellType(CYCLE_BASE + 2)), born_at: 0 });
-    grid.set_cell(15, 0, Cell { value: CellValue(CellType(TOKEN)), born_at: 0 });
-    let initial: Vec<u8> = (0..WIDTH3).map(|x| grid.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect();
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(CYCLE_BASE)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        4,
+        0,
+        Cell {
+            value: CellValue(CellType(CYCLE_BASE + 2)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        15,
+        0,
+        Cell {
+            value: CellValue(CellType(TOKEN)),
+            born_at: 0,
+        },
+    );
+    let initial: Vec<u8> = (0..WIDTH3)
+        .map(|x| grid.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+        .collect();
 
     let mut fwd = Engine::new(grid, act3_rules(true));
     for _ in 1..=TICKS3 {
         fwd.run_tick();
     }
-    let after: Vec<u8> = (0..WIDTH3).map(|x| fwd.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect();
+    let after: Vec<u8> = (0..WIDTH3)
+        .map(|x| fwd.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+        .collect();
 
     let mut back_grid = Grid::new(VecStorage::new(WIDTH3, 1), Default::default());
     for (x, &v) in after.iter().enumerate() {
         if v != 0 {
-            back_grid.set_cell(x, 0, Cell { value: CellValue(CellType(v)), born_at: 0 });
+            back_grid.set_cell(
+                x,
+                0,
+                Cell {
+                    value: CellValue(CellType(v)),
+                    born_at: 0,
+                },
+            );
         }
     }
     let mut bwd = Engine::new(back_grid, act3_rules(false));
     for _ in 1..=TICKS3 {
         bwd.run_tick();
     }
-    let recovered: Vec<u8> = (0..WIDTH3).map(|x| bwd.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect();
+    let recovered: Vec<u8> = (0..WIDTH3)
+        .map(|x| bwd.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+        .collect();
 
-    println!("{} тиков вперёд, затем {} тиков по развёрнутым правилам назад.", TICKS3, TICKS3);
-    println!("Восстановленное состояние совпадает с исходным клетка в клетку: {}\n", recovered == initial);
+    println!(
+        "{} тиков вперёд, затем {} тиков по развёрнутым правилам назад.",
+        TICKS3, TICKS3
+    );
+    println!(
+        "Восстановленное состояние совпадает с исходным клетка в клетку: {}\n",
+        recovered == initial
+    );
 }
 
 fn main() {

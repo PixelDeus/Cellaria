@@ -14,7 +14,10 @@ fn main() {
     let storage = ChunkStorage::new();
     let mut grid = Grid::new(storage, Default::default());
 
-    println!("Границы решётки: {:?} (нет — мир не ограничен)\n", grid.storage.bounds());
+    println!(
+        "Границы решётки: {:?} (нет — мир не ограничен)\n",
+        grid.storage.bounds()
+    );
 
     let far_points: [(usize, usize); 4] = [
         (0, 0),
@@ -25,11 +28,21 @@ fn main() {
 
     for &(x, y) in &far_points {
         let t0 = Instant::now();
-        grid.set_cell(x, y, Cell { value: CellValue(CellType(1)), born_at: 0 });
+        grid.set_cell(
+            x,
+            y,
+            Cell {
+                value: CellValue(CellType(1)),
+                born_at: 0,
+            },
+        );
         let placed = grid.get_cell(x, y).map(|c| c.value.0 .0);
         println!(
             "клетка ({:>12}, {:>12}): записана за {:>8?}, читается как {:?}",
-            x, y, t0.elapsed(), placed
+            x,
+            y,
+            t0.elapsed(),
+            placed
         );
     }
 

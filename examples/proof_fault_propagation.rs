@@ -29,21 +29,58 @@ const K: i64 = 1; // паттерн провода читает соседа н�
 fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
     let rules = vec![
         Rule {
-            id: vec![CellType(HEAD)], pattern: vec![], shifts: vec![],
+            id: vec![CellType(HEAD)],
+            pattern: vec![],
+            shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(TAIL))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
-            id: vec![CellType(TAIL)], pattern: vec![], shifts: vec![],
+            id: vec![CellType(TAIL)],
+            pattern: vec![],
+            shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(WIRE))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(WIRE)],
             pattern: vec![(0, 0, CellType(WIRE)), (-1, 0, CellType(HEAD))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(HEAD))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
     ];
     let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
@@ -57,7 +94,14 @@ fn build_wire_grid() -> Grid<VecStorage> {
     let storage = VecStorage::new(WIDTH, 1);
     let mut grid = Grid::new(storage, Default::default());
     for x in 0..WIDTH {
-        grid.set_cell(x, 0, Cell { value: CellValue(CellType(WIRE)), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(WIRE)),
+                born_at: 0,
+            },
+        );
     }
     grid
 }
@@ -66,8 +110,14 @@ fn main() {
     let mut reference = Engine::new(build_wire_grid(), build_rule_index());
     let mut corrupted = Engine::new(build_wire_grid(), build_rule_index());
 
-    println!("Теорема 7: радиус расхождения после t тиков не должен превышать 2*K*t = {}*t\n", 2 * K);
-    println!("{:>4} | {:>16} | {:>10} | {:>12}", "тик", "макс. расстояние", "бюджет 2Kt", "в пределах?");
+    println!(
+        "Теорема 7: радиус расхождения после t тиков не должен превышать 2*K*t = {}*t\n",
+        2 * K
+    );
+    println!(
+        "{:>4} | {:>16} | {:>10} | {:>12}",
+        "тик", "макс. расстояние", "бюджет 2Kt", "в пределах?"
+    );
     println!("{}", "-".repeat(52));
 
     let mut bound_ever_violated = false;
@@ -75,7 +125,14 @@ fn main() {
         reference.run_tick();
         if t == 1 {
             // Порча: внешнее вмешательство, не решение движка.
-            corrupted.grid_mut().set_cell(CORRUPT_X, 0, Cell { value: CellValue(CellType(HEAD)), born_at: 0 });
+            corrupted.grid_mut().set_cell(
+                CORRUPT_X,
+                0,
+                Cell {
+                    value: CellValue(CellType(HEAD)),
+                    born_at: 0,
+                },
+            );
         }
         corrupted.run_tick();
 

@@ -39,6 +39,20 @@
 //! # NO_COLOR); --no-color/--color переопределяют это явно
 //! cargo bench --bench cellaria_bench -- --no-color
 //! ```
+//!
+//! ## Про дельты сравнения ("Performance has improved/regressed")
+//!
+//! Criterion сравнивает КАЖДЫЙ прогон с локальной историей в
+//! `target/criterion/<имя>/base` (или `.../quick/` для `--quick` — см.
+//! `main()`, эти два режима держат ОТДЕЛЬНУЮ историю специально, чтобы не
+//! путать 10-семпловый замер с обычным 100+-семпловым). Но ЛЮБОЙ прогон,
+//! даже в пределах одного режима, сравнивается со СЛУЧАЙНЫМ по времени
+//! предыдущим замером — если между прогонами прошло много времени/много
+//! изменений в коде, дельта отражает "что изменилось с прошлого раза,
+//! когда кто-то это гонял", а не "регрессия/улучшение только что". Не
+//! доверяйте единичной дельте без понимания, КОГДА был записан предыдущий
+//! baseline — при сомнении сотрите `target/criterion` и сделайте два
+//! явных прогона подряд для честного сравнения.
 
 mod helpers;
 mod existing;
@@ -132,7 +146,7 @@ fn run_phase1(reporter: &mut Reporter) {
         0
     };
     let avg_ns = if ticks > 0 {
-        (elapsed_us as u128 * 1000) / ticks as u128
+        (elapsed_us * 1000) / ticks as u128
     } else {
         0
     };
@@ -176,7 +190,11 @@ fn run_phase2(reporter: &mut Reporter) {
 
         let mut results = Vec::new();
         for (name, t) in &phases {
-            let pct = if total_phases > 0 { (*t as f64 / total_phases as f64) * 100.0 } else { 0.0 };
+            let pct = if total_phases > 0 {
+                (*t as f64 / total_phases as f64) * 100.0
+            } else {
+                0.0
+            };
             let r = BenchResult::new(&format!("2:N={}", n), name, &t.to_string(), "ns")
                 .with_extra("%", &reporter::format_f64(pct, 1))
                 .pass();
@@ -184,19 +202,17 @@ fn run_phase2(reporter: &mut Reporter) {
         }
 
         // Сумма фаз
-        let r_sum = BenchResult::new(&format!("2:N={}", n), "Сумма фаз", &total_phases.to_string(), "ns")
-            .pass();
+        let r_sum = BenchResult::new(&format!("2:N={}", n), "Сумма фаз", &total_phases.to_string(), "ns").pass();
         results.push(r_sum);
 
         // Полный run_tick
         let full = full_tick_bench(n);
-        let r_full = BenchResult::new(&format!("2:N={}", n), "Полный run_tick", &full.to_string(), "ns")
-            .pass();
+        let r_full = BenchResult::new(&format!("2:N={}", n), "Полный run_tick", &full.to_string(), "ns").pass();
         results.push(r_full);
 
         // Overhead
         if full > 0 {
-            let overhead = if total_phases > full { total_phases - full } else { full - total_phases };
+            let overhead = total_phases.abs_diff(full);
             let pct = (overhead as f64 / full as f64) * 100.0;
             let r_over = BenchResult::new(&format!("2:N={}", n), "Overhead", &overhead.to_string(), "ns")
                 .with_extra("%", &reporter::format_f64(pct, 1))
@@ -221,8 +237,7 @@ fn run_phase3(reporter: &mut Reporter) {
     for &n in &[10, 100, 500, 1000] {
         let bytes = memory_vec(n);
         let mb = bytes as f64 / 1_000_000.0;
-        let r = BenchResult::new("3A:Vec", &format!("N={}", n), &reporter::format_f64(mb, 2), "MB")
-            .pass();
+        let r = BenchResult::new("3A:Vec", &format!("N={}", n), &reporter::format_f64(mb, 2), "MB").pass();
         results_vec.push(r);
     }
     reporter.add_all(results_vec.clone());
@@ -238,8 +253,7 @@ fn run_phase3(reporter: &mut Reporter) {
         } else {
             format!("{} KB", kb)
         };
-        let r = BenchResult::new("3B:Chunk", &format!("N={}", n), &unit, "")
-            .pass();
+        let r = BenchResult::new("3B:Chunk", &format!("N={}", n), &unit, "").pass();
         results_chunk.push(r);
     }
     reporter.add_all(results_chunk.clone());
@@ -257,8 +271,7 @@ fn run_phase4(reporter: &mut Reporter) {
     let mut results_4a = Vec::new();
     for &size in &[1, 2, 4, 9] {
         let elapsed = rules::pattern_size_bench(size);
-        let r = BenchResult::new("4A", &format!("size={}", size), &elapsed.to_string(), "µs")
-            .pass();
+        let r = BenchResult::new("4A", &format!("size={}", size), &elapsed.to_string(), "µs").pass();
         results_4a.push(r);
     }
     reporter.add_all(results_4a.clone());
@@ -268,8 +281,7 @@ fn run_phase4(reporter: &mut Reporter) {
     let mut results_4b = Vec::new();
     for &k in &[1, 10, 50, 100, 200] {
         let elapsed = rules::rules_per_head_bench(k);
-        let r = BenchResult::new("4B", &format!("K={}", k), &elapsed.to_string(), "µs")
-            .pass();
+        let r = BenchResult::new("4B", &format!("K={}", k), &elapsed.to_string(), "µs").pass();
         results_4b.push(r);
     }
     reporter.add_all(results_4b.clone());
@@ -303,23 +315,26 @@ fn run_phase5(reporter: &mut Reporter) {
 /// Разложить run_tick на фазы и замерить каждую отдельно.
 fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
     use std::time::Instant;
-    use std::collections::HashSet;
     use cellaria::Grid;
     use cellaria::VecStorage;
     use cellaria::GridStorage;
     use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Rule};
-    
+
     let storage = VecStorage::new(n, n);
-    let mut grid = Grid::new(storage, HashSet::new());
+    let mut grid = Grid::from_storage(storage);
 
     // Шахматный паттерн
     for y in 0..n {
         for x in 0..n {
             let val = if (x + y) % 2 == 0 { 1 } else { 2 };
-            grid.set_cell(x, y, Cell {
-                value: CellValue(CellType(val)),
-                born_at: grid.generation(),
-            });
+            grid.set_cell(
+                x,
+                y,
+                Cell {
+                    value: CellValue(CellType(val)),
+                    born_at: grid.generation(),
+                },
+            );
         }
     }
 
@@ -334,7 +349,12 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let rule_index = helpers::make_rule_index(vec![rule]);
 
@@ -359,23 +379,27 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
     // как экономия, а не как потери.
     let t_pre = Instant::now();
     let rule_cache = cellaria::conflict_analyzer::build_rule_data_cache(&rule_index);
-    let t_cache = t_pre.elapsed().as_nanos() as u128;
+    let t_cache = t_pre.elapsed().as_nanos();
 
     let t_resolve_start = Instant::now();
     let search_coords: Vec<(usize, usize)> = grid.active_coords().clone();
-    let t_resolve = t_resolve_start.elapsed().as_nanos() as u128;
+    let t_resolve = t_resolve_start.elapsed().as_nanos();
 
     // detect_matches
     let t0 = Instant::now();
     let matches = cellaria::engine::detect_matches(&grid, &rule_index, &search_coords);
-    let t_detect = t0.elapsed().as_nanos() as u128;
+    let t_detect = t0.elapsed().as_nanos();
 
     // arbitrate
     let t1 = Instant::now();
-    let accepted = cellaria::engine::arbitrate(matches, &rule_index, &rule_cache, (grid.width(), grid.height()), |x, y| {
-        grid.get_age(x, y) as u32
-    });
-    let t_arbitrate = t1.elapsed().as_nanos() as u128;
+    let accepted = cellaria::engine::arbitrate(
+        matches,
+        &rule_index,
+        &rule_cache,
+        (grid.width(), grid.height()),
+        |x, y| grid.get_age(x, y) as u32,
+    );
+    let t_arbitrate = t1.elapsed().as_nanos();
 
     // apply_matches
     let t2 = Instant::now();
@@ -384,13 +408,13 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
     } else {
         (Vec::new(), Vec::new())
     };
-    let t_apply = t2.elapsed().as_nanos() as u128;
+    let t_apply = t2.elapsed().as_nanos();
 
     // advance_age
     let t3 = Instant::now();
     // advance_age — O(1): просто инкремент generation
     grid.advance_age();
-    let t_age = t3.elapsed().as_nanos() as u128;
+    let t_age = t3.elapsed().as_nanos();
 
     // reset_age
     let t4 = Instant::now();
@@ -398,15 +422,19 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
         for y in region.y_start..region.y_end {
             for x in region.x_start..region.x_end {
                 if let Some(cell) = grid.get_cell(x as usize, y as usize) {
-                    grid.storage.set(x as usize, y as usize, Cell {
-                        value: cell.value,
-                        born_at: grid.generation(),
-                    });
+                    grid.storage.set(
+                        x as usize,
+                        y as usize,
+                        Cell {
+                            value: cell.value,
+                            born_at: grid.generation(),
+                        },
+                    );
                 }
             }
         }
     }
-    let t_reset = t4.elapsed().as_nanos() as u128;
+    let t_reset = t4.elapsed().as_nanos();
 
     vec![
         ("rule_cache rebuild", t_cache),
@@ -426,21 +454,24 @@ fn phase_breakdown(n: usize) -> Vec<(&'static str, u128)> {
 /// Замерить полный run_tick от начала до конца (создаёт новую решётку, как phase_breakdown).
 fn full_tick_bench(n: usize) -> u128 {
     use std::time::Instant;
-    use std::collections::HashSet;
     use cellaria::Grid;
     use cellaria::VecStorage;
     use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Rule};
-    
+
     let storage = VecStorage::new(n, n);
-    let mut grid = Grid::new(storage, HashSet::new());
+    let mut grid = Grid::from_storage(storage);
 
     for y in 0..n {
         for x in 0..n {
             let val = if (x + y) % 2 == 0 { 1 } else { 2 };
-            grid.set_cell(x, y, Cell {
-                value: CellValue(CellType(val)),
-                born_at: grid.generation(),
-            });
+            grid.set_cell(
+                x,
+                y,
+                Cell {
+                    value: CellValue(CellType(val)),
+                    born_at: grid.generation(),
+                },
+            );
         }
     }
 
@@ -455,7 +486,12 @@ fn full_tick_bench(n: usize) -> u128 {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let rule_index = helpers::make_rule_index(vec![rule]);
 
@@ -465,7 +501,7 @@ fn full_tick_bench(n: usize) -> u128 {
     // Измерение
     let t0 = Instant::now();
     cellaria::engine::run_tick(&mut grid, &rule_index);
-    t0.elapsed().as_nanos() as u128
+    t0.elapsed().as_nanos()
 }
 
 // ============================================================================
@@ -481,7 +517,7 @@ fn memory_vec(n: usize) -> u128 {
 
 /// Замерить потребление ChunkStorage для заполненной N×N области.
 fn memory_chunk_estimate(n: usize) -> usize {
-    let chunks_per_side = (n + 31) / 32;
+    let chunks_per_side = n.div_ceil(32);
     let num_chunks = chunks_per_side * chunks_per_side;
     num_chunks * 4096 // примерный оверхед на чанк
 }
@@ -525,7 +561,23 @@ fn main() {
                     .warm_up_time(std::time::Duration::from_secs(1))
                     .measurement_time(std::time::Duration::from_secs(2))
                     .sample_size(10)
-                    .noise_threshold(0.10);
+                    .noise_threshold(0.10)
+                    // РЕАЛЬНАЯ ПРОБЛЕМА, найдена при подготовке модели к 1.0:
+                    // без отдельного baseline'а `--quick`-прогон сравнивался
+                    // бы с историей, сохранённой ОБЫЧНЫМ (не-quick) прогоном
+                    // в том же `target/criterion/<name>/base` -- 10 семплов
+                    // против 100+, 2с измерения против 5с -- методологически
+                    // разные замеры, сравнение между ними даёт ложные "-40%
+                    // .. -70% Performance has improved" на КАЖДОМ бенчмарке
+                    // без исключения (наблюдалось эмпирически: разброс
+                    // одинаково "улучшился" у полностью несвязанных
+                    // сценариев -- TM-трансляция, tag-матчинг, storage,
+                    // arbitration -- явный признак методологического
+                    // артефакта, не реального ускорения). Именованный
+                    // baseline держит quick-историю ОТДЕЛЬНО от обычной --
+                    // дельты сравниваются только между прогонами ОДНОГО
+                    // режима.
+                    .save_baseline("quick".to_string());
             }
             cb
         };

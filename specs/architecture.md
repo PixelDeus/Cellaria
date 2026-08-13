@@ -11,36 +11,56 @@
 
 ## 1. Карта модулей
 
+Каждый файл ниже 1000 строк — что не влезало, разбито по concern'ам
+(несколько `impl`-блоков одного типа в разных файлах, см. CHANGELOG.md —
+валидно и безопасно в Rust, публичный API не меняется от того, в каком
+файле лежит метод).
+
 ```
 src/
-  lib.rs              — публичный API, реэкспорты, глобальный аллокатор
-  types.rs            — Rule, Cell, ShiftSpec, ChangeValue и т.д.
-  grid.rs             — Grid<S> — обёртка над storage с унифицированным API
-  storage.rs          — VecStorage (конечная) / ChunkStorage (бесконечная, чанки 64×64)
-  config.rs            — загрузка YAML → (Grid, RuleIndex)
-  conflict_analyzer.rs — статический граф конфликтов, RuleData/RuleDataCache
-  rule_store.rs         — самомодификация: wire-протокол RuleStore
-  tm_translator.rs      — перевод машины Тьюринга в конфиг Cellaria
-  render.rs             — рендер решётки (текст/JSON)
-  fast_hash.rs           — FxHash-алиасы (FxHashMap/FxHashSet)
-  layered.rs              — LayeredEngine<S>: стек 2D-слоёв, cross-layer чтение (см. §12)
+  lib.rs                — публичный API, реэкспорты, глобальный аллокатор
+  types.rs               — Rule, Cell, ShiftSpec, ChangeValue и т.д.
+  grid.rs                 — Grid<S> — обёртка над storage с унифицированным API
+  storage.rs                — VecStorage (конечная) / ChunkStorage (бесконечная, чанки 64×64)
+  error.rs                  — CellariaError, единый тип ошибки
+  config.rs                 — загрузка YAML → (Grid, RuleIndex); тесты — config_tests.rs
+  conflict_analyzer.rs        — статический граф конфликтов, RuleData/RuleDataCache
+  rule_store.rs                — RuleStore, типы протокола; тесты — rule_store_tests.rs
+  rule_store_deserialize.rs      — декодер протокола (find_terminator/deserialize_packet)
+  rule_store_serialize.rs         — энкодер протокола (serialize_add_rule/...)
+  tm_translator.rs                 — перевод машины Тьюринга в конфиг Cellaria
+  render.rs                         — рендер решётки/стека слоёв (текст/JSON)
+  fast_hash.rs                       — FxHash-алиасы (FxHashMap/FxHashSet)
+  layered.rs                          — LayeredEngine<S>: стек 2D-слоёв, cross-layer чтение (см. §12)
   engine/
-    mod.rs               — Engine<S>, run_tick_with_cache (пять фаз тика), snapshot/replay
-    matcher.rs            — Detect: поиск совпадений, CAM-поиск
-    arbitrator.rs          — Arbitrate: жадный арбитраж, spatial band-split
-    applicator.rs           — Apply: запись изменений, recursion-каскад
-    rule_state.rs            — RuleStateStore (см. §3)
+    mod.rs                             — Engine<S>/EngineSnapshot/InputEvent, объявления подмодулей
+    lifecycle.rs                        — new/snapshot/from_snapshot/self-mod-конфиг/grid-доступ
+    raw_phases.rs                        — "сырые" detect_matches/arbitrate/apply_matches (см. §2)
+    io.rs                                 — push_input/pop_output/apply_input/drain_output/replay
+    rules.rs                               — get_priority/find_rule/rule_index/rebuild_rule_cache
+    state_mgmt.rs                           — advance_age/reset_age/detect_termination/compose_with
+    tick.rs                                  — run_tick/run_tick_profiled/absorb_self_modifications
+    pipeline.rs                               — run_tick_with_cache (сама механика пяти фаз тика)
+    pipeline_search.rs                         — резолюция поисковых координат, ExtensionFlags-кэш
+    matcher.rs                                  — Detect: поиск совпадений, CAM-поиск
+    arbitrator.rs                                — Arbitrate: жадный арбитраж, spatial band-split
+    applicator.rs                                 — Apply: запись изменений, recursion-каскад
+    rule_state.rs                                  — RuleStateStore (см. §3)
   gpu/
-    engine.rs              — GpuEngine, dispatch_tick, гибридный fallback
-    rule_table.rs            — GpuRuleTable, needs_arbitration, GpuUnsupportedReason
-    shader.wgsl               — compute-шейдеры (detect/arbitrate/apply раунды)
+    engine.rs                                       — GpuEngine: структуры, Pipeline enum
+    engine_build.rs                                   — new/with_rounds/build_*_pipeline
+    engine_tick.rs                                     — run_tick/dispatch_tick/cpu_fallback_resolve
+    rule_table.rs                                       — GpuRuleTable, needs_arbitration, потолки
+    rule_table_builder.rs                                — build_gpu_rule_table
+    shader.wgsl                                           — compute-шейдеры (detect/arbitrate/apply)
 ```
 
 ---
 
 ## 2. Тик-пайплайн
 
-`Engine::run_tick()` → `run_tick_with_cache()` (`engine/mod.rs`), пять фаз:
+`Engine::run_tick()` (`engine/tick.rs`) → `run_tick_with_cache()`
+(`engine/pipeline.rs`), пять фаз:
 
 1. **Input** — НЕ автоматическая часть тика. `push_input()` кладёт значение
    в очередь буфера; перенос очереди на граничную ячейку делает отдельный,
@@ -60,7 +80,7 @@ src/
 5. **Flush** — единый проход `write_buffer` → `grid.set_cell()`, чистка
    `pattern_buffer`.
 
-`spatial_bypass_split` (`engine/mod.rs`, вызывается КАЖДЫЙ тик) делит
+`spatial_bypass_split` (`engine/pipeline.rs`, вызывается КАЖДЫЙ тик) делит
 совпадения на `safe` (арбитраж пропускается — см. специф. §10.7) и
 `unsafe_matches` (идут в полный арбитраж) ДО фазы Arbitrate — это не
 отдельная фаза, а предварительный фильтр внутри неё.
@@ -114,7 +134,7 @@ src/
 | Защёлка направления | `feedback` | `FeedbackCounters` | да | да |
 | FIFO-гейт по истории | `memory` | `MemoryBuffers` | да | да (оба триггера) |
 | Излучение (не очищает источник) | `keep_source` | нет | да | да (кроме сочетания с `feedback`/`memory` — `FeedbackKeepSourceUnsupported`/`MemoryKeepSourceUnsupported`), см. `GpuMatch::keep_age_mask` в `shader.wgsl` |
-| Глобальный бюджет побед | `max_activations` | `ActivationCounters` | да | **нет**, явно отвергается при построении GPU-таблицы (`rule_table.rs:747`, `GpuUnsupportedReason`) |
+| Глобальный бюджет побед | `max_activations` | `ActivationCounters` | да | **нет**, явно отвергается при построении GPU-таблицы (`rule_table.rs`'s `GpuUnsupportedReason` check) |
 | Арифметика в changes | `ChangeValue::Add`/`Sub` | нет (чистая функция от pattern-буфера того же тика) | да | **нет** (`GpuUnsupportedReason::ChangeIsArithmetic`, та же категория, что `ChangeValue::Ref`) |
 
 Комбинации, структурно исключённые (не "не реализовано", а нет
@@ -150,6 +170,24 @@ src/
 `#[serde(untagged)]` — YAML-конфиги не затронуты (`config.rs`'s
 `parse_change_value` парсит `changes` вручную, не через derive этого
 enum).
+
+**`Rule::cam` — почему радиус, а не поиск по всей решётке.** CAM ("магнит")
+ищет ближайшую клетку `target_type` в диске Chebyshev-радиуса `radius`
+вокруг головы и притягивает её значение — цель известна только в рантайме,
+не на этапе определения правила, в отличие от обычного `pattern`/`shifts`.
+Неограниченный (по всей решётке) поиск сломал бы статическую разрешимость
+конфликтов — главное свойство, ради которого модель выбрала решётку, а не
+граф (см. `paper2.md`). Radius-ограничение — прямое следствие этого
+компромисса, не техническое ограничение реализации. Для графа конфликтов
+(до просмотра содержимого решётки) affected-region правила с `cam` — весь
+диск радиуса `radius` (то же консервативное огрубление, что уже
+использует `arbitrate_spatial`'s `max_radius`); для арбитража конкретного
+тика — уже точная найденная позиция, не весь диск. Правило с `cam` не
+может иметь `shifts` (притяжение — единственный сдвиг правила). Доказано
+и измерено в `examples/proof_cam_radius_search.rs` (совместимость с
+моделью) и `examples/compare_cam_vs_wavefront.rs` (выигрыш по задержке
+против того же эффекта, собранного обычными `shifts`-правилами волновым
+поиском).
 
 ---
 
@@ -372,7 +410,7 @@ A/B реального выигрыша не дал (arbitrate не измени
   - `USED_CELLS_BUF`/`AFFECTED_BUF` этому риску НЕ подвержены — их область
     заимствования не содержит вложенных rayon-вызовов (проверено через
     `grep` по `par_iter`/`par_sort`/rayon:: в `arbitrator.rs`).
-- **`HeadRuleIndex`** (`[Option<&Vec<Rule>>; 256]`, `engine/mod.rs`) —
+- **`HeadRuleIndex`** (`[Option<&Vec<Rule>>; 256]`, `engine/pipeline.rs`) —
   замена `rule_index.get(&head)` там, где вызывается на каждый матч.
   `CellType` оборачивает `u8` (256 значений) — хэширование не нужно
   вообще, прямая индексация. Строится один раз ЗА ВЫЗОВ горячей функции
@@ -463,7 +501,7 @@ pre-tick вплоть до самого flush, независимо от пор�
 
 ## 8. GPU-бэкенд
 
-`gpu/engine.rs` — `GpuEngine`, `dispatch_tick` полностью синхронный (detect
+`gpu/engine.rs` — `GpuEngine`; `dispatch_tick` (`gpu/engine_tick.rs`) полностью синхронный (detect
 + `rounds` раундов арбитража/apply в одном submission, один
 `device.poll(Maintain::Wait)` за тик — нет перекрытия с CPU, см. §6 про
 нереализованный async-пайплайнинг).
@@ -488,6 +526,49 @@ GPU-памяти, а не Rust-памяти.
 
 **Подмножество, которого GPU НЕ поддерживает** — `gpu/rule_table.rs`,
 `GpuUnsupportedReason` (см. таблицу §4 выше и специф. §13.4).
+
+**Пределы подмножества (константы `rule_table.rs`) — почему именно эти
+числа, не техническая случайность:**
+
+- `MAX_SHIFT_REACH=12`/`MAX_CHANGE_REACH=4` — потолки |dx|/|dy| обычного
+  сдвига/`changes`-смещения.
+- `MAX_BROADCAST_REACH=4`, ОТДЕЛЬНЫЙ (более узкий) потолок именно для
+  `broadcast: true` — broadcast пишет ВСЕ промежуточные клетки пути, не
+  только конечную точку, значит число ячеек записи растёт ЛИНЕЙНО со
+  `steps`, а не константно (=1), как у обычного сдвига.
+  [`MAX_WRITE_CELLS`] — compile-time размер массива `GpuMatch::cells` в
+  шейдере (WGSL требует константный размер поля структуры), ОБЩИЙ для
+  ВСЕХ матчей ВСЕХ конфигов сразу (шейдер компилируется один раз
+  статически) — если бы broadcast использовал общий потолок 12, это дало
+  бы `MAX_WRITE_CELLS`=33 (рост в 3×) ради свойства, которым пользуется
+  меньшинство конфигов; 4 даёт 17 (рост 55%).
+- `MAX_CAM_RADIUS=16` — GPU (в отличие от CPU, `radius: u8` до 255 без
+  потолка) сканирует диск `(2R+1)²` НА КАЖДУЮ клетку-кандидата каждый тик
+  И раздувает дополненную сетку арбитража на `2×radius` по каждой оси —
+  оба растут квадратично/линейно с R, нужен реальный потолок.
+- `MAX_RECURSION_DEPTH=4` — `recursion` GPU-совместим (в отличие от
+  `feedback`/`memory`/`starvation_after`, требующих межтиковое
+  CPU-состояние) именно потому, что каждый уровень каскада читает только
+  клетки, УЖЕ ЗАПИСАННЫЕ этим же каскадом (по построению — `recursion`
+  требует пустые `shifts`, конфликтующий чужой матч был бы исключён
+  арбитражем ДО начала каскада) — чисто локальное вычисление одного
+  потока, без межпоточной синхронизации.
+- `MAX_MEMORY_WINDOW=4` — FIFO-буфер памяти в storage — плоский
+  `array<atomic<u32>>`, индексируемый `m * MAX_MEMORY_WINDOW + i` (прямая
+  top-level индексация, не поле-массив внутри значения — тот случай,
+  который naga действительно запрещает), длина ограничена только явным
+  потолком, не техническим ограничением WGSL.
+- `MAX_MARGIN = MAX_SHIFT_REACH + MAX_CHANGE_REACH` — CPU'шный
+  `arbitrator::get_match_affected_cells` при `OverflowAction::Discard` НЕ
+  клэмпит уходящие за границу решётки относительные ячейки (клэмпинг
+  только для `Write`/`WriteLiteral`) — значит `arbitrate()` учитывает
+  конфликт даже между двумя матчами, чьи "цели" совпадают ЗА пределами
+  решётки. Найдено экспериментально (`tests/gpu_v2_correctness.rs`): без
+  этого запаса GPU/CPU расходились у самого края решётки.
+- Общий паттерн для всех потолков (`MAX_ID_BYTES=8`,
+  `MAX_MATCHES_PER_CELL=8` и т.д.): скромное, но достаточное для
+  подавляющего большинства реальных конфигов число — превышение даёт
+  явный отказ (`GpuUnsupportedReason`), не молчаливое усечение.
 
 ---
 
@@ -556,13 +637,13 @@ GPU-памяти, а не Rust-памяти.
 **2. Протокол самомодификации: приоритеты 240/241/242 — закрыто, ОКАЗАЛОСЬ
 УЖЕ РАБОТАЕТ.** Изначальная формулировка этого пункта ("зарезервированные
 приоритеты 240/255, фикс ломает формат") была НЕТОЧНОЙ — перепроверка кода
-показала, что `serialize_add_rule`'s `needs_ext` (`rule_store.rs:921-925`)
-уже автоматически переключается на формат `AddRuleExtended`, когда
-`priority` совпадает с `OP_REMOVE`/`OP_CLEAR`/`OP_ADD_EXT` (240/241/242) —
-приоритет там передаётся ОТДЕЛЬНЫМ байтом, не как дискриминатор пакета,
-коллизии нет. Уже покрыто существующим тестом
-(`test_serializer_auto_switches_to_extended_format_for_reserved_priorities`,
-`rule_store_tests.rs:867`) — полный round-trip сериализация→десериализация,
+показала, что `serialize_add_rule`'s `needs_ext` уже автоматически
+переключается на формат `AddRuleExtended`, когда `priority` совпадает с
+`OP_REMOVE`/`OP_CLEAR`/`OP_ADD_EXT` (240/241/242) — приоритет там
+передаётся ОТДЕЛЬНЫМ байтом, не как дискриминатор пакета, коллизии нет.
+Уже покрыто существующим тестом
+(`test_serializer_auto_switches_to_extended_format_for_reserved_priorities`
+в `rule_store_tests.rs`) — полный round-trip сериализация→десериализация,
 подтверждённый для всех трёх значений. Ничего чинить не нужно было.
 **Приоритет 255 (0xFF) остаётся недостижим** — но это ГЛУБЖЕ, чем проблема
 приоритета: `find_terminator` сканирует ПЕРВЫЙ байт `0xFF` в сыром потоке
@@ -616,7 +697,10 @@ priority. Фикс потребовал бы byte-stuffing/escaping через �
 GPU, которые все предполагают 2D) и семантический (слои "города" — это
 ДОМЕНЫ: дороги/здания/коммуникации/сенсоры, а не геометрическая высота,
 которую настоящий 3D бы смешал с ними). Реализация целиком аддитивная —
-`Engine`/`Grid`/арбитраж НЕ тронуты ни единой строкой.
+`Grid`/арбитраж НЕ тронуты ни единой строкой; `Engine` получил один новый
+`pub(crate)`-метод (`run_tick_with_cross_layer_filter`, см. ниже) и один
+новый опциональный параметр `run_tick_with_cache`, нулевые накладные
+расходы для всех остальных вызывающих (`None`).
 
 **Модель.** `Rule.cross_layer_reads: Vec<(dx, dy, dz, CellType)>` —
 отдельное от `pattern` поле (не unified, чтобы не трогать существующие
@@ -629,26 +713,44 @@ GPU, которые все предполагают 2D) и семантичес�
 вообще, не для конкретного набора правил, а по построению.
 
 **`LayeredEngine<S>`** (`src/layered.rs`) — `Vec<Engine<S>>`, каждый слой
-полноценный, независимый, немодифицированный `Engine` (свой кэш, своё
-персистентное состояние правил), но ВСЕ слои используют ОДИН И ТОТ ЖЕ
-`rule_index` (клонируется на каждый слой при постройке — правило не
-привязано к конкретному слою, `dz` сам определяет цель). `run_tick`:
+полноценный, независимый `Engine` (свой кэш, своё персистентное состояние
+правил), но ВСЕ слои используют ОДИН И ТОТ ЖЕ `rule_index` (клонируется на
+каждый слой при постройке — правило не привязано к конкретному слою, `dz`
+сам определяет цель). `run_tick`:
 
-1. Detect на КАЖДОМ слое независимо (обычный `Engine::detect_matches`,
-   читает только свой предтиковый `Grid`).
-2. Фильтр `cross_layer_condition_holds` между Detect и Arbitrate: кандидат
-   с непустым `cross_layer_reads` отсеивается, если условие не выполнено
-   на ПРЕДТИКОВОМ состоянии целевого слоя — та же дисциплина снимка тика
-   §2.2.1, распространённая через границу слоя (сосед читается таким,
-   каким он был на начало ЭТОГО тика, даже если сам поменяется позже в том
-   же тике — проверено тестом с двумя правилами на разных слоях, второй из
-   которых меняет саму гейтящую клетку). `dz` за пределы стека или
-   отрицательная итоговая координата — жёсткий отказ условия (симметрично
-   тому, как `pattern` читает за пределами решётки, но здесь именно
-   отсутствие слоя, не просто пустая клетка).
-3. Arbitrate + Apply на КАЖДОМ слое независимо, существующим кодом
-   `Engine` — раз слои никогда не делят клетки по записи (см. выше),
-   арбитрировать между ними нечего.
+1. Быстрый путь: если НИ ОДНО правило нигде в стеке не использует
+   `cross_layer_reads`, слои структурно независимы (см. модельный
+   инвариант выше) — каждый слой тикает обычным `Engine::run_tick()`,
+   нулевые накладные расходы.
+2. Иначе — решётки ВСЕХ слоёв клонируются ОДИН РАЗ, до того как хоть один
+   слой применит свой тик (даёт разом и дисциплину снимка тика §2.2.1,
+   распространённую через границу слоя — сосед читается таким, каким он
+   был на начало ЭТОГО тика, даже если сам поменяется позже в том же тике,
+   и снимает конфликт заимствования между `&self` внутри фильтра и
+   `&mut self.layers[i]` снаружи, поскольку фильтр захватывает только
+   собственные локальные данные). На каждом слое строится замыкание-фильтр
+   по этому предтиковому снимку (`dz` за пределы стека или отрицательная
+   итоговая координата — жёсткий отказ условия, симметрично тому, как
+   `pattern` читает за пределами решётки, но здесь именно отсутствие слоя,
+   не просто пустая клетка) и передаётся в
+   `Engine::run_tick_with_cross_layer_filter` — `pub(crate)`-метод,
+   идентичный `Engine::run_tick()`, но с доп. параметром
+   `cross_layer_filter: Option<&dyn Fn(&RuleMatch) -> bool>`, применяемым
+   внутри `run_tick_with_cache` сразу после слияния `cam`-совпадений и ДО
+   гейтов `memory`/`max_activations` и учёта `starvation`/`feedback` —
+   отфильтрованный матч для всего нижестоящего пайплайна выглядит так,
+   будто паттерн вообще не совпал.
+
+**Найденный и исправленный баг (см. CHANGELOG для полной истории):** до
+этого фикса `run_tick` был собран вручную через `Engine::detect_matches()`
++ свободные `arbitrate()`/`apply_matches()` — "raw"-методы, ни один из
+которых не хранит состояние между вызовами. Из-за этого `cam`,
+`starvation_after`, `feedback`, `memory` и `max_activations` были тихим
+no-op на ЛЮБОМ `LayeredEngine`, для любого слоя и правила — не
+"непротестированная комбинация", а порча гарантии. Раз слои никогда не
+делят клетки по записи (см. модельный инвариант выше), арбитрировать
+МЕЖДУ слоями по-прежнему нечего — каждый слой арбитрирует СВОЙ тик
+самостоятельно через полный `Engine`-пайплайн, что и требовалось.
 
 `LayeredEngine::new` проверяет (`assert!`) все слои на одинаковый размер —
 без этой проверки координата, валидная на одном слое, могла бы молча

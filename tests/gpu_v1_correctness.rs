@@ -46,11 +46,7 @@ use cellaria::{Grid, VecStorage};
 const ALIVE: u8 = 1;
 const DEAD: u8 = 0;
 
-const NEIGHBOR_OFFSETS: [(i8, i8); 8] = [
-    (-1, -1), (0, -1), (1, -1),
-    (-1, 0), (1, 0),
-    (-1, 1), (0, 1), (1, 1),
-];
+const NEIGHBOR_OFFSETS: [(i8, i8); 8] = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
 
 fn build_gol_rule_index() -> HashMap<CellType, Vec<Rule>> {
     let mut index: HashMap<CellType, Vec<Rule>> = HashMap::new();
@@ -81,7 +77,12 @@ fn build_gol_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             });
         }
     }
@@ -96,7 +97,9 @@ fn xorshift_fill(n: usize, density_percent: u64, seed: u64) -> Vec<u8> {
         state ^= state << 17;
         state
     };
-    (0..n * n).map(|_| if next() % 100 < density_percent { ALIVE } else { DEAD }).collect()
+    (0..n * n)
+        .map(|_| if next() % 100 < density_percent { ALIVE } else { DEAD })
+        .collect()
 }
 
 #[test]
@@ -115,7 +118,10 @@ fn test_gpu_matches_cpu_for_real_game_of_life() {
             for x in 0..n {
                 let v = initial_flat[y * n + x];
                 if v != DEAD {
-                    let cell = Cell { value: CellValue(CellType(v)), born_at: 0 };
+                    let cell = Cell {
+                        value: CellValue(CellType(v)),
+                        born_at: 0,
+                    };
                     cpu_grid.set_cell(x, y, cell);
                     gpu_initial.push((x, y, cell));
                 }
@@ -186,7 +192,7 @@ fn v1_pattern_strategy() -> impl Strategy<Value = (u8, Vec<(i8, i8, CellType)>)>
 fn v1_rule_strategy() -> impl Strategy<Value = Rule> {
     (
         v1_pattern_strategy(),
-        1u8..=9, // new_value записываемый в (0,0)
+        1u8..=9,  // new_value записываемый в (0,0)
         0u32..=3, // priority — намеренно узкий диапазон, чтобы равенства случались часто
         0u64..=1, // min_age
         any::<bool>(),
@@ -202,7 +208,12 @@ fn v1_rule_strategy() -> impl Strategy<Value = Rule> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         })
 }
 

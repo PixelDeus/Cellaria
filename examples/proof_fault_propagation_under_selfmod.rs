@@ -32,11 +32,27 @@ const TOTAL_TICKS: i64 = 60;
 
 fn active_rule(steps: u16) -> HashMap<CellType, Vec<Rule>> {
     let mut idx = HashMap::new();
-    idx.insert(CellType(ACTIVE), vec![Rule {
-        id: vec![CellType(ACTIVE)], pattern: vec![],
-        shifts: vec![vec![ShiftSpec::new(Direction::Right, steps)]],
-        changes: vec![], active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-    }]);
+    idx.insert(
+        CellType(ACTIVE),
+        vec![Rule {
+            id: vec![CellType(ACTIVE)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Right, steps)]],
+            changes: vec![],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
+        }],
+    );
     idx
 }
 
@@ -48,7 +64,10 @@ fn main() {
     let mut reference = Engine::new(build_grid(), active_rule(1));
     let mut corrupted = Engine::new(build_grid(), active_rule(1));
 
-    println!("K=1 до тика {}, затем K=3 (самомодификация вступает в силу у ОБЕИХ копий).\n", SWITCH_TICK);
+    println!(
+        "K=1 до тика {}, затем K=3 (самомодификация вступает в силу у ОБЕИХ копий).\n",
+        SWITCH_TICK
+    );
     println!(
         "{:>4} | {:>10} | {:>12} | {:>14} | {:>10}",
         "тик", "факт.радиус", "наивн. 2*K1*t", "честн. 2*ΣKi", "наивная OK?"
@@ -63,7 +82,14 @@ fn main() {
     for t in 1..=TOTAL_TICKS {
         reference.run_tick();
         if t == 1 {
-            corrupted.grid_mut().set_cell(CORRUPT_X, 0, Cell { value: CellValue(CellType(ACTIVE)), born_at: 0 });
+            corrupted.grid_mut().set_cell(
+                CORRUPT_X,
+                0,
+                Cell {
+                    value: CellValue(CellType(ACTIVE)),
+                    born_at: 0,
+                },
+            );
         }
         corrupted.run_tick();
 
@@ -98,16 +124,28 @@ fn main() {
 
         println!(
             "{:>4} | {:>10} | {:>12} | {:>14} | {:>10}",
-            t, max_dist, naive_budget, honest_budget, if naive_ok { "да" } else { "НАРУШЕНА" }
+            t,
+            max_dist,
+            naive_budget,
+            honest_budget,
+            if naive_ok { "да" } else { "НАРУШЕНА" }
         );
     }
 
     println!(
         "\nНаивная граница (одно K на всё время) нарушена: {}",
-        if naive_ever_violated { "ДА — как и предсказано, K выросло, а граница не учла это" } else { "нет" }
+        if naive_ever_violated {
+            "ДА — как и предсказано, K выросло, а граница не учла это"
+        } else {
+            "нет"
+        }
     );
     println!(
         "Честная граница (сумма K по каждому тику) нарушена: {}",
-        if honest_ever_violated { "ДА (!) — теорема неверна, нужно разбираться" } else { "нет, ни разу — граница верна даже когда K меняется" }
+        if honest_ever_violated {
+            "ДА (!) — теорема неверна, нужно разбираться"
+        } else {
+            "нет, ни разу — граница верна даже когда K меняется"
+        }
     );
 }

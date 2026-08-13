@@ -49,7 +49,10 @@ fn main() {
         if report.is_conflict_free() {
             println!("CF: арбитраж не нужен (конфликтов между правилами не обнаружено)");
         } else {
-            println!("Обнаружены потенциальные конфликты правил ({}):", report.conflicts.len());
+            println!(
+                "Обнаружены потенциальные конфликты правил ({}):",
+                report.conflicts.len()
+            );
             for pair in &report.conflicts {
                 println!(
                     "  {:?}[{}] <-> {:?}[{}]",

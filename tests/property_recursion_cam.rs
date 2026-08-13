@@ -25,7 +25,8 @@ use proptest::prelude::*;
 
 use cellaria::engine::Engine;
 use cellaria::types::{
-    CamSearch, Cell, CellType, CellValue, Direction, MemorySpec, RecordTrigger, RecordedValue, RecursionSpec, Rule, ShiftSpec,
+    CamSearch, Cell, CellType, CellValue, Direction, MemorySpec, RecordTrigger, RecordedValue, RecursionSpec, Rule,
+    ShiftSpec,
 };
 use cellaria::{Grid, VecStorage};
 
@@ -66,7 +67,10 @@ fn movement_strategy() -> impl Strategy<Value = Movement> {
 }
 
 fn cam_strategy() -> impl Strategy<Value = CamSearch> {
-    (1u8..=2, 1u8..=CELL_ALPHABET).prop_map(|(radius, t)| CamSearch { radius, target_type: CellType(t) })
+    (1u8..=2, 1u8..=CELL_ALPHABET).prop_map(|(radius, t)| CamSearch {
+        radius,
+        target_type: CellType(t),
+    })
 }
 
 fn recursion_strategy() -> impl Strategy<Value = RecursionSpec> {
@@ -79,12 +83,20 @@ fn recursion_strategy() -> impl Strategy<Value = RecursionSpec> {
 /// `recursion` (проверено, поддержано), и без.
 fn memory_strategy(has_recursion: bool) -> impl Strategy<Value = Option<MemorySpec>> {
     let neighbor_type = (direction_strategy(), 1u8..=CELL_ALPHABET).prop_map(|(dir, t)| {
-        Some(MemorySpec { window: 1, record_trigger: RecordTrigger::NeighborType(dir), match_pattern: vec![RecordedValue::Type(CellType(t))] })
+        Some(MemorySpec {
+            window: 1,
+            record_trigger: RecordTrigger::NeighborType(dir),
+            match_pattern: vec![RecordedValue::Type(CellType(t))],
+        })
     });
     if has_recursion {
         prop_oneof![Just(None), neighbor_type].boxed()
     } else {
-        let rule_outcome = Just(Some(MemorySpec { window: 1, record_trigger: RecordTrigger::RuleOutcome, match_pattern: vec![RecordedValue::Applied] }));
+        let rule_outcome = Just(Some(MemorySpec {
+            window: 1,
+            record_trigger: RecordTrigger::RuleOutcome,
+            match_pattern: vec![RecordedValue::Applied],
+        }));
         prop_oneof![Just(None), neighbor_type, rule_outcome].boxed()
     }
 }
@@ -106,33 +118,44 @@ fn rule_strategy(head: u8) -> impl Strategy<Value = Rule> {
             Movement::Shift => (direction_strategy(), prop_oneof![Just(false), Just(true)])
                 .prop_map(|(dir, has_feedback)| {
                     let shifts = vec![vec![ShiftSpec::new(dir, 1)]];
-                    let feedback = has_feedback.then(|| cellaria::types::FeedbackSpec { timeout: 2, new_direction: dir });
+                    let feedback = has_feedback.then(|| cellaria::types::FeedbackSpec {
+                        timeout: 2,
+                        new_direction: dir,
+                    });
                     (shifts, feedback)
                 })
                 .boxed(),
             _ => Just((Vec::new(), None)).boxed(),
         };
 
-        (cam, recursion, shifts_and_feedback, starvation, max_activations, memory_strategy(has_recursion)).prop_map(
-            move |(cam, recursion, (shifts, feedback), starvation_after, max_activations, memory)| Rule {
-                id: vec![CellType(head)],
-                pattern: vec![],
-                shifts,
-                changes: vec![],
-                active_only: false,
-                priority,
-                min_age: 0,
-                overflow: Default::default(),
-                cam,
-                tie_break: 0,
-                starvation_after,
-                feedback,
-                recursion,
-                memory,
-                max_activations,
-                cross_layer_reads: Vec::new(),
-            },
+        (
+            cam,
+            recursion,
+            shifts_and_feedback,
+            starvation,
+            max_activations,
+            memory_strategy(has_recursion),
         )
+            .prop_map(
+                move |(cam, recursion, (shifts, feedback), starvation_after, max_activations, memory)| Rule {
+                    id: vec![CellType(head)],
+                    pattern: vec![],
+                    shifts,
+                    changes: vec![],
+                    active_only: false,
+                    priority,
+                    min_age: 0,
+                    overflow: Default::default(),
+                    cam,
+                    tie_break: 0,
+                    starvation_after,
+                    feedback,
+                    recursion,
+                    memory,
+                    max_activations,
+                    cross_layer_reads: Vec::new(),
+                },
+            )
     })
 }
 
@@ -143,7 +166,10 @@ fn rule_index_strategy() -> impl Strategy<Value = HashMap<CellType, Vec<Rule>>> 
         let mut heads: Vec<u8> = heads;
         heads.sort_unstable();
         heads.dedup();
-        let per_head: Vec<_> = heads.iter().map(|&h| prop::collection::vec(rule_strategy(h), 1..=2)).collect();
+        let per_head: Vec<_> = heads
+            .iter()
+            .map(|&h| prop::collection::vec(rule_strategy(h), 1..=2))
+            .collect();
         per_head.prop_map(move |groups| {
             let mut idx: HashMap<CellType, Vec<Rule>> = HashMap::new();
             for (h, rules) in heads.iter().zip(groups) {
@@ -161,13 +187,23 @@ fn grid_strategy() -> impl Strategy<Value = Vec<(usize, usize, u8)>> {
 fn build_engine(rule_index: &HashMap<CellType, Vec<Rule>>, cells: &[(usize, usize, u8)]) -> Engine<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(SIDE, SIDE), HashSet::new());
     for &(x, y, t) in cells {
-        grid.set_cell(x, y, Cell { value: CellValue::new(t), born_at: 0 });
+        grid.set_cell(
+            x,
+            y,
+            Cell {
+                value: CellValue::new(t),
+                born_at: 0,
+            },
+        );
     }
     Engine::new(grid, rule_index.clone())
 }
 
 fn dump_grid(engine: &Engine<VecStorage>) -> Vec<Cell> {
-    (0..SIDE).flat_map(|y| (0..SIDE).map(move |x| (x, y))).map(|(x, y)| engine.grid().get_cell(x, y).copied().unwrap_or_default()).collect()
+    (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .map(|(x, y)| engine.grid().get_cell(x, y).copied().unwrap_or_default())
+        .collect()
 }
 
 proptest! {

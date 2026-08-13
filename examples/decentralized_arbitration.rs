@@ -37,14 +37,40 @@ const L_MOVER: u8 = 2;
 fn build_rules() -> Vec<Rule> {
     vec![
         Rule {
-            id: vec![CellType(R_MOVER)], pattern: vec![],
-            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]], changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            id: vec![CellType(R_MOVER)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
-            id: vec![CellType(L_MOVER)], pattern: vec![],
-            shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]], changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            id: vec![CellType(L_MOVER)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -54,7 +80,14 @@ fn build_grid(n: usize) -> Grid<VecStorage> {
     let mut grid = Grid::new(storage, Default::default());
     for x in 0..n {
         let t = if x % 2 == 0 { R_MOVER } else { L_MOVER };
-        grid.set_cell(x, 0, Cell { value: CellValue(CellType(t)), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(t)),
+                born_at: 0,
+            },
+        );
     }
     grid
 }
@@ -99,7 +132,11 @@ fn main() {
         let x = m.x as usize;
         let band = (x / band_width).min(num_workers - 1);
         let band_start = band * band_width;
-        let band_end = if band == num_workers - 1 { n } else { (band + 1) * band_width };
+        let band_end = if band == num_workers - 1 {
+            n
+        } else {
+            (band + 1) * band_width
+        };
         let is_boundary = x < band_start + MARGIN || x + MARGIN >= band_end;
         if is_boundary {
             boundary.push(m);
@@ -132,12 +169,28 @@ fn main() {
     accepted_decentralized.sort_by_key(sorted_key);
     let identical = accepted_central == accepted_decentralized;
 
-    println!("Централизованный арбитраж (1 поток):     {:>10?}, принято {}", central_time, accepted_central.len());
-    println!("Децентрализованный ({} потоков):          {:>10?}, принято {}", num_workers, decentralized_time, accepted_decentralized.len());
+    println!(
+        "Централизованный арбитраж (1 поток):     {:>10?}, принято {}",
+        central_time,
+        accepted_central.len()
+    );
+    println!(
+        "Децентрализованный ({} потоков):          {:>10?}, принято {}",
+        num_workers,
+        decentralized_time,
+        accepted_decentralized.len()
+    );
     println!("Доля матчей на границах полос (последовательно): {:.2}%", boundary_frac);
-    println!("Ускорение: {:.2}x", central_time.as_secs_f64() / decentralized_time.as_secs_f64());
+    println!(
+        "Ускорение: {:.2}x",
+        central_time.as_secs_f64() / decentralized_time.as_secs_f64()
+    );
     println!(
         "\nРезультаты ПОБИТОВО ИДЕНТИЧНЫ централизованному арбитражу: {}",
-        if identical { "ДА" } else { "НЕТ — расхождение!" }
+        if identical {
+            "ДА"
+        } else {
+            "НЕТ — расхождение!"
+        }
     );
 }

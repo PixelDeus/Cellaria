@@ -25,9 +25,7 @@
 use std::collections::HashMap;
 
 use cellaria::engine::Engine;
-use cellaria::types::{
-    BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule, ShiftSpec,
-};
+use cellaria::types::{BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule, ShiftSpec};
 use cellaria::{Grid, VecStorage};
 
 const WIDTH: usize = 300;
@@ -43,12 +41,12 @@ const SELECT_X: usize = CENTER; // клетка-селектор стоит пр
 // Фиксированные байты пакета, КРОМЕ dir_byte (byte_index=4) — тот выбирается
 // PRNG-селектором, а не задан здесь заранее.
 const PACKET_FIXED: [(usize, u8); 6] = [
-    (0, 10),        // priority
-    (1, 1),         // id_len
-    (2, GEN_ID),    // id_byte
-    (3, 0xFE),      // SHIFT_FLAG
-    (5, 4),         // steps (фиксировано — переменная часть здесь направление, не число шагов)
-    (6, 0xFF),      // terminator
+    (0, 10),     // priority
+    (1, 1),      // id_len
+    (2, GEN_ID), // id_byte
+    (3, 0xFE),   // SHIFT_FLAG
+    (5, 4),      // steps (фиксировано — переменная часть здесь направление, не число шагов)
+    (6, 0xFF),   // terminator
 ];
 const CARRIER_TYPES: [u8; 6] = [141, 142, 143, 144, 145, 146];
 
@@ -87,7 +85,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         });
     }
 
@@ -109,7 +112,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             },
             Rule {
                 id: vec![CellType(SELECTOR_TYPE)],
@@ -122,7 +130,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             },
         ],
     );
@@ -142,7 +155,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(2),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
     idx.insert(
@@ -158,7 +176,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(3),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
 
@@ -178,7 +201,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }],
         );
     }
@@ -193,9 +221,23 @@ fn run_experiment(seed_x: usize) -> Option<(u8, Direction)> {
     let mut grid = Grid::new(storage, Default::default());
 
     for x in 0..WIDTH {
-        grid.set_cell(x, 0, Cell { value: CellValue::new(OFF), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue::new(OFF),
+                born_at: 0,
+            },
+        );
     }
-    grid.set_cell(seed_x, 0, Cell { value: CellValue::new(ON), born_at: 0 });
+    grid.set_cell(
+        seed_x,
+        0,
+        Cell {
+            value: CellValue::new(ON),
+            born_at: 0,
+        },
+    );
 
     let mut output_buf = BoundaryBuffer::new();
     output_buf.direction = "output".to_string();
@@ -212,16 +254,42 @@ fn run_experiment(seed_x: usize) -> Option<(u8, Direction)> {
 
     // Читаем бит ТОЛЬКО для собственной проверки результата ниже — сама
     // решётка прочитает тот же бит независимо, через pattern селектора.
-    let observed_bit = if engine.grid().get_cell(SELECT_X, 0)?.value.0 .0 == ON { 1u8 } else { 0u8 };
+    let observed_bit = if engine.grid().get_cell(SELECT_X, 0)?.value.0 .0 == ON {
+        1u8
+    } else {
+        0u8
+    };
 
     // Фаза 2: ставим селектор и шесть фиксированных перевозчиков одним
     // поколением — дальше решётка сама решает, каким типом станет селектор.
     let gen = engine.grid().generation();
-    engine.grid_mut().set_cell(SELECT_X, 1, Cell { value: CellValue::new(SELECTOR_TYPE), born_at: gen });
+    engine.grid_mut().set_cell(
+        SELECT_X,
+        1,
+        Cell {
+            value: CellValue::new(SELECTOR_TYPE),
+            born_at: gen,
+        },
+    );
     for (i, &(byte_index, _)) in PACKET_FIXED.iter().enumerate() {
-        let offset = if byte_index < 4 { 2 * (4 - byte_index) } else { 2 * (byte_index - 4) };
-        let x = if byte_index < 4 { SELECT_X + offset } else { SELECT_X - offset };
-        engine.grid_mut().set_cell(x, 1, Cell { value: CellValue::new(CARRIER_TYPES[i]), born_at: gen });
+        let offset = if byte_index < 4 {
+            2 * (4 - byte_index)
+        } else {
+            2 * (byte_index - 4)
+        };
+        let x = if byte_index < 4 {
+            SELECT_X + offset
+        } else {
+            SELECT_X - offset
+        };
+        engine.grid_mut().set_cell(
+            x,
+            1,
+            Cell {
+                value: CellValue::new(CARRIER_TYPES[i]),
+                born_at: gen,
+            },
+        );
     }
 
     for _ in 0..TRANSMIT_TICKS {
@@ -247,7 +315,10 @@ fn main() {
                     "seed_x={seed}: PRNG-бит после прогрева = {bit}, решётка сама сгенерировала направление {dir:?} — {}",
                     if dir == expected { "СОВПАДАЕТ с ожидаемым по правилу бит=1->Right/бит=0->Left" } else { "НЕ СОВПАДАЕТ (!)" }
                 );
-                assert_eq!(dir, expected, "направление в сгенерированном правиле должно однозначно определяться PRNG-битом");
+                assert_eq!(
+                    dir, expected,
+                    "направление в сгенерированном правиле должно однозначно определяться PRNG-битом"
+                );
                 match dir {
                     Direction::Left => saw_left = true,
                     Direction::Right => saw_right = true,
@@ -258,7 +329,10 @@ fn main() {
         }
     }
 
-    assert!(saw_left && saw_right, "среди посевов должны встретиться ОБЕ ветви — иначе ветвление не доказано, только один путь проверен");
+    assert!(
+        saw_left && saw_right,
+        "среди посевов должны встретиться ОБЕ ветви — иначе ветвление не доказано, только один путь проверен"
+    );
 
     println!(
         "\nВывод: направление сдвига в правиле, которое решётка НАСТОЯЩИМ образом устанавливает себе через \

@@ -96,17 +96,15 @@ pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> Gro
                     if !rule.pattern.is_empty() {
                         rule.pattern.clone()
                     } else {
-                        rule.id
-                            .iter()
-                            .enumerate()
-                            .map(|(i, &ct)| (i as i8, 0i8, ct))
-                            .collect()
+                        rule.id.iter().enumerate().map(|(i, &ct)| (i as i8, 0i8, ct)).collect()
                     }
                 })
                 .collect();
 
-            let rule_meta: Vec<(u64, bool, bool)> =
-                rules.iter().map(|r| (r.min_age, r.active_only, r.cam.is_some())).collect();
+            let rule_meta: Vec<(u64, bool, bool)> = rules
+                .iter()
+                .map(|r| (r.min_age, r.active_only, r.cam.is_some()))
+                .collect();
 
             // Собираем все уникальные смещения (dx, dy) для группы правил
             let mut all_offsets: Vec<(i8, i8)> = Vec::new();
@@ -120,11 +118,7 @@ pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> Gro
             }
 
             // Карта: смещение → индекс в all_offsets / cache
-            let offset_map: FxHashMap<(i8, i8), usize> = all_offsets
-                .iter()
-                .enumerate()
-                .map(|(i, &o)| (o, i))
-                .collect();
+            let offset_map: FxHashMap<(i8, i8), usize> = all_offsets.iter().enumerate().map(|(i, &o)| (o, i)).collect();
 
             // ─── Предвычисляем упакованные паттерны (u128) ───
             // Каждый байт в u128 — это значение CellType для одного смещения.
@@ -214,6 +208,7 @@ pub(crate) fn build_group_data(rule_index: &HashMap<CellType, Vec<Rule>>) -> Gro
 /// 4. **Упаковка паттерна в u128** — для паттернов ≤ 16 ячеек (включая полный
 ///    паттерн Game of Life из 9 клеток) сравнение выполняется одной
 ///    инструкцией `(cache_u128 & mask) == pattern` вместо цикла.
+///
 /// Ниже какого числа кандидатов не стоит платить за rayon (work-stealing,
 /// синхронизация пула потоков) — при малом числе клеток (типичный тик у
 /// разреженных сценариев вроде движения одной головки машины Тьюринга или
@@ -268,7 +263,8 @@ pub(crate) fn detect_matches_with_group_data<S: GridStorage + Sync>(
     // релевантности уже не отдельный проход, применять порог к
     // "уже отфильтрованному" списку было бы нечем: он не существует отдельно.
     let is_relevant = |&(cx, cy): &(usize, usize)| -> bool {
-        grid.get_cell(cx, cy).map_or(false, |c| group_data.contains_key(&c.value.0))
+        grid.get_cell(cx, cy)
+            .is_some_and(|c| group_data.contains_key(&c.value.0))
     };
 
     if active_coords.len() >= PARALLEL_THRESHOLD {
@@ -280,7 +276,16 @@ pub(crate) fn detect_matches_with_group_data<S: GridStorage + Sync>(
                 || (Vec::<CellType>::new(), Vec::<RuleMatch>::new()),
                 |(mut cache_overflow, mut local_matches), coord @ &(cx, cy)| {
                     if is_relevant(coord) {
-                        match_cell(grid, group_data, bounds, default_cell, cx, cy, &mut cache_overflow, &mut local_matches);
+                        match_cell(
+                            grid,
+                            group_data,
+                            bounds,
+                            default_cell,
+                            cx,
+                            cy,
+                            &mut cache_overflow,
+                            &mut local_matches,
+                        );
                     }
                     (cache_overflow, local_matches)
                 },
@@ -301,7 +306,16 @@ pub(crate) fn detect_matches_with_group_data<S: GridStorage + Sync>(
         let mut local_matches = Vec::new();
         for coord @ &(cx, cy) in active_coords.iter() {
             if is_relevant(coord) {
-                match_cell(grid, group_data, bounds, default_cell, cx, cy, &mut cache_overflow, &mut local_matches);
+                match_cell(
+                    grid,
+                    group_data,
+                    bounds,
+                    default_cell,
+                    cx,
+                    cy,
+                    &mut cache_overflow,
+                    &mut local_matches,
+                );
             }
         }
         local_matches
@@ -444,10 +458,7 @@ fn match_cell<S: GridStorage>(
             continue;
         }
 
-        if active_only
-            && center_cell.value == default_cell.value
-            && center_age == 0
-        {
+        if active_only && center_cell.value == default_cell.value && center_age == 0 {
             continue;
         }
 
@@ -521,8 +532,12 @@ pub(crate) fn detect_cam_matches<S: GridStorage>(
     let mut positions = FxHashMap::default();
 
     for &(cx, cy) in active_coords {
-        let Some(center_cell) = grid.get_cell(cx, cy) else { continue };
-        let Some(rules) = rule_index.get(&center_cell.value.0) else { continue };
+        let Some(center_cell) = grid.get_cell(cx, cy) else {
+            continue;
+        };
+        let Some(rules) = rule_index.get(&center_cell.value.0) else {
+            continue;
+        };
         let center_age = grid.get_age(cx, cy);
 
         for (rule_idx, rule) in rules.iter().enumerate() {
@@ -535,7 +550,12 @@ pub(crate) fn detect_cam_matches<S: GridStorage>(
             }
 
             if let Some((fx, fy)) = search_nearest(grid, cx, cy, cam.radius, cam.target_type) {
-                matches.push(RuleMatch { x: cx as u32, y: cy as u32, head: center_cell.value.0, rule_idx });
+                matches.push(RuleMatch {
+                    x: cx as u32,
+                    y: cy as u32,
+                    head: center_cell.value.0,
+                    rule_idx,
+                });
                 positions.insert((cx as u32, cy as u32, rule_idx), (fx as u32, fy as u32));
             }
         }
@@ -568,7 +588,9 @@ fn search_nearest<S: GridStorage>(
             if nx < 0 || (nx as usize, ny as usize) == (cx, cy) {
                 continue;
             }
-            let Some(cell) = grid.get_cell(nx as usize, ny as usize) else { continue };
+            let Some(cell) = grid.get_cell(nx as usize, ny as usize) else {
+                continue;
+            };
             if cell.value.0 != target {
                 continue;
             }

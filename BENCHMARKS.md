@@ -27,17 +27,24 @@ cargo bench --bench cellaria_bench -- --json --output bench_results.json
 cargo bench --bench cellaria_bench -- --check bench_baseline.json
 
 # ========== Criterion-бенчмарки (через cargo bench) ==========
+# ВНИМАНИЕ: флаг именно --criterion, не --bench -- cargo bench САМА всегда
+# дописывает --bench в конец argv (стандартное поведение для bench-таргетов),
+# так что --bench не может использоваться для выбора ветки Criterion — она
+# присутствует в любом запуске независимо от намерения пользователя. См.
+# doc-комментарий в начале benches/cellaria_bench.rs.
 
 # Полный прогон Criterion (может быть долгим — 100 семплов)
-cargo bench -- --bench
+cargo bench --bench cellaria_bench -- --criterion
 
-# Быстрый прогон Criterion (10 семплов, 2 сек замера)
-cargo bench -- --bench --quick
+# Быстрый прогон Criterion (10 семплов, 2 сек замера, отдельный baseline
+# от полного прогона -- см. --criterion --quick's doc-комментарий в коде)
+cargo bench --bench cellaria_bench -- --criterion --quick
 
-# Фильтрация по имени группы
-cargo bench -- --bench throughput
-cargo bench -- --bench pattern_size
-cargo bench -- --bench find_rule
+# Фильтрация по имени группы Criterion СЕЙЧАС НЕ ПОДДЕРЖИВАЕТСЯ через
+# --criterion (см. doc-комментарий в cellaria_bench.rs: Criterion больше не
+# читает argv сама, чтобы не конфликтовать с --criterion/--quick/--bench от
+# Cargo) -- для фильтрации нужен отдельный вызов скомпилированного
+# бинарника бенчмарка напрямую, не через `cargo bench`.
 
 # ========== Комбинации ==========
 
@@ -126,7 +133,8 @@ cargo bench --bench cellaria_bench -- --check bench_baseline.json --compact
 
 ## Criterion-бенчмарки
 
-Доступны через `cargo bench -- --bench`:
+Доступны через `cargo bench --bench cellaria_bench -- --criterion` (не
+`--bench` — см. предупреждение выше):
 
 | Группа | Описание |
 |--------|----------|
@@ -174,7 +182,20 @@ cargo bench --bench cellaria_bench -- --quiet --json --output bench_results.json
 cargo bench --bench cellaria_bench -- --quiet --check bench_baseline.json --json
 ```
 
-## Результаты измерений (после оптимизаций: spatial hashing, Rayon, neighbourhood cache, упаковка паттерна в u64, RuleDataCache)
+## Результаты измерений (ИСТОРИЧЕСКИЙ СНИМОК, устарел)
+
+**Эта секция — снимок с ранней стадии проекта** (после первого раунда
+оптимизаций: spatial hashing, Rayon, neighbourhood cache, упаковка
+паттерна в u64, RuleDataCache), маленькие решётки (10×10 .. 500×500). С
+тех пор добавлены dirty-tracking (тик масштабируется по АКТИВНОЙ области,
+не номинальному размеру решётки), GPU-бэкенд, spatial band-split
+арбитража на больших наборах матчей — числа ниже НЕ отражают текущее
+поведение движка и не сопоставимы с ним напрямую. За актуальными,
+датированными измерениями городского масштаба (плотность/разрежённость/
+GPU, вплоть до 1M клеток) — смотрите `CHANGELOG.md`, записи "Замер
+производительности"/"Замер плотной производительности". Секция ниже
+оставлена как есть (не переизмерена) — историческая ценность в том, что
+показывает НАПРАВЛЕНИЕ первых оптимизаций, не текущие абсолютные цифры.
 
 ### Criterion-бенчмарки (абсолютные значения)
 

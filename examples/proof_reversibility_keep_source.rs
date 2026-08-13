@@ -59,7 +59,12 @@ fn emit_rule(direction: Direction) -> HashMap<CellType, Vec<Rule>> {
             // ТОЛЬКО в конечную точку (source+direction*steps), а не по
             // всему пути. `ShiftSpec::emit` — это broadcast=true вариант
             // ("излучение по пути"), здесь он не нужен и запутал бы вывод.
-            shifts: vec![vec![ShiftSpec { direction, steps: STEPS, broadcast: false, keep_source: true }]],
+            shifts: vec![vec![ShiftSpec {
+                direction,
+                steps: STEPS,
+                broadcast: false,
+                keep_source: true,
+            }]],
             changes: vec![],
             active_only: false,
             priority: 10,
@@ -70,7 +75,9 @@ fn emit_rule(direction: Direction) -> HashMap<CellType, Vec<Rule>> {
             starvation_after: None,
             feedback: None,
             recursion: None,
-            memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
     idx
@@ -78,7 +85,14 @@ fn emit_rule(direction: Direction) -> HashMap<CellType, Vec<Rule>> {
 
 fn build_grid(src_x: usize) -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
-    grid.set_cell(src_x, 0, Cell { value: CellValue(CellType(SRC)), born_at: 0 });
+    grid.set_cell(
+        src_x,
+        0,
+        Cell {
+            value: CellValue(CellType(SRC)),
+            born_at: 0,
+        },
+    );
     grid
 }
 
@@ -86,31 +100,52 @@ fn grid_from_snapshot(snap: &[u8]) -> Grid<VecStorage> {
     let mut g = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
     for (x, &v) in snap.iter().enumerate() {
         if v != 0 {
-            g.set_cell(x, 0, Cell { value: CellValue(CellType(v)), born_at: 0 });
+            g.set_cell(
+                x,
+                0,
+                Cell {
+                    value: CellValue(CellType(v)),
+                    born_at: 0,
+                },
+            );
         }
     }
     g
 }
 
 fn snapshot(engine: &Engine<VecStorage>) -> Vec<u8> {
-    (0..WIDTH).map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+    (0..WIDTH)
+        .map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+        .collect()
 }
 
 fn main() {
     let initial_snapshot: Vec<u8> = {
         let g = build_grid(SOURCE_X);
-        (0..WIDTH).map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+        (0..WIDTH)
+            .map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+            .collect()
     };
     println!("Исходная решётка:  {:?}", initial_snapshot);
-    println!("Излучатель на x={SOURCE_X}, `ShiftSpec::emit(Right, {STEPS})` -> копия на x={}.", SOURCE_X + STEPS as usize);
+    println!(
+        "Излучатель на x={SOURCE_X}, `ShiftSpec::emit(Right, {STEPS})` -> копия на x={}.",
+        SOURCE_X + STEPS as usize
+    );
 
     // ── Прямой прогон: ОДИН тик ─────────────────────────────────────────
     let mut forward = Engine::new(build_grid(SOURCE_X), emit_rule(Direction::Right));
     forward.run_tick();
     let final_snapshot = snapshot(&forward);
     println!("\nПосле 1 тика вперёд: {:?}", final_snapshot);
-    assert_eq!(final_snapshot[SOURCE_X], SRC, "source обязан остаться на месте — keep_source не трогает исходную клетку");
-    assert_eq!(final_snapshot[SOURCE_X + STEPS as usize], SRC, "копия обязана появиться в конечной точке");
+    assert_eq!(
+        final_snapshot[SOURCE_X], SRC,
+        "source обязан остаться на месте — keep_source не трогает исходную клетку"
+    );
+    assert_eq!(
+        final_snapshot[SOURCE_X + STEPS as usize],
+        SRC,
+        "копия обязана появиться в конечной точке"
+    );
     println!(
         "Обе клетки (x={SOURCE_X} и x={}) теперь одного типа {SRC} — обе НЕЗАВИСИМО совпадают с тем же правилом на следующем тике.",
         SOURCE_X + STEPS as usize
@@ -128,7 +163,11 @@ fn main() {
     // `keep_source` от обычного сдвига (оба "самоконфликтны" на бумаге).
     let emit_self_conflict = ConflictGraph::build(&emit_rule(Direction::Right)[&CellType(SRC)]);
     let mut move_rule = emit_rule(Direction::Right);
-    move_rule.get_mut(&CellType(SRC)).expect("emit_rule всегда содержит запись для CellType(SRC)")[0].shifts[0][0].keep_source = false;
+    move_rule
+        .get_mut(&CellType(SRC))
+        .expect("emit_rule всегда содержит запись для CellType(SRC)")[0]
+        .shifts[0][0]
+        .keep_source = false;
     let move_self_conflict = ConflictGraph::build(&move_rule[&CellType(SRC)]);
     println!(
         "\nСтатический самоконфликт правила: keep_source=true -> {} рёбер; keep_source=false (обычный сдвиг, те же STEPS) -> {} рёбер \
@@ -146,13 +185,24 @@ fn main() {
 
     // ── Наивный R⁻¹: направление развёрнуто (тот же приём, что и в
     // proof_reversibility.rs), keep_source сохранён как есть ──────────────
-    let mut reverse = Engine::new(grid_from_snapshot(&final_snapshot), emit_rule(reverse_direction(Direction::Right)));
+    let mut reverse = Engine::new(
+        grid_from_snapshot(&final_snapshot),
+        emit_rule(reverse_direction(Direction::Right)),
+    );
     reverse.run_tick();
     let recovered_snapshot = snapshot(&reverse);
     println!("\nПосле 1 тика наивного реверса: {:?}", recovered_snapshot);
 
-    let occupied: Vec<usize> = recovered_snapshot.iter().enumerate().filter(|&(_, &v)| v != 0).map(|(x, _)| x).collect();
-    println!("Занятые клетки после реверса: {:?} (ожидалось ровно [{SOURCE_X}] — исходная решётка)", occupied);
+    let occupied: Vec<usize> = recovered_snapshot
+        .iter()
+        .enumerate()
+        .filter(|&(_, &v)| v != 0)
+        .map(|(x, _)| x)
+        .collect();
+    println!(
+        "Занятые клетки после реверса: {:?} (ожидалось ровно [{SOURCE_X}] — исходная решётка)",
+        occupied
+    );
     println!(
         "x={} (куда должна была прийти обратная копия от x={SOURCE_X}) остался пуст: {} — обе копии (x={SOURCE_X} и x={}) \
 теперь ОДНОГО типа и НЕЗАВИСИМО претендуют на клетку x={SOURCE_X} с перекрывающимися консервативными зонами \
@@ -166,14 +216,19 @@ fn main() {
     );
     println!(
         "\nВосстановленная решётка совпадает с исходной клетка в клетку: {}",
-        if recovered_snapshot == initial_snapshot { "ДА" } else { "НЕТ" }
+        if recovered_snapshot == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
     assert_ne!(
         recovered_snapshot, initial_snapshot,
         "если побитовое совпадение ВСЁ-ТАКИ произошло, вывод примера неверен — нужно пересмотреть конструкцию"
     );
     assert_eq!(
-        occupied, vec![SOURCE_X, SOURCE_X + STEPS as usize],
+        occupied,
+        vec![SOURCE_X, SOURCE_X + STEPS as usize],
         "ожидалось: обе копии остались НА МЕСТЕ (x={SOURCE_X} и x={}), обратная копия на x={} НЕ появилась — \
 арбитраж отбросил один из двух конкурирующих матчей",
         SOURCE_X + STEPS as usize,
@@ -216,7 +271,9 @@ fn main() {
                 starvation_after: None,
                 feedback: None,
                 recursion: None,
-                memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }],
         );
         idx
@@ -225,10 +282,17 @@ fn main() {
     let mut smart_reverse = Engine::new(grid_from_snapshot(&final_snapshot), eraser_rule());
     smart_reverse.run_tick();
     let smart_recovered = snapshot(&smart_reverse);
-    println!("\nПосле 1 тика УМНОГО реверса (ластик, без сдвигов): {:?}", smart_recovered);
+    println!(
+        "\nПосле 1 тика УМНОГО реверса (ластик, без сдвигов): {:?}",
+        smart_recovered
+    );
     println!(
         "Восстановленная решётка совпадает с исходной клетка в клетку: {}",
-        if smart_recovered == initial_snapshot { "ДА" } else { "НЕТ" }
+        if smart_recovered == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
     assert_eq!(
         smart_recovered, initial_snapshot,

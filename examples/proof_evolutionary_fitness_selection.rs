@@ -24,9 +24,7 @@
 use std::collections::HashMap;
 
 use cellaria::engine::Engine;
-use cellaria::types::{
-    BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule, ShiftSpec,
-};
+use cellaria::types::{BoundaryBuffer, Cell, CellType, CellValue, ChangeValue, Direction, OverflowAction, Rule, ShiftSpec};
 use cellaria::{Grid, VecStorage};
 
 const WIDTH: usize = 300;
@@ -78,7 +76,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         });
     }
 
@@ -96,7 +99,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             },
             Rule {
                 id: vec![CellType(SELECTOR_TYPE)],
@@ -109,7 +117,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             },
         ],
     );
@@ -127,7 +140,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(2),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
     idx.insert(
@@ -143,7 +161,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
             overflow: OverflowAction::Write(3),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
 
@@ -161,7 +184,12 @@ fn build_rule_index() -> HashMap<CellType, Vec<Rule>> {
                 overflow: OverflowAction::Write(byte),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }],
         );
     }
@@ -183,9 +211,23 @@ fn run_replica(seed_x: usize) -> Option<Replica> {
     let mut grid = Grid::new(storage, Default::default());
 
     for x in 0..WIDTH {
-        grid.set_cell(x, 0, Cell { value: CellValue::new(OFF), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue::new(OFF),
+                born_at: 0,
+            },
+        );
     }
-    grid.set_cell(seed_x, 0, Cell { value: CellValue::new(ON), born_at: 0 });
+    grid.set_cell(
+        seed_x,
+        0,
+        Cell {
+            value: CellValue::new(ON),
+            born_at: 0,
+        },
+    );
 
     let mut output_buf = BoundaryBuffer::new();
     output_buf.direction = "output".to_string();
@@ -199,11 +241,33 @@ fn run_replica(seed_x: usize) -> Option<Replica> {
     }
 
     let gen = engine.grid().generation();
-    engine.grid_mut().set_cell(SELECT_X, 1, Cell { value: CellValue::new(SELECTOR_TYPE), born_at: gen });
+    engine.grid_mut().set_cell(
+        SELECT_X,
+        1,
+        Cell {
+            value: CellValue::new(SELECTOR_TYPE),
+            born_at: gen,
+        },
+    );
     for (i, &(byte_index, _)) in PACKET_FIXED.iter().enumerate() {
-        let offset = if byte_index < 4 { 2 * (4 - byte_index) } else { 2 * (byte_index - 4) };
-        let x = if byte_index < 4 { SELECT_X + offset } else { SELECT_X - offset };
-        engine.grid_mut().set_cell(x, 1, Cell { value: CellValue::new(CARRIER_TYPES[i]), born_at: gen });
+        let offset = if byte_index < 4 {
+            2 * (4 - byte_index)
+        } else {
+            2 * (byte_index - 4)
+        };
+        let x = if byte_index < 4 {
+            SELECT_X + offset
+        } else {
+            SELECT_X - offset
+        };
+        engine.grid_mut().set_cell(
+            x,
+            1,
+            Cell {
+                value: CellValue::new(CARRIER_TYPES[i]),
+                born_at: gen,
+            },
+        );
     }
 
     let mut direction = None;
@@ -219,13 +283,24 @@ fn run_replica(seed_x: usize) -> Option<Replica> {
     // Ставим тестовый токен и даём самомодифицированному правилу его
     // подвигать — это единственное, что определяет итоговую приспособленность.
     let gen = engine.grid().generation();
-    engine.grid_mut().set_cell(TOKEN_X, 1, Cell { value: CellValue::new(GEN_ID), born_at: gen });
+    engine.grid_mut().set_cell(
+        TOKEN_X,
+        1,
+        Cell {
+            value: CellValue::new(GEN_ID),
+            born_at: gen,
+        },
+    );
     for _ in 0..EXTRA_TICKS {
         engine.run_tick();
     }
 
     let final_x = (0..WIDTH).find(|&x| {
-        engine.grid().get_cell(x, 1).map(|c| c.value.0 .0 == GEN_ID).unwrap_or(false)
+        engine
+            .grid()
+            .get_cell(x, 1)
+            .map(|c| c.value.0 .0 == GEN_ID)
+            .unwrap_or(false)
     });
 
     // Фитнес: насколько далеко токен ушёл ВПРАВО от старта — критерий
@@ -234,7 +309,11 @@ fn run_replica(seed_x: usize) -> Option<Replica> {
     // установила), не Rust-код.
     let fitness = final_x.map(|x| x as i64 - TOKEN_X as i64).unwrap_or(i64::MIN);
 
-    Some(Replica { seed: seed_x, direction, fitness })
+    Some(Replica {
+        seed: seed_x,
+        direction,
+        fitness,
+    })
 }
 
 fn main() {
@@ -246,14 +325,23 @@ fn main() {
         .collect();
 
     for r in &replicas {
-        println!("реплика seed={:>4}: направление={:?}, фитнес (смещение токена)={:+}", r.seed, r.direction, r.fitness);
+        println!(
+            "реплика seed={:>4}: направление={:?}, фитнес (смещение токена)={:+}",
+            r.seed, r.direction, r.fitness
+        );
     }
 
     // Внешний отбор — обычное сравнение Vec, как vote() во внешнем TMR:
     // движок ничего не знает про "отбор", это чтение уже посчитанного
     // состояния снаружи.
-    let winner = replicas.iter().max_by_key(|r| r.fitness).expect("список реплик не пуст");
-    let loser = replicas.iter().min_by_key(|r| r.fitness).expect("список реплик не пуст");
+    let winner = replicas
+        .iter()
+        .max_by_key(|r| r.fitness)
+        .expect("список реплик не пуст");
+    let loser = replicas
+        .iter()
+        .min_by_key(|r| r.fitness)
+        .expect("список реплик не пуст");
 
     println!(
         "\nВнешний отбор: лучшая реплика seed={} (фитнес {:+}, направление {:?}), худшая seed={} (фитнес {:+}, направление {:?})",
@@ -262,7 +350,11 @@ fn main() {
 
     assert_eq!(winner.direction, Direction::Right, "реплика с максимальным смещением вправо обязана иметь направление Right — иначе фитнес не отражает реального поведения решётки");
     assert_eq!(loser.direction, Direction::Left, "реплика с минимальным смещением обязана иметь направление Left — иначе фитнес не отражает реального поведения решётки");
-    assert!(replicas.iter().any(|r| r.direction == Direction::Left) && replicas.iter().any(|r| r.direction == Direction::Right), "популяция должна содержать обе ветви, иначе отбор ничего не отбирает");
+    assert!(
+        replicas.iter().any(|r| r.direction == Direction::Left)
+            && replicas.iter().any(|r| r.direction == Direction::Right),
+        "популяция должна содержать обе ветви, иначе отбор ничего не отбирает"
+    );
 
     println!(
         "\nВывод: N реплик с одними и теми же правилами, но разным посевом PRNG (часть A), сами устанавливают \

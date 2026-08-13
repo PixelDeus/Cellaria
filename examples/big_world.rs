@@ -44,21 +44,58 @@ const WIRE_LEN: usize = 40;
 fn module_wire() -> Vec<Rule> {
     vec![
         Rule {
-            id: vec![CellType(HEAD)], pattern: vec![], shifts: vec![],
+            id: vec![CellType(HEAD)],
+            pattern: vec![],
+            shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(TAIL))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
-            id: vec![CellType(TAIL)], pattern: vec![], shifts: vec![],
+            id: vec![CellType(TAIL)],
+            pattern: vec![],
+            shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(WIRE))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(WIRE)],
             pattern: vec![(0, 0, CellType(WIRE)), (-1, 0, CellType(HEAD))],
             shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(HEAD))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -74,14 +111,40 @@ const DECAY_REGION_X: usize = 1_000_000;
 fn module_decay() -> Vec<Rule> {
     vec![
         Rule {
-            id: vec![CellType(RAD)], pattern: vec![], shifts: vec![],
+            id: vec![CellType(RAD)],
+            pattern: vec![],
+            shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(MID))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
-            id: vec![CellType(MID)], pattern: vec![], shifts: vec![],
+            id: vec![CellType(MID)],
+            pattern: vec![],
+            shifts: vec![],
             changes: vec![(0, 0, ChangeValue::Literal(STABLE))],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -101,24 +164,74 @@ fn module_shuttle() -> Vec<Rule> {
         Rule {
             id: vec![CellType(HEAD_R)],
             pattern: vec![(0, 0, CellType(HEAD_R)), (1, 0, CellType(WALL))],
-            shifts: vec![], changes: vec![(0, 0, ChangeValue::Literal(HEAD_L))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(HEAD_L))],
+            active_only: false,
+            priority: 20,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
-            id: vec![CellType(HEAD_R)], pattern: vec![],
-            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]], changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            id: vec![CellType(HEAD_R)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Right, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
             id: vec![CellType(HEAD_L)],
             pattern: vec![(0, 0, CellType(HEAD_L)), (-1, 0, CellType(WALL))],
-            shifts: vec![], changes: vec![(0, 0, ChangeValue::Literal(HEAD_R))],
-            active_only: false, priority: 20, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            shifts: vec![],
+            changes: vec![(0, 0, ChangeValue::Literal(HEAD_R))],
+            active_only: false,
+            priority: 20,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
         Rule {
-            id: vec![CellType(HEAD_L)], pattern: vec![],
-            shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]], changes: vec![],
-            active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            id: vec![CellType(HEAD_L)],
+            pattern: vec![],
+            shifts: vec![vec![ShiftSpec::new(Direction::Left, 1)]],
+            changes: vec![],
+            active_only: false,
+            priority: 10,
+            min_age: 0,
+            overflow: Default::default(),
+            cam: None,
+            tie_break: 0,
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         },
     ]
 }
@@ -173,7 +286,14 @@ fn main() {
 
     // Регион A: провод, головка ждёт первого input-пакета.
     for x in WIRE_START..WIRE_START + WIRE_LEN {
-        grid.set_cell(x, 0, Cell { value: CellValue(CellType(WIRE)), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(WIRE)),
+                born_at: 0,
+            },
+        );
     }
     let mut input_buf = cellaria::types::BoundaryBuffer::new();
     input_buf.direction = "input".to_string();
@@ -181,13 +301,41 @@ fn main() {
 
     // Регион B: пять радиоактивных атомов, за миллион клеток от A.
     for i in 0..5 {
-        grid.set_cell(DECAY_REGION_X + i * 3, 0, Cell { value: CellValue(CellType(RAD)), born_at: 0 });
+        grid.set_cell(
+            DECAY_REGION_X + i * 3,
+            0,
+            Cell {
+                value: CellValue(CellType(RAD)),
+                born_at: 0,
+            },
+        );
     }
 
     // Регион C: челнок между двух стен, ещё дальше.
-    grid.set_cell(SHUTTLE_REGION_X, 0, Cell { value: CellValue(CellType(WALL)), born_at: 0 });
-    grid.set_cell(SHUTTLE_REGION_X + SHUTTLE_WIDTH + 1, 0, Cell { value: CellValue(CellType(WALL)), born_at: 0 });
-    grid.set_cell(SHUTTLE_REGION_X + 1, 0, Cell { value: CellValue(CellType(HEAD_R)), born_at: 0 });
+    grid.set_cell(
+        SHUTTLE_REGION_X,
+        0,
+        Cell {
+            value: CellValue(CellType(WALL)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        SHUTTLE_REGION_X + SHUTTLE_WIDTH + 1,
+        0,
+        Cell {
+            value: CellValue(CellType(WALL)),
+            born_at: 0,
+        },
+    );
+    grid.set_cell(
+        SHUTTLE_REGION_X + 1,
+        0,
+        Cell {
+            value: CellValue(CellType(HEAD_R)),
+            born_at: 0,
+        },
+    );
 
     let mut engine = Engine::new(grid, rule_index);
 
@@ -209,25 +357,43 @@ fn main() {
             engine.set_rules_for_head(
                 CellType(STABLE),
                 vec![Rule {
-                    id: vec![CellType(STABLE)], pattern: vec![], shifts: vec![],
+                    id: vec![CellType(STABLE)],
+                    pattern: vec![],
+                    shifts: vec![],
                     changes: vec![(0, 0, ChangeValue::Literal(GLOW))],
-                    active_only: false, priority: 10, min_age: 0, overflow: Default::default(), cam: None, tie_break: 0, starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                    active_only: false,
+                    priority: 10,
+                    min_age: 0,
+                    overflow: Default::default(),
+                    cam: None,
+                    tie_break: 0,
+                    starvation_after: None,
+                    feedback: None,
+                    recursion: None,
+                    memory: None,
+                    max_activations: None,
+                    cross_layer_reads: Vec::new(),
                 }],
             );
-            println!("тик {:>2}: добавили правило STABLE->GLOW на лету, решётка не трогалась", tick);
+            println!(
+                "тик {:>2}: добавили правило STABLE->GLOW на лету, решётка не трогалась",
+                tick
+            );
         }
 
         if tick % 10 == 0 || tick == 1 {
             let wire_head = (WIRE_START..WIRE_START + WIRE_LEN)
                 .find(|&x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0) == Some(HEAD));
             let decayed = (0..5)
-                .filter(|&i| engine.grid().get_cell(DECAY_REGION_X + i * 3, 0).map(|c| c.value.0 .0) == Some(STABLE) || engine.grid().get_cell(DECAY_REGION_X + i * 3, 0).map(|c| c.value.0 .0) == Some(GLOW))
+                .filter(|&i| {
+                    engine.grid().get_cell(DECAY_REGION_X + i * 3, 0).map(|c| c.value.0 .0) == Some(STABLE)
+                        || engine.grid().get_cell(DECAY_REGION_X + i * 3, 0).map(|c| c.value.0 .0) == Some(GLOW)
+                })
                 .count();
-            let shuttle_pos = (SHUTTLE_REGION_X..SHUTTLE_REGION_X + SHUTTLE_WIDTH + 2)
-                .find(|&x| {
-                    let v = engine.grid().get_cell(x, 0).map(|c| c.value.0 .0);
-                    v == Some(HEAD_R) || v == Some(HEAD_L)
-                });
+            let shuttle_pos = (SHUTTLE_REGION_X..SHUTTLE_REGION_X + SHUTTLE_WIDTH + 2).find(|&x| {
+                let v = engine.grid().get_cell(x, 0).map(|c| c.value.0 .0);
+                v == Some(HEAD_R) || v == Some(HEAD_L)
+            });
             println!(
                 "тик {:>2}: провод-головка@{:?} | распад: {}/5 завершено | челнок@{:?}",
                 tick, wire_head, decayed, shuttle_pos

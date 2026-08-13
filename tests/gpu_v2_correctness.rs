@@ -24,8 +24,8 @@ use proptest::prelude::*;
 use cellaria::engine::{run_tick, Engine};
 use cellaria::gpu::GpuEngine;
 use cellaria::types::{
-    CamSearch, Cell, CellType, CellValue, ChangeValue, Direction, FeedbackSpec, MemorySpec, OverflowAction, RecordTrigger,
-    RecordedValue, RecursionSpec, Rule, ShiftSpec,
+    CamSearch, Cell, CellType, CellValue, ChangeValue, Direction, FeedbackSpec, MemorySpec, OverflowAction,
+    RecordTrigger, RecordedValue, RecursionSpec, Rule, ShiftSpec,
 };
 use cellaria::{Grid, VecStorage};
 
@@ -72,8 +72,12 @@ fn direction_strategy() -> impl Strategy<Value = Direction> {
 /// одновременно на маленькой решётке) без отдельного вручную написанного
 /// сценария на каждую комбинацию.
 fn shift_spec_strategy() -> impl Strategy<Value = ShiftSpec> {
-    (direction_strategy(), 1u16..=2, any::<bool>())
-        .prop_map(|(direction, steps, broadcast)| ShiftSpec { direction, steps, broadcast, keep_source: false })
+    (direction_strategy(), 1u16..=2, any::<bool>()).prop_map(|(direction, steps, broadcast)| ShiftSpec {
+        direction,
+        steps,
+        broadcast,
+        keep_source: false,
+    })
 }
 
 /// v2-правило: 0..=2 независимых сдвигов (см. `shift_spec_strategy` — теперь
@@ -85,30 +89,34 @@ fn v2_rule_strategy() -> impl Strategy<Value = Rule> {
     (
         pattern_strategy(),
         prop::collection::vec(shift_spec_strategy(), 0..=2),
-        prop::collection::vec(
-            (-1i32..=1, -1i32..=1, (1u8..=9).prop_map(ChangeValue::Literal)),
-            0..=3,
-        ),
+        prop::collection::vec((-1i32..=1, -1i32..=1, (1u8..=9).prop_map(ChangeValue::Literal)), 0..=3),
         0u32..=3,
         0u64..=1,
         any::<bool>(),
     )
-        .prop_map(|((head, pattern), shift_specs, changes, priority, min_age, active_only)| {
-            let shifts: Vec<Vec<ShiftSpec>> = shift_specs.into_iter().map(|s| vec![s]).collect();
-            Rule {
-                id: vec![CellType(head)],
-                pattern,
-                shifts,
-                changes,
-                active_only,
-                priority,
-                min_age,
-                overflow: OverflowAction::Discard,
-                cam: None,
-                tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
-            }
-        })
+        .prop_map(
+            |((head, pattern), shift_specs, changes, priority, min_age, active_only)| {
+                let shifts: Vec<Vec<ShiftSpec>> = shift_specs.into_iter().map(|s| vec![s]).collect();
+                Rule {
+                    id: vec![CellType(head)],
+                    pattern,
+                    shifts,
+                    changes,
+                    active_only,
+                    priority,
+                    min_age,
+                    overflow: OverflowAction::Discard,
+                    cam: None,
+                    tie_break: 0,
+                    starvation_after: None,
+                    feedback: None,
+                    recursion: None,
+                    memory: None,
+                    max_activations: None,
+                    cross_layer_reads: Vec::new(),
+                }
+            },
+        )
         .prop_filter("rule must have at least one shift or change", |r| {
             !(r.shifts.is_empty() && r.changes.is_empty())
         })
@@ -210,7 +218,12 @@ fn test_gpu_v2_matches_cpu_head_on_collision_scenario() {
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }
     }
 
@@ -221,14 +234,43 @@ fn test_gpu_v2_matches_cpu_head_on_collision_scenario() {
     let n = 9usize;
     let storage = VecStorage::new(n, 1);
     let mut cpu_grid = Grid::new(storage, HashSet::new());
-    cpu_grid.set_cell(0, 0, Cell { value: CellValue::new(1), born_at: 0 });
-    cpu_grid.set_cell(8, 0, Cell { value: CellValue::new(2), born_at: 0 });
+    cpu_grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue::new(1),
+            born_at: 0,
+        },
+    );
+    cpu_grid.set_cell(
+        8,
+        0,
+        Cell {
+            value: CellValue::new(2),
+            born_at: 0,
+        },
+    );
 
     let initial = vec![
-        (0usize, 0usize, Cell { value: CellValue::new(1), born_at: 0 }),
-        (8, 0, Cell { value: CellValue::new(2), born_at: 0 }),
+        (
+            0usize,
+            0usize,
+            Cell {
+                value: CellValue::new(1),
+                born_at: 0,
+            },
+        ),
+        (
+            8,
+            0,
+            Cell {
+                value: CellValue::new(2),
+                born_at: 0,
+            },
+        ),
     ];
-    let mut gpu_engine = GpuEngine::new(n, 1, &initial, &rule_index).expect("two Discard movers are within the v2 subset");
+    let mut gpu_engine =
+        GpuEngine::new(n, 1, &initial, &rule_index).expect("two Discard movers are within the v2 subset");
 
     for tick in 0..6 {
         run_tick(&mut cpu_grid, &rule_index);
@@ -237,8 +279,14 @@ fn test_gpu_v2_matches_cpu_head_on_collision_scenario() {
         for x in 0..n {
             let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x}"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x}"
+            );
         }
     }
 }
@@ -270,7 +318,12 @@ fn test_gpu_v2_hybrid_fallback_resolves_long_conflict_chain() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -279,7 +332,10 @@ fn test_gpu_v2_hybrid_fallback_resolves_long_conflict_chain() {
     let mut cpu_grid = Grid::new(storage, HashSet::new());
     let mut initial = Vec::new();
     for x in 0..CHAIN_LEN {
-        let cell = Cell { value: CellValue::new(1), born_at: 0 };
+        let cell = Cell {
+            value: CellValue::new(1),
+            born_at: 0,
+        };
         cpu_grid.set_cell(x, 0, cell);
         initial.push((x, 0usize, cell));
     }
@@ -300,8 +356,14 @@ fn test_gpu_v2_hybrid_fallback_resolves_long_conflict_chain() {
         for x in 0..width {
             let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x} (chain len {CHAIN_LEN})");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} (chain len {CHAIN_LEN})");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x} (chain len {CHAIN_LEN})"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x} (chain len {CHAIN_LEN})"
+            );
         }
     }
 }
@@ -329,9 +391,17 @@ fn test_gpu_v2_cam_matches_cpu_single_and_conflicting_magnets() {
             priority,
             min_age: 0,
             overflow: OverflowAction::Discard,
-            cam: Some(CamSearch { radius, target_type: CellType(TARGET) }),
+            cam: Some(CamSearch {
+                radius,
+                target_type: CellType(TARGET),
+            }),
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }
     }
 
@@ -352,12 +422,16 @@ fn test_gpu_v2_cam_matches_cpu_single_and_conflicting_magnets() {
     let mut cpu_grid = Grid::new(storage, HashSet::new());
     let mut initial = Vec::new();
     for &(x, y, v) in &cells {
-        let cell = Cell { value: CellValue::new(v), born_at: 0 };
+        let cell = Cell {
+            value: CellValue::new(v),
+            born_at: 0,
+        };
         cpu_grid.set_cell(x, y, cell);
         initial.push((x, y, cell));
     }
 
-    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index).expect("cam rule within MAX_CAM_RADIUS is supported");
+    let mut gpu_engine =
+        GpuEngine::new(width, height, &initial, &rule_index).expect("cam rule within MAX_CAM_RADIUS is supported");
 
     for tick in 0..3 {
         run_tick(&mut cpu_grid, &rule_index);
@@ -368,8 +442,14 @@ fn test_gpu_v2_cam_matches_cpu_single_and_conflicting_magnets() {
             for x in 0..width {
                 let cpu_cell = cpu_grid.get_cell(x, y).copied().unwrap_or_default();
                 let gpu_cell = gpu_result[y * width + x];
-                assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} ({x},{y})");
-                assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} ({x},{y})");
+                assert_eq!(
+                    cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                    "value mismatch at tick={tick} ({x},{y})"
+                );
+                assert_eq!(
+                    cpu_cell.born_at, gpu_cell.born_at,
+                    "born_at mismatch at tick={tick} ({x},{y})"
+                );
             }
         }
     }
@@ -413,9 +493,17 @@ fn test_gpu_v2_cam_two_level_conflict_chain_matches_cpu() {
             priority,
             min_age: 0,
             overflow: OverflowAction::Discard,
-            cam: Some(CamSearch { radius: 3, target_type: CellType(target) }),
+            cam: Some(CamSearch {
+                radius: 3,
+                target_type: CellType(target),
+            }),
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }
     }
 
@@ -433,7 +521,10 @@ fn test_gpu_v2_cam_two_level_conflict_chain_matches_cpu() {
     let mut cpu_grid = Grid::new(storage, Default::default());
     let mut initial = Vec::new();
     for &(x, y, v) in &cells {
-        let cell = Cell { value: CellValue::new(v), born_at: 0 };
+        let cell = Cell {
+            value: CellValue::new(v),
+            born_at: 0,
+        };
         cpu_grid.set_cell(x, y, cell);
         initial.push((x, y, cell));
     }
@@ -454,10 +545,26 @@ fn test_gpu_v2_cam_two_level_conflict_chain_matches_cpu() {
     //   свободен -> достаётся M1 во ВТОРОМ раунде -> очищена.
     // - (0) M1's клетка: M1 стал типом X (нашёл и поглотил X) -- ТОЛЬКО если
     //   алгоритм сделал повторный проход после отклонения M2.
-    assert_eq!(cpu_grid.get_cell(4, 0).map(|c| c.value.0 .0), Some(0), "клетка M2 должна быть очищена (M3 её поглотил)");
-    assert_eq!(cpu_grid.get_cell(6, 0).map(|c| c.value.0 .0), Some(M2), "M3 должен стать типом M2");
-    assert_eq!(cpu_grid.get_cell(2, 0).map(|c| c.value.0 .0), Some(0), "X должен достаться M1 во втором раунде (M2 выбыл целиком)");
-    assert_eq!(cpu_grid.get_cell(0, 0).map(|c| c.value.0 .0), Some(X), "M1 должен стать типом X -- доказывает, что CPU-эталон делает повторный проход, а не жадно решает один раз");
+    assert_eq!(
+        cpu_grid.get_cell(4, 0).map(|c| c.value.0 .0),
+        Some(0),
+        "клетка M2 должна быть очищена (M3 её поглотил)"
+    );
+    assert_eq!(
+        cpu_grid.get_cell(6, 0).map(|c| c.value.0 .0),
+        Some(M2),
+        "M3 должен стать типом M2"
+    );
+    assert_eq!(
+        cpu_grid.get_cell(2, 0).map(|c| c.value.0 .0),
+        Some(0),
+        "X должен достаться M1 во втором раунде (M2 выбыл целиком)"
+    );
+    assert_eq!(
+        cpu_grid.get_cell(0, 0).map(|c| c.value.0 .0),
+        Some(X),
+        "M1 должен стать типом X -- доказывает, что CPU-эталон делает повторный проход, а не жадно решает один раз"
+    );
 
     for y in 0..height {
         for x in 0..width {
@@ -498,20 +605,43 @@ fn test_gpu_v2_tie_break_matches_cpu_rotating_conflict() {
             overflow: Default::default(),
             cam: None,
             tie_break,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }
     }
 
     let width = 2;
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
-    rule_index.insert(CellType(HEAD), vec![competing_rule(0, 100), competing_rule(MODULUS / 2, 200)]);
+    rule_index.insert(
+        CellType(HEAD),
+        vec![competing_rule(0, 100), competing_rule(MODULUS / 2, 200)],
+    );
 
-    let initial = vec![(0usize, 0usize, Cell { value: CellValue::new(HEAD), born_at: 0 })];
+    let initial = vec![(
+        0usize,
+        0usize,
+        Cell {
+            value: CellValue::new(HEAD),
+            born_at: 0,
+        },
+    )];
     let storage = VecStorage::new(width, 1);
     let mut cpu_grid = Grid::new(storage, HashSet::new());
-    cpu_grid.set_cell(0, 0, Cell { value: CellValue::new(HEAD), born_at: 0 });
+    cpu_grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue::new(HEAD),
+            born_at: 0,
+        },
+    );
 
-    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index).expect("two same-priority competing rules are within the v2 subset");
+    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index)
+        .expect("two same-priority competing rules are within the v2 subset");
 
     let mut cpu_winners = Vec::new();
     for tick in 0..MODULUS {
@@ -522,16 +652,30 @@ fn test_gpu_v2_tie_break_matches_cpu_rotating_conflict() {
         for x in 0..width {
             let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x}"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x}"
+            );
         }
         cpu_winners.push(cpu_grid.get_cell(1, 0).map(|c| c.value.0 .0));
     }
 
     let a_wins = cpu_winners.iter().filter(|&&w| w == Some(100)).count();
     let b_wins = cpu_winners.iter().filter(|&&w| w == Some(200)).count();
-    assert_eq!(a_wins, (MODULUS / 2) as usize, "CPU-эталон сам должен чередовать 50/50 — иначе сцена не проверяет вращение");
-    assert_eq!(b_wins, (MODULUS / 2) as usize, "CPU-эталон сам должен чередовать 50/50 — иначе сцена не проверяет вращение");
+    assert_eq!(
+        a_wins,
+        (MODULUS / 2) as usize,
+        "CPU-эталон сам должен чередовать 50/50 — иначе сцена не проверяет вращение"
+    );
+    assert_eq!(
+        b_wins,
+        (MODULUS / 2) as usize,
+        "CPU-эталон сам должен чередовать 50/50 — иначе сцена не проверяет вращение"
+    );
 }
 
 /// `ShiftSpec::broadcast` (см. её doc-комментарий в `types.rs`) на GPU —
@@ -562,7 +706,12 @@ fn test_gpu_v2_broadcast_matches_cpu_single_no_conflict() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -570,8 +719,22 @@ fn test_gpu_v2_broadcast_matches_cpu_single_no_conflict() {
     let width = 12;
     let storage = VecStorage::new(width, 1);
     let mut cpu_grid = Grid::new(storage, HashSet::new());
-    cpu_grid.set_cell(0, 0, Cell { value: CellValue::new(1), born_at: 0 });
-    let initial = vec![(0usize, 0usize, Cell { value: CellValue::new(1), born_at: 0 })];
+    cpu_grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue::new(1),
+            born_at: 0,
+        },
+    );
+    let initial = vec![(
+        0usize,
+        0usize,
+        Cell {
+            value: CellValue::new(1),
+            born_at: 0,
+        },
+    )];
 
     let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index)
         .expect("short broadcast (steps within MAX_BROADCAST_REACH) is within the v2 subset");
@@ -583,8 +746,14 @@ fn test_gpu_v2_broadcast_matches_cpu_single_no_conflict() {
         for x in 0..width {
             let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x}"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x}"
+            );
         }
     }
 
@@ -621,7 +790,12 @@ fn test_gpu_v2_broadcast_matches_cpu_overlapping_paths_arbitrated() {
             overflow: OverflowAction::Discard,
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }
     }
 
@@ -632,11 +806,39 @@ fn test_gpu_v2_broadcast_matches_cpu_overlapping_paths_arbitrated() {
     let width = 10;
     let storage = VecStorage::new(width, 1);
     let mut cpu_grid = Grid::new(storage, HashSet::new());
-    cpu_grid.set_cell(0, 0, Cell { value: CellValue::new(1), born_at: 0 });
-    cpu_grid.set_cell(6, 0, Cell { value: CellValue::new(2), born_at: 0 });
+    cpu_grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue::new(1),
+            born_at: 0,
+        },
+    );
+    cpu_grid.set_cell(
+        6,
+        0,
+        Cell {
+            value: CellValue::new(2),
+            born_at: 0,
+        },
+    );
     let initial = vec![
-        (0usize, 0usize, Cell { value: CellValue::new(1), born_at: 0 }),
-        (6usize, 0usize, Cell { value: CellValue::new(2), born_at: 0 }),
+        (
+            0usize,
+            0usize,
+            Cell {
+                value: CellValue::new(1),
+                born_at: 0,
+            },
+        ),
+        (
+            6usize,
+            0usize,
+            Cell {
+                value: CellValue::new(2),
+                born_at: 0,
+            },
+        ),
     ];
 
     let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index)
@@ -654,7 +856,10 @@ fn test_gpu_v2_broadcast_matches_cpu_overlapping_paths_arbitrated() {
     for x in 0..width {
         let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
         let gpu_cell = gpu_result[x];
-        assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick=0 x={x}");
+        assert_eq!(
+            cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+            "value mismatch at tick=0 x={x}"
+        );
         assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick=0 x={x}");
     }
 
@@ -662,12 +867,28 @@ fn test_gpu_v2_broadcast_matches_cpu_overlapping_paths_arbitrated() {
     // очищена, x=1..4 несут тип 1. B полностью проигрывает (all-or-nothing)
     // — x=6 остаётся исходным типом 2 (НЕ очищена), x=5 остаётся default
     // (0), т.к. запись туда принадлежала отклонённому матчу B.
-    assert_eq!(cpu_grid.get_cell(0, 0).copied().unwrap_or_default().value.0 .0, 0, "A's source must be cleared");
+    assert_eq!(
+        cpu_grid.get_cell(0, 0).copied().unwrap_or_default().value.0 .0,
+        0,
+        "A's source must be cleared"
+    );
     for x in 1..=4 {
-        assert_eq!(cpu_grid.get_cell(x, 0).copied().unwrap_or_default().value.0 .0, 1, "A must win its full broadcast path at x={x}");
+        assert_eq!(
+            cpu_grid.get_cell(x, 0).copied().unwrap_or_default().value.0 .0,
+            1,
+            "A must win its full broadcast path at x={x}"
+        );
     }
-    assert_eq!(cpu_grid.get_cell(6, 0).copied().unwrap_or_default().value.0 .0, 2, "B must be rejected whole — its own source stays untouched");
-    assert_eq!(cpu_grid.get_cell(5, 0).copied().unwrap_or_default().value.0 .0, 0, "B's uncontested path cell must NOT be written either — all-or-nothing rejection");
+    assert_eq!(
+        cpu_grid.get_cell(6, 0).copied().unwrap_or_default().value.0 .0,
+        2,
+        "B must be rejected whole — its own source stays untouched"
+    );
+    assert_eq!(
+        cpu_grid.get_cell(5, 0).copied().unwrap_or_default().value.0 .0,
+        0,
+        "B's uncontested path cell must NOT be written either — all-or-nothing rejection"
+    );
 
     for tick in 1..4 {
         run_tick(&mut cpu_grid, &rule_index);
@@ -676,8 +897,14 @@ fn test_gpu_v2_broadcast_matches_cpu_overlapping_paths_arbitrated() {
         for x in 0..width {
             let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x}"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x}"
+            );
         }
     }
 }
@@ -703,7 +930,12 @@ fn test_gpu_v2_broadcast_matches_cpu_boundary_overflow_discard() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -711,8 +943,22 @@ fn test_gpu_v2_broadcast_matches_cpu_boundary_overflow_discard() {
     let width = 5;
     let storage = VecStorage::new(width, 1);
     let mut cpu_grid = Grid::new(storage, HashSet::new());
-    cpu_grid.set_cell(3, 0, Cell { value: CellValue::new(1), born_at: 0 });
-    let initial = vec![(3usize, 0usize, Cell { value: CellValue::new(1), born_at: 0 })];
+    cpu_grid.set_cell(
+        3,
+        0,
+        Cell {
+            value: CellValue::new(1),
+            born_at: 0,
+        },
+    );
+    let initial = vec![(
+        3usize,
+        0usize,
+        Cell {
+            value: CellValue::new(1),
+            born_at: 0,
+        },
+    )];
 
     let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index)
         .expect("broadcast with Discard overflow within MAX_BROADCAST_REACH is within the v2 subset");
@@ -723,17 +969,32 @@ fn test_gpu_v2_broadcast_matches_cpu_boundary_overflow_discard() {
     for x in 0..width {
         let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
         let gpu_cell = gpu_result[x];
-        assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick=0 x={x}");
+        assert_eq!(
+            cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+            "value mismatch at tick=0 x={x}"
+        );
         assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick=0 x={x}");
     }
 
     // Ручная проверка: x=3 (source) очищена, x=4 (единственная клетка пути
     // внутри решётки) несёт тип 1, остальное не тронуто (0/default) — не
     // "клэмплено" на край, а именно отброшено (Discard).
-    assert_eq!(cpu_grid.get_cell(3, 0).copied().unwrap_or_default().value.0 .0, 0, "source must be cleared");
-    assert_eq!(cpu_grid.get_cell(4, 0).copied().unwrap_or_default().value.0 .0, 1, "only in-bounds path cell must be written");
+    assert_eq!(
+        cpu_grid.get_cell(3, 0).copied().unwrap_or_default().value.0 .0,
+        0,
+        "source must be cleared"
+    );
+    assert_eq!(
+        cpu_grid.get_cell(4, 0).copied().unwrap_or_default().value.0 .0,
+        1,
+        "only in-bounds path cell must be written"
+    );
     for x in 0..3 {
-        assert_eq!(cpu_grid.get_cell(x, 0).copied().unwrap_or_default().value.0 .0, 0, "cells before source must be untouched at x={x}");
+        assert_eq!(
+            cpu_grid.get_cell(x, 0).copied().unwrap_or_default().value.0 .0,
+            0,
+            "cells before source must be untouched at x={x}"
+        );
     }
 
     // Ещё пара тиков — x=4 (теперь тип 1) снова матчится и снова рассылает
@@ -748,8 +1009,14 @@ fn test_gpu_v2_broadcast_matches_cpu_boundary_overflow_discard() {
         for x in 0..width {
             let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x}"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x}"
+            );
         }
     }
 }
@@ -777,7 +1044,12 @@ fn test_gpu_v2_keep_source_matches_cpu_source_age_preserved() {
     let rule = Rule {
         id: vec![CellType(MARKER)],
         pattern: vec![(0, 0, CellType(MARKER)), (1, 0, CellType(0))],
-        shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 1, broadcast: false, keep_source: true }]],
+        shifts: vec![vec![ShiftSpec {
+            direction: Direction::Right,
+            steps: 1,
+            broadcast: false,
+            keep_source: true,
+        }]],
         changes: vec![],
         active_only: false,
         priority: 10,
@@ -785,7 +1057,12 @@ fn test_gpu_v2_keep_source_matches_cpu_source_age_preserved() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(MARKER), vec![rule]);
@@ -793,10 +1070,25 @@ fn test_gpu_v2_keep_source_matches_cpu_source_age_preserved() {
     let width = 10;
     let storage = VecStorage::new(width, 1);
     let mut cpu_grid = Grid::new(storage, HashSet::new());
-    cpu_grid.set_cell(0, 0, Cell { value: CellValue::new(MARKER), born_at: 0 });
-    let initial = vec![(0usize, 0usize, Cell { value: CellValue::new(MARKER), born_at: 0 })];
+    cpu_grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue::new(MARKER),
+            born_at: 0,
+        },
+    );
+    let initial = vec![(
+        0usize,
+        0usize,
+        Cell {
+            value: CellValue::new(MARKER),
+            born_at: 0,
+        },
+    )];
 
-    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index).expect("plain keep_source is within the v2 subset");
+    let mut gpu_engine =
+        GpuEngine::new(width, 1, &initial, &rule_index).expect("plain keep_source is within the v2 subset");
 
     for tick in 0..5 {
         run_tick(&mut cpu_grid, &rule_index);
@@ -805,8 +1097,14 @@ fn test_gpu_v2_keep_source_matches_cpu_source_age_preserved() {
         for x in 0..width {
             let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} -- keep_source source must not reset age on GPU either");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x}"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x} -- keep_source source must not reset age on GPU either"
+            );
         }
     }
 
@@ -828,7 +1126,12 @@ fn test_gpu_v2_emit_broadcast_plus_keep_source_matches_cpu() {
     let rule = Rule {
         id: vec![CellType(EMITTER)],
         pattern: vec![(0, 0, CellType(EMITTER))],
-        shifts: vec![vec![ShiftSpec { direction: Direction::Right, steps: 3, broadcast: true, keep_source: true }]],
+        shifts: vec![vec![ShiftSpec {
+            direction: Direction::Right,
+            steps: 3,
+            broadcast: true,
+            keep_source: true,
+        }]],
         changes: vec![],
         active_only: false,
         priority: 10,
@@ -836,7 +1139,12 @@ fn test_gpu_v2_emit_broadcast_plus_keep_source_matches_cpu() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(EMITTER), vec![rule]);
@@ -844,10 +1152,25 @@ fn test_gpu_v2_emit_broadcast_plus_keep_source_matches_cpu() {
     let width = 10;
     let storage = VecStorage::new(width, 1);
     let mut cpu_grid = Grid::new(storage, HashSet::new());
-    cpu_grid.set_cell(0, 0, Cell { value: CellValue::new(EMITTER), born_at: 0 });
-    let initial = vec![(0usize, 0usize, Cell { value: CellValue::new(EMITTER), born_at: 0 })];
+    cpu_grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue::new(EMITTER),
+            born_at: 0,
+        },
+    );
+    let initial = vec![(
+        0usize,
+        0usize,
+        Cell {
+            value: CellValue::new(EMITTER),
+            born_at: 0,
+        },
+    )];
 
-    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index).expect("emit (broadcast+keep_source) is within the v2 subset");
+    let mut gpu_engine =
+        GpuEngine::new(width, 1, &initial, &rule_index).expect("emit (broadcast+keep_source) is within the v2 subset");
 
     for tick in 0..3 {
         run_tick(&mut cpu_grid, &rule_index);
@@ -856,8 +1179,14 @@ fn test_gpu_v2_emit_broadcast_plus_keep_source_matches_cpu() {
         for x in 0..width {
             let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x}"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x}"
+            );
         }
     }
 
@@ -865,7 +1194,11 @@ fn test_gpu_v2_emit_broadcast_plus_keep_source_matches_cpu() {
     assert_eq!(source.value.0 .0, EMITTER, "emitter must survive (keep_source)");
     assert_eq!(source.born_at, 0, "emitter's age must never reset");
     for x in 1..=3 {
-        assert_eq!(cpu_grid.get_cell(x, 0).copied().unwrap_or_default().value.0 .0, EMITTER, "path cell x={x} must be filled (broadcast)");
+        assert_eq!(
+            cpu_grid.get_cell(x, 0).copied().unwrap_or_default().value.0 .0,
+            EMITTER,
+            "path cell x={x} must be filled (broadcast)"
+        );
     }
 }
 
@@ -892,8 +1225,13 @@ fn wall_fill_rule(min_age: u64, max_depth: u8) -> Rule {
         tie_break: 0,
         starvation_after: None,
         feedback: None,
-        recursion: Some(RecursionSpec { max_depth, direction: Direction::Right }),
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        recursion: Some(RecursionSpec {
+            max_depth,
+            direction: Direction::Right,
+        }),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
@@ -920,7 +1258,8 @@ fn test_gpu_v2_recursion_cascade_matches_cpu_in_one_tick() {
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(RUNFILLED), vec![wall_fill_rule(0, MAX_DEPTH)]);
 
-    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index).expect("recursion within MAX_RECURSION_DEPTH is within the v2 subset");
+    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index)
+        .expect("recursion within MAX_RECURSION_DEPTH is within the v2 subset");
 
     run_tick(&mut cpu_grid, &rule_index);
     gpu_engine.run_tick();
@@ -929,10 +1268,18 @@ fn test_gpu_v2_recursion_cascade_matches_cpu_in_one_tick() {
     // Ручная проверка (не просто "GPU совпал с CPU"): клетки 0..=4 залиты
     // (seed + MAX_DEPTH=3 уровня каскада = 4 клетки), 5..9 нетронуты.
     for x in 0..=4 {
-        assert_eq!(cpu_grid.get_cell(x, 0).map(|c| c.value.0 .0), Some(RFILLED), "CPU: клетка {x} должна быть залита за один тик");
+        assert_eq!(
+            cpu_grid.get_cell(x, 0).map(|c| c.value.0 .0),
+            Some(RFILLED),
+            "CPU: клетка {x} должна быть залита за один тик"
+        );
     }
     for x in 5..width {
-        assert_eq!(cpu_grid.get_cell(x, 0).map(|c| c.value.0 .0), Some(RUNFILLED), "CPU: клетка {x} вне глубины каскада, не должна меняться");
+        assert_eq!(
+            cpu_grid.get_cell(x, 0).map(|c| c.value.0 .0),
+            Some(RUNFILLED),
+            "CPU: клетка {x} вне глубины каскада, не должна меняться"
+        );
     }
 
     for x in 0..width {
@@ -984,7 +1331,14 @@ fn test_gpu_v2_recursion_with_min_age_matches_cpu_across_ticks() {
     // тик4: заливает x=3,4, тик5: заливает x=5,6, тик6: заливает x=7
     // (край решётки шириной 8 — каскад дальше x=8 естественно не матчится,
     // читает default за границей, попутно проверяет boundary-поведение).
-    let expected_filled_after_tick: [&[usize]; 6] = [&[], &[], &[1, 2], &[1, 2, 3, 4], &[1, 2, 3, 4, 5, 6], &[1, 2, 3, 4, 5, 6, 7]];
+    let expected_filled_after_tick: [&[usize]; 6] = [
+        &[],
+        &[],
+        &[1, 2],
+        &[1, 2, 3, 4],
+        &[1, 2, 3, 4, 5, 6],
+        &[1, 2, 3, 4, 5, 6, 7],
+    ];
 
     for tick in 1..=6 {
         run_tick(&mut cpu_grid, &rule_index);
@@ -993,8 +1347,14 @@ fn test_gpu_v2_recursion_with_min_age_matches_cpu_across_ticks() {
         for x in 0..width {
             let cpu_cell = cpu_grid.get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x}"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x}"
+            );
         }
 
         let filled = &expected_filled_after_tick[tick - 1];
@@ -1002,9 +1362,17 @@ fn test_gpu_v2_recursion_with_min_age_matches_cpu_across_ticks() {
             let expect_filled = filled.contains(&x);
             let actual = cpu_grid.get_cell(x, 0).map(|c| c.value.0 .0);
             if expect_filled {
-                assert_eq!(actual, Some(RFILLED), "CPU manual trace: x={x} should be filled by tick={tick}");
+                assert_eq!(
+                    actual,
+                    Some(RFILLED),
+                    "CPU manual trace: x={x} should be filled by tick={tick}"
+                );
             } else {
-                assert_eq!(actual, Some(RUNFILLED), "CPU manual trace: x={x} should still be unfilled scaffold at tick={tick}");
+                assert_eq!(
+                    actual,
+                    Some(RUNFILLED),
+                    "CPU manual trace: x={x} should still be unfilled scaffold at tick={tick}"
+                );
             }
         }
     }
@@ -1031,7 +1399,12 @@ fn starvation_rules(low_threshold: u32) -> HashMap<CellType, Vec<Rule>> {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let rule_low = Rule {
         id: vec![CellType(1)],
@@ -1047,7 +1420,9 @@ fn starvation_rules(low_threshold: u32) -> HashMap<CellType, Vec<Rule>> {
         starvation_after: Some(low_threshold),
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut idx = HashMap::new();
     idx.insert(CellType(1), vec![rule_high, rule_low]);
@@ -1079,7 +1454,8 @@ fn test_gpu_v2_starvation_matches_cpu_periodic_progress() {
 
     let rule_index = starvation_rules(K);
     let mut cpu_engine = Engine::new(grid, rule_index.clone());
-    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index).expect("starvation_after is within the v2 subset");
+    let mut gpu_engine =
+        GpuEngine::new(width, 1, &initial, &rule_index).expect("starvation_after is within the v2 subset");
 
     let mut low_wins_at_cpu = Vec::new();
     let mut low_wins_at_gpu = Vec::new();
@@ -1091,8 +1467,14 @@ fn test_gpu_v2_starvation_matches_cpu_periodic_progress() {
         for x in 0..width {
             let cpu_cell = cpu_engine.grid().get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x}");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x}"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x}"
+            );
         }
 
         match cpu_engine.grid().get_cell(1, 0).map(|c| c.value.0 .0) {
@@ -1110,8 +1492,14 @@ fn test_gpu_v2_starvation_matches_cpu_periodic_progress() {
     // Ручная проверка (не просто "GPU совпал с CPU"): LOW обязан побеждать
     // РОВНО каждый (K+1)-й тик, ни чаще, ни реже.
     let expected: Vec<u32> = (1..=TOTAL_TICKS).filter(|t| t % (K + 1) == 0).collect();
-    assert_eq!(low_wins_at_cpu, expected, "CPU manual model: LOW must win exactly every (K+1)-th tick");
-    assert_eq!(low_wins_at_gpu, expected, "GPU manual model: LOW must win exactly every (K+1)-th tick");
+    assert_eq!(
+        low_wins_at_cpu, expected,
+        "CPU manual model: LOW must win exactly every (K+1)-th tick"
+    );
+    assert_eq!(
+        low_wins_at_gpu, expected,
+        "GPU manual model: LOW must win exactly every (K+1)-th tick"
+    );
 }
 
 /// Угловой случай `starvation_after: Some(0)` на GPU: побеждает СРАЗУ, с
@@ -1127,14 +1515,22 @@ fn test_gpu_v2_starvation_threshold_zero_wins_immediately() {
     let initial = vec![(0usize, 0usize, Cell::new(1))];
 
     let rule_index = starvation_rules(0);
-    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index).expect("starvation_after: Some(0) is within the v2 subset");
+    let mut gpu_engine =
+        GpuEngine::new(width, 1, &initial, &rule_index).expect("starvation_after: Some(0) is within the v2 subset");
 
     run_tick(&mut cpu_grid, &rule_index);
     gpu_engine.run_tick();
     let gpu_result = gpu_engine.read_grid();
 
-    assert_eq!(cpu_grid.get_cell(1, 0).map(|c| c.value.0 .0), Some(200), "CPU: threshold 0 must win immediately on tick 1");
-    assert_eq!(gpu_result[1].value.0 .0, 200, "GPU: threshold 0 must win immediately on tick 1 -- must NOT be silently treated as disabled");
+    assert_eq!(
+        cpu_grid.get_cell(1, 0).map(|c| c.value.0 .0),
+        Some(200),
+        "CPU: threshold 0 must win immediately on tick 1"
+    );
+    assert_eq!(
+        gpu_result[1].value.0 .0, 200,
+        "GPU: threshold 0 must win immediately on tick 1 -- must NOT be silently treated as disabled"
+    );
 }
 
 /// Совмещает `starvation_after` с гибридным CPU-fallback: RULE_HIGH
@@ -1187,7 +1583,12 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
         overflow: OverflowAction::Discard,
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let rule_low = Rule {
         id: vec![CellType(HEAD)],
@@ -1203,7 +1604,9 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
         starvation_after: Some(1),
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut rule_index: HashMap<CellType, Vec<Rule>> = HashMap::new();
     rule_index.insert(CellType(HEAD), vec![rule_high, rule_low]);
@@ -1212,7 +1615,10 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
     let mut grid = Grid::new(storage, HashSet::new());
     let mut initial = Vec::new();
     for x in 0..CHAIN_LEN {
-        let cell = Cell { value: CellValue::new(HEAD), born_at: 0 };
+        let cell = Cell {
+            value: CellValue::new(HEAD),
+            born_at: 0,
+        };
         grid.set_cell(x, 0, cell);
         initial.push((x, 0usize, cell));
     }
@@ -1221,8 +1627,8 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
     // doc-комментарий про то, почему свободная функция непригодна как
     // эталон для `starvation_after`.
     let mut cpu_engine = Engine::new(grid, rule_index.clone());
-    let mut gpu_engine =
-        GpuEngine::new(width, 1, &initial, &rule_index).expect("starvation_after + long conflict chain is within the v2 subset");
+    let mut gpu_engine = GpuEngine::new(width, 1, &initial, &rule_index)
+        .expect("starvation_after + long conflict chain is within the v2 subset");
 
     for tick in 1..=3 {
         cpu_engine.run_tick();
@@ -1231,8 +1637,14 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
         for x in 0..width {
             let cpu_cell = cpu_engine.grid().get_cell(x, 0).copied().unwrap_or_default();
             let gpu_cell = gpu_result[x];
-            assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x} (starvation + CPU-fallback chain)");
-            assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x}");
+            assert_eq!(
+                cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                "value mismatch at tick={tick} x={x} (starvation + CPU-fallback chain)"
+            );
+            assert_eq!(
+                cpu_cell.born_at, gpu_cell.born_at,
+                "born_at mismatch at tick={tick} x={x}"
+            );
         }
     }
 
@@ -1242,7 +1654,11 @@ fn test_gpu_v2_starvation_survives_cpu_fallback_long_chain() {
     // -- новая клетка, впервые захваченная RULE_LOW's собственным
     // неймингом на этом тике).
     for x in 0..CHAIN_LEN {
-        assert_eq!(cpu_engine.grid().get_cell(x, 0).map(|c| c.value.0 .0), Some(9), "CPU manual trace: x={x} must be 9 (RULE_LOW) by tick 2, staying 9 through tick 3");
+        assert_eq!(
+            cpu_engine.grid().get_cell(x, 0).map(|c| c.value.0 .0),
+            Some(9),
+            "CPU manual trace: x={x} must be 9 (RULE_LOW) by tick 2, staying 9 through tick 3"
+        );
     }
 }
 
@@ -1275,9 +1691,14 @@ fn feedback_mover_rule(timeout: u64) -> Rule {
         cam: None,
         tie_break: 0,
         starvation_after: None,
-        feedback: Some(cellaria::types::FeedbackSpec { timeout, new_direction: Direction::Down }),
+        feedback: Some(cellaria::types::FeedbackSpec {
+            timeout,
+            new_direction: Direction::Down,
+        }),
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1307,7 +1728,8 @@ fn test_gpu_v2_feedback_switches_direction_after_timeout_matches_cpu() {
     // хранящий счётчик между тиками, ровно как у `starvation_after`'s
     // тестов выше.
     let mut cpu_engine = Engine::new(grid, rule_index.clone());
-    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index).expect("feedback (single non-broadcast shift) is within the v2 subset");
+    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index)
+        .expect("feedback (single non-broadcast shift) is within the v2 subset");
 
     for tick in 1..=TOTAL_TICKS {
         cpu_engine.run_tick();
@@ -1318,8 +1740,14 @@ fn test_gpu_v2_feedback_switches_direction_after_timeout_matches_cpu() {
             for x in 0..width {
                 let cpu_cell = cpu_engine.grid().get_cell(x, y).copied().unwrap_or_default();
                 let gpu_cell = gpu_result[y * width + x];
-                assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x} y={y}");
-                assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} y={y}");
+                assert_eq!(
+                    cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                    "value mismatch at tick={tick} x={x} y={y}"
+                );
+                assert_eq!(
+                    cpu_cell.born_at, gpu_cell.born_at,
+                    "born_at mismatch at tick={tick} x={x} y={y}"
+                );
             }
         }
     }
@@ -1353,12 +1781,16 @@ fn test_gpu_v2_feedback_timeout_zero_switches_immediately() {
     rule_index.insert(CellType(1), vec![feedback_mover_rule(0)]);
     let initial = vec![(0usize, 0usize, Cell::new(1))];
 
-    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index).expect("feedback: timeout 0 is within the v2 subset");
+    let mut gpu_engine =
+        GpuEngine::new(width, height, &initial, &rule_index).expect("feedback: timeout 0 is within the v2 subset");
     gpu_engine.run_tick();
     let gpu_result = gpu_engine.read_grid();
 
     assert_eq!(gpu_result[0].value.0 .0, 0, "source must be cleared after the shift");
-    assert_eq!(gpu_result[width].value.0 .0, 1, "timeout=0 must switch to Down on tick 1, not Right");
+    assert_eq!(
+        gpu_result[width].value.0 .0, 1,
+        "timeout=0 must switch to Down on tick 1, not Right"
+    );
 }
 
 fn feedback_mover_rule_priority(timeout: u64, priority: u32) -> Rule {
@@ -1374,9 +1806,14 @@ fn feedback_mover_rule_priority(timeout: u64, priority: u32) -> Rule {
         cam: None,
         tie_break: 0,
         starvation_after: None,
-        feedback: Some(cellaria::types::FeedbackSpec { timeout, new_direction: Direction::Down }),
+        feedback: Some(cellaria::types::FeedbackSpec {
+            timeout,
+            new_direction: Direction::Down,
+        }),
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1402,7 +1839,9 @@ fn contender_self_write_rule(priority: u32, literal: u8) -> Rule {
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1454,8 +1893,8 @@ fn test_gpu_v2_feedback_relocate_survives_genuine_cross_rule_contention() {
     grid.set_cell(3, 0, Cell::new(2));
 
     let mut cpu_engine = Engine::new(grid, rule_index.clone());
-    let mut gpu_engine =
-        GpuEngine::new(width, height, &initial, &rule_index).expect("feedback vs a lower-priority contending self-write rule is within the v2 subset");
+    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index)
+        .expect("feedback vs a lower-priority contending self-write rule is within the v2 subset");
 
     let mut switched_at_cpu: Option<u32> = None;
     let mut switched_at_gpu: Option<u32> = None;
@@ -1469,24 +1908,41 @@ fn test_gpu_v2_feedback_relocate_survives_genuine_cross_rule_contention() {
             for x in 0..width {
                 let cpu_cell = cpu_engine.grid().get_cell(x, y).copied().unwrap_or_default();
                 let gpu_cell = gpu_result[y * width + x];
-                assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x} y={y}");
-                assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} y={y}");
+                assert_eq!(
+                    cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                    "value mismatch at tick={tick} x={x} y={y}"
+                );
+                assert_eq!(
+                    cpu_cell.born_at, gpu_cell.born_at,
+                    "born_at mismatch at tick={tick} x={x} y={y}"
+                );
             }
         }
 
         // A -- единственная голова `1` на решётке; "переключилась" = где-то
         // на строке > 1 появилась голова `1` (Down уводит её из строки 1
         // навсегда, Right держит её в строке 1).
-        if switched_at_cpu.is_none() && (0..width).any(|x| (2..height).any(|y| cpu_engine.grid().get_cell(x, y).map(|c| c.value.0 .0) == Some(1))) {
+        if switched_at_cpu.is_none()
+            && (0..width)
+                .any(|x| (2..height).any(|y| cpu_engine.grid().get_cell(x, y).map(|c| c.value.0 .0) == Some(1)))
+        {
             switched_at_cpu = Some(tick);
         }
-        if switched_at_gpu.is_none() && (0..width).any(|x| (2..height).any(|y| gpu_result[y * width + x].value.0 .0 == 1)) {
+        if switched_at_gpu.is_none()
+            && (0..width).any(|x| (2..height).any(|y| gpu_result[y * width + x].value.0 .0 == 1))
+        {
             switched_at_gpu = Some(tick);
         }
     }
 
-    assert!(switched_at_cpu.is_some(), "CPU sanity: A must switch to Down within TOTAL_TICKS ticks (TIMEOUT={TIMEOUT})");
-    assert_eq!(switched_at_cpu, switched_at_gpu, "switch tick must match between CPU and GPU -- a corrupted feedback counter would desync this");
+    assert!(
+        switched_at_cpu.is_some(),
+        "CPU sanity: A must switch to Down within TOTAL_TICKS ticks (TIMEOUT={TIMEOUT})"
+    );
+    assert_eq!(
+        switched_at_cpu, switched_at_gpu,
+        "switch tick must match between CPU and GPU -- a corrupted feedback counter would desync this"
+    );
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1532,7 +1988,9 @@ fn memory_neighbor_type_mover_rule(window: usize) -> Rule {
             window,
             record_trigger: RecordTrigger::NeighborType(Direction::Up),
             match_pattern: vec![RecordedValue::Type(CellType(0)); window],
-        }), max_activations: None, cross_layer_reads: Vec::new(),
+        }),
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
@@ -1556,7 +2014,8 @@ fn test_gpu_v2_memory_neighbor_type_gate_and_relocation_matches_cpu() {
     // вызовами `run_tick`, свободная функция гарантированно даёт свежий
     // пустой буфер на КАЖДЫЙ вызов (documented no-op).
     let mut cpu_engine = Engine::new(grid, rule_index.clone());
-    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index).expect("memory (NeighborType, one non-broadcast shift, window within cap) is within the v2 subset");
+    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index)
+        .expect("memory (NeighborType, one non-broadcast shift, window within cap) is within the v2 subset");
 
     for tick in 1..=TOTAL_TICKS {
         cpu_engine.run_tick();
@@ -1567,8 +2026,14 @@ fn test_gpu_v2_memory_neighbor_type_gate_and_relocation_matches_cpu() {
             for x in 0..width {
                 let cpu_cell = cpu_engine.grid().get_cell(x, y).copied().unwrap_or_default();
                 let gpu_cell = gpu_result[y * width + x];
-                assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x} y={y}");
-                assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} y={y}");
+                assert_eq!(
+                    cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                    "value mismatch at tick={tick} x={x} y={y}"
+                );
+                assert_eq!(
+                    cpu_cell.born_at, gpu_cell.born_at,
+                    "born_at mismatch at tick={tick} x={x} y={y}"
+                );
             }
         }
     }
@@ -1620,7 +2085,13 @@ fn test_gpu_v2_memory_rule_outcome_gate_oscillates_matches_cpu() {
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: Some(MemorySpec { window: 1, record_trigger: RecordTrigger::RuleOutcome, match_pattern: vec![RecordedValue::Missed] }), max_activations: None, cross_layer_reads: Vec::new(),
+        memory: Some(MemorySpec {
+            window: 1,
+            record_trigger: RecordTrigger::RuleOutcome,
+            match_pattern: vec![RecordedValue::Missed],
+        }),
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut rule_index = HashMap::new();
     rule_index.insert(CellType(1), vec![rule]);
@@ -1631,7 +2102,8 @@ fn test_gpu_v2_memory_rule_outcome_gate_oscillates_matches_cpu() {
     grid.set_cell(0, 0, Cell::new(1));
 
     let mut cpu_engine = Engine::new(grid, rule_index.clone());
-    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index).expect("memory (RuleOutcome, no shift, window=1) is within the v2 subset");
+    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index)
+        .expect("memory (RuleOutcome, no shift, window=1) is within the v2 subset");
 
     for tick in 1..=TOTAL_TICKS {
         cpu_engine.run_tick();
@@ -1642,8 +2114,14 @@ fn test_gpu_v2_memory_rule_outcome_gate_oscillates_matches_cpu() {
             for x in 0..width {
                 let cpu_cell = cpu_engine.grid().get_cell(x, y).copied().unwrap_or_default();
                 let gpu_cell = gpu_result[y * width + x];
-                assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x} y={y}");
-                assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} y={y}");
+                assert_eq!(
+                    cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                    "value mismatch at tick={tick} x={x} y={y}"
+                );
+                assert_eq!(
+                    cpu_cell.born_at, gpu_cell.born_at,
+                    "born_at mismatch at tick={tick} x={x} y={y}"
+                );
             }
         }
     }
@@ -1694,7 +2172,9 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let rule_low = Rule {
         id: vec![CellType(1)],
@@ -1714,7 +2194,9 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
             window: 1,
             record_trigger: RecordTrigger::NeighborType(Direction::Down),
             match_pattern: vec![RecordedValue::Type(CellType(7))],
-        }), max_activations: None, cross_layer_reads: Vec::new(),
+        }),
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let beacon7 = Rule {
         id: vec![CellType(7)],
@@ -1730,7 +2212,9 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let beacon8 = Rule {
         id: vec![CellType(8)],
@@ -1746,7 +2230,9 @@ fn starvation_plus_memory_rules(threshold: u32) -> HashMap<CellType, Vec<Rule>> 
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut idx = HashMap::new();
     idx.insert(CellType(1), vec![rule_high, rule_low]);
@@ -1771,7 +2257,8 @@ fn test_gpu_v2_starvation_plus_memory_gate_freezes_counter_not_resets_matches_cp
     grid.set_cell(0, 1, Cell::new(7));
 
     let mut cpu_engine = Engine::new(grid, rule_index.clone());
-    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index).expect("starvation_after + memory on the same rule is within the v2 subset");
+    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index)
+        .expect("starvation_after + memory on the same rule is within the v2 subset");
 
     // `starvation_after` резервирует счётчик на КАЖДОЙ победе (см. CPU-side
     // "win -> сброс"), значит RULE_LOW не остаётся на 200 НАВСЕГДА после
@@ -1794,8 +2281,14 @@ fn test_gpu_v2_starvation_plus_memory_gate_freezes_counter_not_resets_matches_cp
             for x in 0..width {
                 let cpu_cell = cpu_engine.grid().get_cell(x, y).copied().unwrap_or_default();
                 let gpu_cell = gpu_result[y * width + x];
-                assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x} y={y}");
-                assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} y={y}");
+                assert_eq!(
+                    cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                    "value mismatch at tick={tick} x={x} y={y}"
+                );
+                assert_eq!(
+                    cpu_cell.born_at, gpu_cell.born_at,
+                    "born_at mismatch at tick={tick} x={x} y={y}"
+                );
             }
         }
 
@@ -1816,7 +2309,10 @@ fn test_gpu_v2_starvation_plus_memory_gate_freezes_counter_not_resets_matches_cp
     // CPU — но именно РАСХОЖДЕНИЕ между ними, пойманное построчным циклом
     // выше, было первым, самым прямым сигналом бага).
     assert!(!low_wins_at_cpu.is_empty(), "CPU manual trace: RULE_LOW must win via starvation at least once within {TOTAL_TICKS} ticks (frozen counter accumulates across gate-open ticks)");
-    assert_eq!(low_wins_at_cpu, low_wins_at_gpu, "GPU must win via starvation on EXACTLY the same ticks as CPU");
+    assert_eq!(
+        low_wins_at_cpu, low_wins_at_gpu,
+        "GPU must win via starvation on EXACTLY the same ticks as CPU"
+    );
 }
 
 /// `Rule::feedback` COMBINED with `Rule::memory` on the SAME rule — same
@@ -1851,13 +2347,18 @@ fn feedback_plus_memory_rules(feedback_timeout: u64, memory_window: usize) -> Ha
         cam: None,
         tie_break: 0,
         starvation_after: None,
-        feedback: Some(FeedbackSpec { timeout: feedback_timeout, new_direction: Direction::Down }),
+        feedback: Some(FeedbackSpec {
+            timeout: feedback_timeout,
+            new_direction: Direction::Down,
+        }),
         recursion: None,
         memory: Some(MemorySpec {
             window: memory_window,
             record_trigger: RecordTrigger::NeighborType(Direction::Down),
             match_pattern: vec![RecordedValue::Type(CellType(7)); memory_window],
-        }), max_activations: None, cross_layer_reads: Vec::new(),
+        }),
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let beacon7 = Rule {
         id: vec![CellType(7)],
@@ -1873,7 +2374,9 @@ fn feedback_plus_memory_rules(feedback_timeout: u64, memory_window: usize) -> Ha
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let beacon8 = Rule {
         id: vec![CellType(8)],
@@ -1889,7 +2392,9 @@ fn feedback_plus_memory_rules(feedback_timeout: u64, memory_window: usize) -> Ha
         starvation_after: None,
         feedback: None,
         recursion: None,
-        memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let mut idx = HashMap::new();
     idx.insert(CellType(1), vec![marker]);
@@ -1919,7 +2424,8 @@ fn test_gpu_v2_feedback_plus_memory_gate_freezes_latch_not_resets_matches_cpu() 
     }
 
     let mut cpu_engine = Engine::new(grid, rule_index.clone());
-    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index).expect("feedback + memory on the same rule is within the v2 subset");
+    let mut gpu_engine = GpuEngine::new(width, height, &initial, &rule_index)
+        .expect("feedback + memory on the same rule is within the v2 subset");
 
     // Отслеживаем, на каком тике (если вообще) маркер впервые оказывается в
     // строке 1 (переключился на Down) — сканируем ВСЮ строку, не
@@ -1940,12 +2446,20 @@ fn test_gpu_v2_feedback_plus_memory_gate_freezes_latch_not_resets_matches_cpu() 
             for x in 0..width {
                 let cpu_cell = cpu_engine.grid().get_cell(x, y).copied().unwrap_or_default();
                 let gpu_cell = gpu_result[y * width + x];
-                assert_eq!(cpu_cell.value.0 .0, gpu_cell.value.0 .0, "value mismatch at tick={tick} x={x} y={y}");
-                assert_eq!(cpu_cell.born_at, gpu_cell.born_at, "born_at mismatch at tick={tick} x={x} y={y}");
+                assert_eq!(
+                    cpu_cell.value.0 .0, gpu_cell.value.0 .0,
+                    "value mismatch at tick={tick} x={x} y={y}"
+                );
+                assert_eq!(
+                    cpu_cell.born_at, gpu_cell.born_at,
+                    "born_at mismatch at tick={tick} x={x} y={y}"
+                );
             }
         }
 
-        if switched_at_cpu.is_none() && (0..width).any(|x| cpu_engine.grid().get_cell(x, 1).map(|c| c.value.0 .0) == Some(1)) {
+        if switched_at_cpu.is_none()
+            && (0..width).any(|x| cpu_engine.grid().get_cell(x, 1).map(|c| c.value.0 .0) == Some(1))
+        {
             switched_at_cpu = Some(tick);
         }
         if switched_at_gpu.is_none() && (0..width).any(|x| gpu_result[width + x].value.0 .0 == 1) {
@@ -1962,5 +2476,8 @@ fn test_gpu_v2_feedback_plus_memory_gate_freezes_latch_not_resets_matches_cpu() 
     // движение Right (уходя за правый край решётки, Discard) без
     // переключения вовсе.
     assert!(switched_at_cpu.is_some(), "CPU manual trace: marker must switch to Down within {TOTAL_TICKS} ticks (frozen latch accumulates across gate-open ticks)");
-    assert_eq!(switched_at_cpu, switched_at_gpu, "GPU must switch direction on EXACTLY the same tick as CPU");
+    assert_eq!(
+        switched_at_cpu, switched_at_gpu,
+        "GPU must switch direction on EXACTLY the same tick as CPU"
+    );
 }

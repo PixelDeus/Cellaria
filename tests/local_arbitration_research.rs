@@ -99,7 +99,12 @@ fn rule_strategy() -> impl Strategy<Value = Rule> {
                 overflow,
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }
         })
 }
@@ -122,9 +127,8 @@ fn make_rule_index(rules: &[Rule]) -> HashMap<CellType, Vec<Rule>> {
 }
 
 fn grid_strategy() -> impl Strategy<Value = (usize, usize, Vec<u8>)> {
-    (MIN_SIDE..=MAX_SIDE, MIN_SIDE..=MAX_SIDE).prop_flat_map(|(w, h)| {
-        prop::collection::vec(0..=CELL_ALPHABET, w * h).prop_map(move |cells| (w, h, cells))
-    })
+    (MIN_SIDE..=MAX_SIDE, MIN_SIDE..=MAX_SIDE)
+        .prop_flat_map(|(w, h)| prop::collection::vec(0..=CELL_ALPHABET, w * h).prop_map(move |cells| (w, h, cells)))
 }
 
 fn build_grid(width: usize, height: usize, cells: &[u8]) -> Grid<VecStorage> {
@@ -134,7 +138,14 @@ fn build_grid(width: usize, height: usize, cells: &[u8]) -> Grid<VecStorage> {
         if v != 0 {
             let x = i % width;
             let y = i / width;
-            grid.set_cell(x, y, Cell { value: CellValue(CellType(v)), born_at: 0 });
+            grid.set_cell(
+                x,
+                y,
+                Cell {
+                    value: CellValue(CellType(v)),
+                    born_at: 0,
+                },
+            );
         }
     }
     grid
@@ -245,7 +256,14 @@ fn local_arbitrate(
                 .collect::<HashSet<_>>()
                 .into_iter()
                 .collect();
-            Candidate { m, priority, age, rule_id_key, cells, status: Status::Alive }
+            Candidate {
+                m,
+                priority,
+                age,
+                rule_id_key,
+                cells,
+                status: Status::Alive,
+            }
         })
         .collect();
 
@@ -273,11 +291,10 @@ fn local_arbitrate(
                 continue;
             }
             let my_key = key(c);
-            let wins_everywhere = c.cells.iter().all(|cell| {
-                cell_map[cell]
-                    .iter()
-                    .all(|&j| j == i || my_key > key(&candidates[j]))
-            });
+            let wins_everywhere = c
+                .cells
+                .iter()
+                .all(|cell| cell_map[cell].iter().all(|&j| j == i || my_key > key(&candidates[j])));
             if wins_everywhere {
                 newly_confirmed.push(i);
             }

@@ -89,26 +89,41 @@ impl RuleStateStore {
     /// именно эту часть; экономит он проходы по картам счётчиков
     /// (потенциально много больше числа правил), которые без проверки
     /// выполнялись бы даже когда набор правил не менялся вовсе.
-    pub(crate) fn invalidate_stale<S: GridStorage>(&mut self, new_rule_index: &HashMap<CellType, Vec<Rule>>, grid: &Grid<S>) {
+    pub(crate) fn invalidate_stale<S: GridStorage>(
+        &mut self,
+        new_rule_index: &HashMap<CellType, Vec<Rule>>,
+        grid: &Grid<S>,
+    ) {
         if self.last_rebuilt_rule_index == *new_rule_index {
             return;
         }
-        let heads: FxHashSet<CellType> = self.last_rebuilt_rule_index.keys().chain(new_rule_index.keys()).copied().collect();
+        let heads: FxHashSet<CellType> = self
+            .last_rebuilt_rule_index
+            .keys()
+            .chain(new_rule_index.keys())
+            .copied()
+            .collect();
         for head in heads {
             let old = self.last_rebuilt_rule_index.get(&head);
             let new = new_rule_index.get(&head);
             let len = old.map_or(0, |o| o.len()).max(new.map_or(0, |n| n.len()));
-            let stale: FxHashSet<usize> = (0..len).filter(|&i| old.and_then(|o| o.get(i)) != new.and_then(|n| n.get(i))).collect();
+            let stale: FxHashSet<usize> = (0..len)
+                .filter(|&i| old.and_then(|o| o.get(i)) != new.and_then(|n| n.get(i)))
+                .collect();
             if stale.is_empty() {
                 continue;
             }
             let matches_head = |x: u32, y: u32| grid.get_cell(x as usize, y as usize).map(|c| c.value.0) == Some(head);
-            self.feedback_counters.retain(|&(x, y, idx), _| !stale.contains(&idx) || !matches_head(x, y));
-            self.memory_buffers.retain(|&(x, y, idx), _| !stale.contains(&idx) || !matches_head(x, y));
-            self.starvation_counters.retain(|&(x, y, idx), _| !stale.contains(&idx) || !matches_head(x, y));
+            self.feedback_counters
+                .retain(|&(x, y, idx), _| !stale.contains(&idx) || !matches_head(x, y));
+            self.memory_buffers
+                .retain(|&(x, y, idx), _| !stale.contains(&idx) || !matches_head(x, y));
+            self.starvation_counters
+                .retain(|&(x, y, idx), _| !stale.contains(&idx) || !matches_head(x, y));
             // `activation_counters` ключуется `(head, rule_idx)` БЕЗ позиции
             // -- не нужен grid-лукап, `head` уже прямо в ключе.
-            self.activation_counters.retain(|&(h, idx), _| h != head || !stale.contains(&idx));
+            self.activation_counters
+                .retain(|&(h, idx), _| h != head || !stale.contains(&idx));
         }
         self.last_rebuilt_rule_index = new_rule_index.clone();
     }

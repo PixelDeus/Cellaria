@@ -60,14 +60,23 @@ fn make_rule(id: Vec<CellType>, priority: u32, changes: Vec<(i32, i32, crate::ty
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     }
 }
 
 #[test]
 fn test_rule_store_apply_add() {
     let mut store = RuleStore::new();
-    let rule = make_rule(vec![CellType(1)], 10, vec![(0, 0, crate::types::ChangeValue::Literal(2))]);
+    let rule = make_rule(
+        vec![CellType(1)],
+        10,
+        vec![(0, 0, crate::types::ChangeValue::Literal(2))],
+    );
     assert!(store.apply(CompletedOp {
         op: RuleOp::AddRule(rule)
     }));
@@ -77,7 +86,11 @@ fn test_rule_store_apply_add() {
 
 #[test]
 fn test_rule_store_apply_remove() {
-    let rule = make_rule(vec![CellType(1)], 10, vec![(0, 0, crate::types::ChangeValue::Literal(2))]);
+    let rule = make_rule(
+        vec![CellType(1)],
+        10,
+        vec![(0, 0, crate::types::ChangeValue::Literal(2))],
+    );
     let mut store = RuleStore::with_rules(vec![rule]);
     store.dirty = false;
     assert!(store.apply(CompletedOp {
@@ -89,38 +102,46 @@ fn test_rule_store_apply_remove() {
 #[test]
 fn test_rule_store_apply_clear() {
     let rules = vec![
-        make_rule(vec![CellType(1)], 10, vec![(0, 0, crate::types::ChangeValue::Literal(2))]),
-        make_rule(vec![CellType(3)], 5, vec![(0, 0, crate::types::ChangeValue::Literal(4))]),
+        make_rule(
+            vec![CellType(1)],
+            10,
+            vec![(0, 0, crate::types::ChangeValue::Literal(2))],
+        ),
+        make_rule(
+            vec![CellType(3)],
+            5,
+            vec![(0, 0, crate::types::ChangeValue::Literal(4))],
+        ),
     ];
     let mut store = RuleStore::with_rules(rules);
     store.dirty = false;
-    assert!(store.apply(CompletedOp {
-        op: RuleOp::ClearAll
-    }));
+    assert!(store.apply(CompletedOp { op: RuleOp::ClearAll }));
     assert_eq!(store.rules().len(), 0);
 }
 
 #[test]
 fn test_get_index_rebuilds_when_dirty() {
-    let rule = make_rule(vec![CellType(5)], 10, vec![(0, 0, crate::types::ChangeValue::Literal(6))]);
+    let rule = make_rule(
+        vec![CellType(5)],
+        10,
+        vec![(0, 0, crate::types::ChangeValue::Literal(6))],
+    );
     let mut store = RuleStore::with_rules(vec![rule]);
     store.get_index();
 
-    let new_rule = make_rule(vec![CellType(7)], 5, vec![(0, 0, crate::types::ChangeValue::Literal(8))]);
+    let new_rule = make_rule(
+        vec![CellType(7)],
+        5,
+        vec![(0, 0, crate::types::ChangeValue::Literal(8))],
+    );
     store.apply(CompletedOp {
         op: RuleOp::AddRule(new_rule),
     });
     assert!(store.dirty, "dirty should be set after apply");
 
     let index = store.get_index();
-    assert!(
-        index.contains_key(&CellType(5)),
-        "Index should include original rule"
-    );
-    assert!(
-        index.contains_key(&CellType(7)),
-        "Index should include new rule"
-    );
+    assert!(index.contains_key(&CellType(5)), "Index should include original rule");
+    assert!(index.contains_key(&CellType(7)), "Index should include new rule");
     assert!(!store.dirty, "dirty should be false after rebuild");
 }
 
@@ -140,22 +161,34 @@ fn test_drain_rule_channel_basic() {
     grid.set_boundary(0, 0, bb);
     // Симулируем вывод в граничный буфер (через канал 0)
     if let Some(buf) = grid.get_boundary_mut(0, 0) {
-        buf.enqueue(0, Cell {
-            value: CellValue(CellType(10)),
-            born_at: 0,
-        });
-        buf.enqueue(0, Cell {
-            value: CellValue(CellType(1)),
-            born_at: 0,
-        });
-        buf.enqueue(0, Cell {
-            value: CellValue(CellType(5)),
-            born_at: 0,
-        });
-        buf.enqueue(0, Cell {
-            value: CellValue(CellType(255)),
-            born_at: 0,
-        });
+        buf.enqueue(
+            0,
+            Cell {
+                value: CellValue(CellType(10)),
+                born_at: 0,
+            },
+        );
+        buf.enqueue(
+            0,
+            Cell {
+                value: CellValue(CellType(1)),
+                born_at: 0,
+            },
+        );
+        buf.enqueue(
+            0,
+            Cell {
+                value: CellValue(CellType(5)),
+                born_at: 0,
+            },
+        );
+        buf.enqueue(
+            0,
+            Cell {
+                value: CellValue(CellType(255)),
+                born_at: 0,
+            },
+        );
     }
 
     let mut store = RuleStore::new();
@@ -198,13 +231,19 @@ fn test_drain_rule_channel_keeps_independent_boundaries_separate() {
         if i < packet_a.len() {
             grid.get_boundary_mut(0, 0).unwrap().enqueue(
                 0,
-                Cell { value: CellValue(CellType(packet_a[i])), born_at: 0 },
+                Cell {
+                    value: CellValue(CellType(packet_a[i])),
+                    born_at: 0,
+                },
             );
         }
         if i >= 1 && i - 1 < packet_b.len() {
             grid.get_boundary_mut(5, 0).unwrap().enqueue(
                 0,
-                Cell { value: CellValue(CellType(packet_b[i - 1])), born_at: 0 },
+                Cell {
+                    value: CellValue(CellType(packet_b[i - 1])),
+                    born_at: 0,
+                },
             );
         }
         all_ops.extend(store.drain_rule_channel(&mut grid));
@@ -212,11 +251,15 @@ fn test_drain_rule_channel_keeps_independent_boundaries_separate() {
 
     assert_eq!(store.error_stats(), 0, "Neither stream should have been corrupted");
     assert!(
-        all_ops.iter().any(|o| matches!(&o.op, RuleOp::AddRule(r) if r.id == vec![CellType(50)] && r.priority == 10)),
+        all_ops
+            .iter()
+            .any(|o| matches!(&o.op, RuleOp::AddRule(r) if r.id == vec![CellType(50)] && r.priority == 10)),
         "Packet A must decode correctly despite overlapping with B"
     );
     assert!(
-        all_ops.iter().any(|o| matches!(&o.op, RuleOp::AddRule(r) if r.id == vec![CellType(60)] && r.priority == 20)),
+        all_ops
+            .iter()
+            .any(|o| matches!(&o.op, RuleOp::AddRule(r) if r.id == vec![CellType(60)] && r.priority == 20)),
         "Packet B must decode correctly despite overlapping with A"
     );
 }
@@ -229,10 +272,13 @@ fn test_decode_errors_increments_on_bad_packet() {
     grid.set_boundary(0, 0, bb);
     // Corrupted data: just 255 (empty packet = error)
     if let Some(buf) = grid.get_boundary_mut(0, 0) {
-        buf.enqueue(0, Cell {
-            value: CellValue(CellType(255)),
-            born_at: 0,
-        });
+        buf.enqueue(
+            0,
+            Cell {
+                value: CellValue(CellType(255)),
+                born_at: 0,
+            },
+        );
     }
 
     let mut store = RuleStore::new();
@@ -277,7 +323,12 @@ fn test_integration_self_modification() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
 
     // 3) Правило 2: id=[9], priority=5,
@@ -292,7 +343,12 @@ fn test_integration_self_modification() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
 
     // 4) RuleStore с правилом 1
@@ -305,10 +361,34 @@ fn test_integration_self_modification() {
         grid.set_boundary(0, 0, bb);
     }
     if let Some(buf) = grid.get_boundary_mut(0, 0) {
-        buf.enqueue(0, Cell { value: CellValue(CellType(5)), born_at: 0 });
-        buf.enqueue(0, Cell { value: CellValue(CellType(1)), born_at: 0 });
-        buf.enqueue(0, Cell { value: CellValue(CellType(9)), born_at: 0 });
-        buf.enqueue(0, Cell { value: CellValue(CellType(255)), born_at: 0 });
+        buf.enqueue(
+            0,
+            Cell {
+                value: CellValue(CellType(5)),
+                born_at: 0,
+            },
+        );
+        buf.enqueue(
+            0,
+            Cell {
+                value: CellValue(CellType(1)),
+                born_at: 0,
+            },
+        );
+        buf.enqueue(
+            0,
+            Cell {
+                value: CellValue(CellType(9)),
+                born_at: 0,
+            },
+        );
+        buf.enqueue(
+            0,
+            Cell {
+                value: CellValue(CellType(255)),
+                born_at: 0,
+            },
+        );
     }
 
     // 6) Дренируем канал и применяем
@@ -319,18 +399,11 @@ fn test_integration_self_modification() {
     }
 
     // 7) Проверяем, что в store теперь два правила
-    assert_eq!(
-        store.rules().len(),
-        2,
-        "should have 2 rules after self-modification"
-    );
+    assert_eq!(store.rules().len(), 2, "should have 2 rules after self-modification");
 
     // 8) Проверяем, что индекс перестроился и включает новое правило
     let idx = store.get_index();
-    assert!(
-        idx.contains_key(&CellType(7)),
-        "index should contain rule1"
-    );
+    assert!(idx.contains_key(&CellType(7)), "index should contain rule1");
     assert!(
         idx.contains_key(&CellType(9)),
         "index should contain rule2 after self-modification"
@@ -371,10 +444,15 @@ fn test_add_rule_protocol_cannot_express_feedback_recursion_memory_or_keep_sourc
     let idx = find_terminator(&packet).unwrap();
     let op = deserialize_packet(&packet[..idx]).expect("well-formed AddRule packet must decode");
 
-    let RuleOp::AddRule(rule) = op else { panic!("expected AddRule") };
+    let RuleOp::AddRule(rule) = op else {
+        panic!("expected AddRule")
+    };
 
     assert!(rule.feedback.is_none(), "protocol has no bytes for FeedbackSpec::timeout/new_direction -- must decode to None, not a corrupted/default Some(_)");
-    assert!(rule.recursion.is_none(), "protocol has no bytes for RecursionSpec::max_depth/direction -- must decode to None");
+    assert!(
+        rule.recursion.is_none(),
+        "protocol has no bytes for RecursionSpec::max_depth/direction -- must decode to None"
+    );
     assert!(rule.memory.is_none(), "protocol has no bytes for MemorySpec (which is even variable-length: window + match_pattern) -- must decode to None");
 
     assert_eq!(rule.shifts.len(), 1, "one shift group decoded");
@@ -396,7 +474,9 @@ fn test_add_rule_protocol_ignores_trailing_bytes_after_shift_rather_than_smuggli
     let packet = vec![7u8, 1, 3, SHIFT_FLAG, 0, 2, 1, 0, 9, 255];
     let idx = find_terminator(&packet).unwrap();
     let op = deserialize_packet(&packet[..idx]).expect("well-formed AddRule packet must decode");
-    let RuleOp::AddRule(rule) = op else { panic!("expected AddRule") };
+    let RuleOp::AddRule(rule) = op else {
+        panic!("expected AddRule")
+    };
 
     assert!(rule.feedback.is_none() && rule.recursion.is_none() && rule.memory.is_none());
     assert!(!rule.shifts[0][0].keep_source && !rule.shifts[0][0].broadcast);
@@ -426,7 +506,13 @@ fn test_self_modification_pipeline_never_materializes_the_four_extensions_on_a_r
     let packet_bytes: [u8; 7] = [7, 1, 3, SHIFT_FLAG, 3, 1, 255];
     if let Some(buf) = grid.get_boundary_mut(0, 0) {
         for &b in &packet_bytes {
-            buf.enqueue(0, Cell { value: CellValue(CellType(b)), born_at: 0 });
+            buf.enqueue(
+                0,
+                Cell {
+                    value: CellValue(CellType(b)),
+                    born_at: 0,
+                },
+            );
         }
     }
 
@@ -443,7 +529,10 @@ fn test_self_modification_pipeline_never_materializes_the_four_extensions_on_a_r
         .and_then(|rules| rules.first())
         .expect("received rule must be indexed under its head type");
 
-    assert!(received.feedback.is_none(), "no rule materialized through the self-mod pipeline can carry `feedback` -- the wire format never encoded it");
+    assert!(
+        received.feedback.is_none(),
+        "no rule materialized through the self-mod pipeline can carry `feedback` -- the wire format never encoded it"
+    );
     assert!(received.recursion.is_none(), "same for `recursion`");
     assert!(received.memory.is_none(), "same for `memory`");
     assert!(!received.shifts[0][0].keep_source, "same for `keep_source`");
@@ -504,7 +593,12 @@ fn test_broadcast_shift_roundtrip_via_serializer() {
     let rule = Rule {
         id: vec![CellType(9)],
         pattern: vec![],
-        shifts: vec![vec![crate::types::ShiftSpec { direction: crate::types::Direction::Right, steps: 4, broadcast: true, keep_source: false }]],
+        shifts: vec![vec![crate::types::ShiftSpec {
+            direction: crate::types::Direction::Right,
+            steps: 4,
+            broadcast: true,
+            keep_source: false,
+        }]],
         changes: vec![],
         active_only: false,
         priority: 20,
@@ -512,7 +606,12 @@ fn test_broadcast_shift_roundtrip_via_serializer() {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let packet = serialize_add_rule(&rule).expect("broadcast shift should serialize");
     // No `cam`, priority doesn't collide with any op-code -> stays in the
@@ -526,7 +625,10 @@ fn test_broadcast_shift_roundtrip_via_serializer() {
         RuleOp::AddRule(decoded) => {
             assert_eq!(decoded.id, rule.id);
             assert_eq!(decoded.priority, rule.priority);
-            assert_eq!(decoded.shifts, rule.shifts, "broadcast flag must survive the round trip");
+            assert_eq!(
+                decoded.shifts, rule.shifts,
+                "broadcast flag must survive the round trip"
+            );
         }
         _ => panic!("expected AddRule"),
     }
@@ -538,9 +640,14 @@ fn test_broadcast_shift_packet_hand_assembled() {
     let packet = vec![7u8, 1, 3, SHIFT_EXT_FLAG, 3, 2, 0b0000_0001, 255];
     let idx = find_terminator(&packet).unwrap();
     let op = deserialize_packet(&packet[..idx]).unwrap();
-    let RuleOp::AddRule(rule) = op else { panic!("expected AddRule") };
+    let RuleOp::AddRule(rule) = op else {
+        panic!("expected AddRule")
+    };
     assert_eq!(rule.shifts.len(), 1);
-    assert!(rule.shifts[0][0].broadcast, "flags bit0 set -> broadcast must decode true");
+    assert!(
+        rule.shifts[0][0].broadcast,
+        "flags bit0 set -> broadcast must decode true"
+    );
     assert_eq!(rule.shifts[0][0].steps, 2);
 }
 
@@ -550,14 +657,22 @@ fn test_change_ref_roundtrip_via_serializer() {
         id: vec![CellType(4)],
         pattern: vec![],
         shifts: vec![],
-        changes: vec![(1, 0, crate::types::ChangeValue::Ref(0)), (2, 0, crate::types::ChangeValue::Literal(9))],
+        changes: vec![
+            (1, 0, crate::types::ChangeValue::Ref(0)),
+            (2, 0, crate::types::ChangeValue::Literal(9)),
+        ],
         active_only: false,
         priority: 11,
         min_age: 0,
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let packet = serialize_add_rule(&rule).expect("Ref change should serialize");
     assert_eq!(packet[0], 11, "Ref alone stays in the plain AddRule format");
@@ -566,7 +681,10 @@ fn test_change_ref_roundtrip_via_serializer() {
     let op = deserialize_packet(&packet[..idx]).unwrap();
     match op {
         RuleOp::AddRule(decoded) => {
-            assert_eq!(decoded.changes, rule.changes, "Ref and Literal changes must both survive the round trip, in order");
+            assert_eq!(
+                decoded.changes, rule.changes,
+                "Ref and Literal changes must both survive the round trip, in order"
+            );
         }
         _ => panic!("expected AddRule"),
     }
@@ -578,7 +696,9 @@ fn test_change_ref_packet_hand_assembled() {
     let packet = vec![7u8, 1, 3, CHANGE_REF_FLAG, 1, 0, 2, 255];
     let idx = find_terminator(&packet).unwrap();
     let op = deserialize_packet(&packet[..idx]).unwrap();
-    let RuleOp::AddRule(rule) = op else { panic!("expected AddRule") };
+    let RuleOp::AddRule(rule) = op else {
+        panic!("expected AddRule")
+    };
     assert_eq!(rule.changes, vec![(1i32, 0i32, crate::types::ChangeValue::Ref(2))]);
 }
 
@@ -593,9 +713,17 @@ fn test_cam_roundtrip_via_serializer_uses_extended_format() {
         priority: 30,
         min_age: 0,
         overflow: Default::default(),
-        cam: Some(crate::types::CamSearch { radius: 5, target_type: CellType(2) }),
+        cam: Some(crate::types::CamSearch {
+            radius: 5,
+            target_type: CellType(2),
+        }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let packet = serialize_add_rule(&rule).expect("cam rule should serialize");
     assert_eq!(packet[0], OP_ADD_EXT, "cam requires the AddRuleExtended op-code");
@@ -606,7 +734,13 @@ fn test_cam_roundtrip_via_serializer_uses_extended_format() {
         RuleOp::AddRule(decoded) => {
             assert_eq!(decoded.priority, 30);
             assert_eq!(decoded.id, vec![CellType(6)]);
-            assert_eq!(decoded.cam, Some(crate::types::CamSearch { radius: 5, target_type: CellType(2) }));
+            assert_eq!(
+                decoded.cam,
+                Some(crate::types::CamSearch {
+                    radius: 5,
+                    target_type: CellType(2)
+                })
+            );
             assert!(decoded.shifts.is_empty());
         }
         _ => panic!("expected AddRule"),
@@ -619,10 +753,18 @@ fn test_add_rule_extended_hand_assembled_cam_only() {
     let packet = vec![OP_ADD_EXT, 15, 1, 8, 0b0000_0001, 3, 1, 255];
     let idx = find_terminator(&packet).unwrap();
     let op = deserialize_packet(&packet[..idx]).unwrap();
-    let RuleOp::AddRule(rule) = op else { panic!("expected AddRule") };
+    let RuleOp::AddRule(rule) = op else {
+        panic!("expected AddRule")
+    };
     assert_eq!(rule.priority, 15);
     assert_eq!(rule.id, vec![CellType(8)]);
-    assert_eq!(rule.cam, Some(crate::types::CamSearch { radius: 3, target_type: CellType(1) }));
+    assert_eq!(
+        rule.cam,
+        Some(crate::types::CamSearch {
+            radius: 3,
+            target_type: CellType(1)
+        })
+    );
     assert!(rule.shifts.is_empty());
     assert!(rule.changes.is_empty());
 }
@@ -664,9 +806,13 @@ fn test_recursion_roundtrip_via_serializer_uses_extended_format() {
         tie_break: 0,
         starvation_after: None,
         feedback: None,
-        recursion: Some(crate::types::RecursionSpec { max_depth: 5, direction: crate::types::Direction::Right }),
+        recursion: Some(crate::types::RecursionSpec {
+            max_depth: 5,
+            direction: crate::types::Direction::Right,
+        }),
         memory: None,
-        max_activations: None, cross_layer_reads: Vec::new(),
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let packet = serialize_add_rule(&rule).expect("recursion rule should serialize");
     assert_eq!(packet[0], OP_ADD_EXT, "recursion requires the AddRuleExtended op-code");
@@ -679,10 +825,16 @@ fn test_recursion_roundtrip_via_serializer_uses_extended_format() {
             assert_eq!(decoded.id, vec![CellType(6)]);
             assert_eq!(
                 decoded.recursion,
-                Some(crate::types::RecursionSpec { max_depth: 5, direction: crate::types::Direction::Right })
+                Some(crate::types::RecursionSpec {
+                    max_depth: 5,
+                    direction: crate::types::Direction::Right
+                })
             );
             assert!(decoded.shifts.is_empty());
-            assert_eq!(decoded.changes, vec![(1i32, 0i32, crate::types::ChangeValue::Literal(9))]);
+            assert_eq!(
+                decoded.changes,
+                vec![(1i32, 0i32, crate::types::ChangeValue::Literal(9))]
+            );
         }
         _ => panic!("expected AddRule"),
     }
@@ -695,10 +847,18 @@ fn test_add_rule_extended_hand_assembled_recursion_only() {
     let packet = vec![OP_ADD_EXT, 15, 1, 8, 0b0000_0010, 3, 3, 255];
     let idx = find_terminator(&packet).unwrap();
     let op = deserialize_packet(&packet[..idx]).unwrap();
-    let RuleOp::AddRule(rule) = op else { panic!("expected AddRule") };
+    let RuleOp::AddRule(rule) = op else {
+        panic!("expected AddRule")
+    };
     assert_eq!(rule.priority, 15);
     assert_eq!(rule.id, vec![CellType(8)]);
-    assert_eq!(rule.recursion, Some(crate::types::RecursionSpec { max_depth: 3, direction: crate::types::Direction::Right }));
+    assert_eq!(
+        rule.recursion,
+        Some(crate::types::RecursionSpec {
+            max_depth: 3,
+            direction: crate::types::Direction::Right
+        })
+    );
     assert!(rule.shifts.is_empty());
     assert!(rule.changes.is_empty());
 }
@@ -715,9 +875,23 @@ fn test_add_rule_extended_cam_and_recursion_together_hand_assembled() {
     let packet = vec![OP_ADD_EXT, 15, 1, 8, 0b0000_0011, 3, 1, 2, 0, 255];
     let idx = find_terminator(&packet).unwrap();
     let op = deserialize_packet(&packet[..idx]).unwrap();
-    let RuleOp::AddRule(rule) = op else { panic!("expected AddRule") };
-    assert_eq!(rule.cam, Some(crate::types::CamSearch { radius: 3, target_type: CellType(1) }));
-    assert_eq!(rule.recursion, Some(crate::types::RecursionSpec { max_depth: 2, direction: crate::types::Direction::Up }));
+    let RuleOp::AddRule(rule) = op else {
+        panic!("expected AddRule")
+    };
+    assert_eq!(
+        rule.cam,
+        Some(crate::types::CamSearch {
+            radius: 3,
+            target_type: CellType(1)
+        })
+    );
+    assert_eq!(
+        rule.recursion,
+        Some(crate::types::RecursionSpec {
+            max_depth: 2,
+            direction: crate::types::Direction::Up
+        })
+    );
 }
 
 #[test]
@@ -728,7 +902,10 @@ fn test_add_rule_extended_recursion_with_shifts_rejected() {
     let packet = vec![OP_ADD_EXT, 15, 1, 8, 0b0000_0010, 3, 3, SHIFT_FLAG, 0, 1, 255];
     let idx = find_terminator(&packet).unwrap();
     let result = deserialize_packet(&packet[..idx]);
-    assert!(result.is_err(), "recursion + shifts must be rejected, not silently accepted");
+    assert!(
+        result.is_err(),
+        "recursion + shifts must be rejected, not silently accepted"
+    );
 }
 
 #[test]
@@ -742,7 +919,10 @@ fn test_add_rule_extended_recursion_max_depth_255_rejected() {
     // deserialize_packet) -- isolates the ext_flags/max_depth validation.
     let packet: [u8; 7] = [OP_ADD_EXT, 15, 1, 8, 0b0000_0010, 255, 3];
     let result = deserialize_packet(&packet);
-    assert!(result.is_err(), "recursion max_depth of 255 must be rejected, not decoded as a valid depth");
+    assert!(
+        result.is_err(),
+        "recursion max_depth of 255 must be rejected, not decoded as a valid depth"
+    );
 }
 
 #[test]
@@ -760,12 +940,19 @@ fn test_serializer_rejects_recursion_with_shifts() {
         tie_break: 0,
         starvation_after: None,
         feedback: None,
-        recursion: Some(crate::types::RecursionSpec { max_depth: 2, direction: crate::types::Direction::Right }),
+        recursion: Some(crate::types::RecursionSpec {
+            max_depth: 2,
+            direction: crate::types::Direction::Right,
+        }),
         memory: None,
-        max_activations: None, cross_layer_reads: Vec::new(),
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let result = serialize_add_rule(&rule);
-    assert!(result.is_err(), "recursion + shifts must be rejected by the serializer, matching the deserializer's own check");
+    assert!(
+        result.is_err(),
+        "recursion + shifts must be rejected by the serializer, matching the deserializer's own check"
+    );
 }
 
 #[test]
@@ -783,12 +970,19 @@ fn test_serializer_rejects_recursion_max_depth_255() {
         tie_break: 0,
         starvation_after: None,
         feedback: None,
-        recursion: Some(crate::types::RecursionSpec { max_depth: 255, direction: crate::types::Direction::Right }),
+        recursion: Some(crate::types::RecursionSpec {
+            max_depth: 255,
+            direction: crate::types::Direction::Right,
+        }),
         memory: None,
-        max_activations: None, cross_layer_reads: Vec::new(),
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let result = serialize_add_rule(&rule);
-    assert!(result.is_err(), "recursion max_depth of 255 is unreachable (terminator collision) and must be rejected");
+    assert!(
+        result.is_err(),
+        "recursion max_depth of 255 is unreachable (terminator collision) and must be rejected"
+    );
 }
 
 /// Проверяет, что recursion-правило, пришедшее по каналу самомодификации
@@ -816,14 +1010,24 @@ fn test_add_rule_extended_recursion_end_to_end_through_self_modification_pipelin
         tie_break: 0,
         starvation_after: None,
         feedback: None,
-        recursion: Some(crate::types::RecursionSpec { max_depth: 2, direction: crate::types::Direction::Right }),
+        recursion: Some(crate::types::RecursionSpec {
+            max_depth: 2,
+            direction: crate::types::Direction::Right,
+        }),
         memory: None,
-        max_activations: None, cross_layer_reads: Vec::new(),
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let packet = serialize_add_rule(&rule).expect("recursion rule should serialize");
     if let Some(buf) = grid.get_boundary_mut(0, 0) {
         for &b in &packet {
-            buf.enqueue(0, Cell { value: CellValue(CellType(b)), born_at: 0 });
+            buf.enqueue(
+                0,
+                Cell {
+                    value: CellValue(CellType(b)),
+                    born_at: 0,
+                },
+            );
         }
     }
 
@@ -841,7 +1045,10 @@ fn test_add_rule_extended_recursion_end_to_end_through_self_modification_pipelin
         .expect("received rule must be indexed under its head type");
     assert_eq!(
         received.recursion,
-        Some(crate::types::RecursionSpec { max_depth: 2, direction: crate::types::Direction::Right }),
+        Some(crate::types::RecursionSpec {
+            max_depth: 2,
+            direction: crate::types::Direction::Right
+        }),
         "recursion rule delivered through the self-modification channel must materialize with its RecursionSpec intact"
     );
 }
@@ -857,11 +1064,22 @@ fn test_serializer_rejects_cam_with_shifts() {
         priority: 30,
         min_age: 0,
         overflow: Default::default(),
-        cam: Some(crate::types::CamSearch { radius: 5, target_type: CellType(2) }),
+        cam: Some(crate::types::CamSearch {
+            radius: 5,
+            target_type: CellType(2),
+        }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
-    assert!(serialize_add_rule(&rule).is_err(), "cam + shifts must be rejected by the serializer too, not just the parser");
+    assert!(
+        serialize_add_rule(&rule).is_err(),
+        "cam + shifts must be rejected by the serializer too, not just the parser"
+    );
 }
 
 #[test]
@@ -884,10 +1102,18 @@ fn test_serializer_auto_switches_to_extended_format_for_reserved_priorities() {
             overflow: Default::default(),
             cam: None,
             tie_break: 0,
-            starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            starvation_after: None,
+            feedback: None,
+            recursion: None,
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         };
         let packet = serialize_add_rule(&rule).unwrap();
-        assert_eq!(packet[0], OP_ADD_EXT, "priority {reserved_priority} must be carried via AddRuleExtended, not as the packet's first byte");
+        assert_eq!(
+            packet[0], OP_ADD_EXT,
+            "priority {reserved_priority} must be carried via AddRuleExtended, not as the packet's first byte"
+        );
         assert_eq!(packet[1], reserved_priority as u8);
 
         let idx = find_terminator(&packet).unwrap();
@@ -903,7 +1129,10 @@ fn test_serializer_auto_switches_to_extended_format_for_reserved_priorities() {
 fn test_serializer_rejects_priority_255() {
     let rule = make_rule(vec![CellType(1)], 255, vec![]);
     let result = serialize_add_rule(&rule);
-    assert!(result.is_err(), "priority 255 is unreachable -- would be eaten by the stream-level terminator scan");
+    assert!(
+        result.is_err(),
+        "priority 255 is unreachable -- would be eaten by the stream-level terminator scan"
+    );
 }
 
 #[test]
@@ -911,7 +1140,10 @@ fn test_serializer_rejects_unreachable_change_bytes() {
     use crate::types::ChangeValue;
     // dx = -1 (0xFF byte) -- would collide with the stream-level terminator.
     let rule_dx = make_rule(vec![CellType(1)], 10, vec![(-1, 0, ChangeValue::Literal(5))]);
-    assert!(serialize_add_rule(&rule_dx).is_err(), "dx=-1 (0xFF byte) must be rejected");
+    assert!(
+        serialize_add_rule(&rule_dx).is_err(),
+        "dx=-1 (0xFF byte) must be rejected"
+    );
 
     // value = 255 -- same reason.
     let rule_val = make_rule(vec![CellType(1)], 10, vec![(0, 0, ChangeValue::Literal(255))]);
@@ -919,7 +1151,10 @@ fn test_serializer_rejects_unreachable_change_bytes() {
 
     // dx = -4 (0xFC byte) -- collides with CHANGE_REF_FLAG.
     let rule_ref_collision = make_rule(vec![CellType(1)], 10, vec![(-4, 0, ChangeValue::Literal(5))]);
-    assert!(serialize_add_rule(&rule_ref_collision).is_err(), "dx=-4 (0xFC byte) collides with CHANGE_REF_FLAG and must be rejected");
+    assert!(
+        serialize_add_rule(&rule_ref_collision).is_err(),
+        "dx=-4 (0xFC byte) collides with CHANGE_REF_FLAG and must be rejected"
+    );
 }
 
 #[test]
@@ -928,11 +1163,17 @@ fn test_serializer_rejects_first_change_colliding_with_shift_flags() {
     // No shifts, first (only) change has dx=-2 (0xFE) -- collides with
     // SHIFT_FLAG at the exact position the shift-parsing loop checks.
     let rule = make_rule(vec![CellType(1)], 10, vec![(-2, 0, ChangeValue::Literal(5))]);
-    assert!(serialize_add_rule(&rule).is_err(), "first change dx=-2 (0xFE) collides with SHIFT_FLAG and must be rejected");
+    assert!(
+        serialize_add_rule(&rule).is_err(),
+        "first change dx=-2 (0xFE) collides with SHIFT_FLAG and must be rejected"
+    );
 
     // Same for dx=-3 (0xFD), colliding with SHIFT_EXT_FLAG.
     let rule2 = make_rule(vec![CellType(1)], 10, vec![(-3, 0, ChangeValue::Literal(5))]);
-    assert!(serialize_add_rule(&rule2).is_err(), "first change dx=-3 (0xFD) collides with SHIFT_EXT_FLAG and must be rejected");
+    assert!(
+        serialize_add_rule(&rule2).is_err(),
+        "first change dx=-3 (0xFD) collides with SHIFT_EXT_FLAG and must be rejected"
+    );
 }
 
 /// `ChangeValue::Add`/`Sub` — вне подмножества протокола (см.
@@ -941,11 +1182,33 @@ fn test_serializer_rejects_first_change_colliding_with_shift_flags() {
 #[test]
 fn test_serializer_rejects_arithmetic_change() {
     use crate::types::ChangeValue;
-    let rule_add = make_rule(vec![CellType(1)], 10, vec![(0, 0, ChangeValue::Add(Box::new(ChangeValue::Ref(0)), Box::new(ChangeValue::Literal(1))))]);
-    assert!(serialize_add_rule(&rule_add).is_err(), "ChangeValue::Add must be rejected -- the protocol has no byte encoding for it");
+    let rule_add = make_rule(
+        vec![CellType(1)],
+        10,
+        vec![(
+            0,
+            0,
+            ChangeValue::Add(Box::new(ChangeValue::Ref(0)), Box::new(ChangeValue::Literal(1))),
+        )],
+    );
+    assert!(
+        serialize_add_rule(&rule_add).is_err(),
+        "ChangeValue::Add must be rejected -- the protocol has no byte encoding for it"
+    );
 
-    let rule_sub = make_rule(vec![CellType(1)], 10, vec![(0, 0, ChangeValue::Sub(Box::new(ChangeValue::Literal(5)), Box::new(ChangeValue::Ref(0))))]);
-    assert!(serialize_add_rule(&rule_sub).is_err(), "ChangeValue::Sub must be rejected -- same reason as Add");
+    let rule_sub = make_rule(
+        vec![CellType(1)],
+        10,
+        vec![(
+            0,
+            0,
+            ChangeValue::Sub(Box::new(ChangeValue::Literal(5)), Box::new(ChangeValue::Ref(0))),
+        )],
+    );
+    assert!(
+        serialize_add_rule(&rule_sub).is_err(),
+        "ChangeValue::Sub must be rejected -- same reason as Add"
+    );
 }
 
 #[test]
@@ -983,15 +1246,29 @@ fn test_add_rule_extended_end_to_end_through_self_modification_pipeline() {
         priority: 12,
         min_age: 0,
         overflow: Default::default(),
-        cam: Some(crate::types::CamSearch { radius: 2, target_type: CellType(3) }),
+        cam: Some(crate::types::CamSearch {
+            radius: 2,
+            target_type: CellType(3),
+        }),
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let packet_bytes = serialize_add_rule(&rule).unwrap();
 
     if let Some(buf) = grid.get_boundary_mut(0, 0) {
         for &b in &packet_bytes {
-            buf.enqueue(0, Cell { value: CellValue(CellType(b)), born_at: 0 });
+            buf.enqueue(
+                0,
+                Cell {
+                    value: CellValue(CellType(b)),
+                    born_at: 0,
+                },
+            );
         }
     }
 
@@ -1003,6 +1280,64 @@ fn test_add_rule_extended_end_to_end_through_self_modification_pipeline() {
     }
 
     let idx = store.get_index();
-    let received = idx.get(&CellType(6)).and_then(|rules| rules.first()).expect("received rule must be indexed under its head type");
-    assert_eq!(received.cam, Some(crate::types::CamSearch { radius: 2, target_type: CellType(3) }), "cam must survive the full boundary-buffer -> RuleStore pipeline, not just direct deserialize_packet calls");
+    let received = idx
+        .get(&CellType(6))
+        .and_then(|rules| rules.first())
+        .expect("received rule must be indexed under its head type");
+    assert_eq!(
+        received.cam,
+        Some(crate::types::CamSearch {
+            radius: 2,
+            target_type: CellType(3)
+        }),
+        "cam must survive the full boundary-buffer -> RuleStore pipeline, not just direct deserialize_packet calls"
+    );
+}
+
+// ============================================================================
+// Адверсариальная проверка: `deserialize_packet`/`drain_rule_channel`
+// разбирают байты, которые в реальном сценарии (канал 0 = ввод от ВНЕШНЕГО
+// источника, не обязательно доверенного) могут быть чем угодно. Найденный
+// в этой же сессии баг с `ChunkStorage` (см. `CHANGELOG.md`) показал, что
+// "должно быть безопасно по построению" стоит проверять конструктивно, а
+// не только по чтению кода — здесь то же самое, но через `proptest`
+// вместо одной руками собранной адверсариальной клетки.
+// ============================================================================
+
+use proptest::prelude::*;
+
+proptest! {
+    /// `deserialize_packet` обязана НИКОГДА не паниковать, какие бы байты
+    /// ей ни дали, — только `Ok(RuleOp)` или `Err(String)`. Это низкоуровневый
+    /// парсер потенциально недоверенного канального ввода (см. `CellariaError::Protocol`
+    /// в спецификации), не внутренняя функция с доверенными вызывающими.
+    #[test]
+    fn prop_deserialize_packet_never_panics(data in proptest::collection::vec(any::<u8>(), 0..128)) {
+        let _ = deserialize_packet(&data);
+    }
+
+    /// Тот же инвариант, но через ПОЛНЫЙ публичный путь (не напрямую
+    /// внутреннюю `deserialize_packet`): произвольные байты кладутся в
+    /// канал 0 boundary-буфера, как это сделал бы реальный внешний
+    /// источник ввода, и прогоняются через `RuleStore::drain_rule_channel`
+    /// -- включая `find_terminator`'s накопление в `accum_buffers` и
+    /// `MAX_BUFFER_SIZE`'s гейт переполнения, которые `deserialize_packet`
+    /// в одиночку не задействует.
+    #[test]
+    fn prop_drain_rule_channel_never_panics_on_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
+        let mut grid = make_grid_from_vec(4, 4);
+        grid.set_boundary(0, 0, BoundaryBuffer { direction: "output".to_string(), ..Default::default() });
+        if let Some(buf) = grid.get_boundary_mut(0, 0) {
+            for &b in &bytes {
+                buf.enqueue(0, Cell { value: CellValue(CellType(b)), born_at: 0 });
+            }
+        }
+        let mut store = RuleStore::new();
+        let ops = store.drain_rule_channel(&mut grid);
+        // Дошедшие Ok-операции обязаны тоже безопасно применяться -- `apply`
+        // на мусорных, но структурно валидных операциях не должен паниковать.
+        for op in ops {
+            store.apply(op);
+        }
+    }
 }

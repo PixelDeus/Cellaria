@@ -20,7 +20,14 @@ pub fn bench_tm(c: &mut Criterion) {
     let raw_rules = helpers::turing_rules(100);
     let rule_index = helpers::make_rule_index(raw_rules);
     let mut grid = helpers::make_grid(3, 1);
-    grid.set_cell(1, 0, Cell { value: CellValue(CellType(0)), born_at: 0 });
+    grid.set_cell(
+        1,
+        0,
+        Cell {
+            value: CellValue(CellType(0)),
+            born_at: 0,
+        },
+    );
 
     c.bench_function("tm_100", |b| {
         b.iter(|| {
@@ -35,7 +42,14 @@ pub fn bench_tag(c: &mut Criterion) {
     let rule_index = helpers::make_rule_index(raw_rules);
     let mut grid = helpers::make_grid(len + 2, 1);
     for i in 0..len {
-        grid.set_cell(i, 0, Cell { value: CellValue(CellType(i as u8 % 4)), born_at: 0 });
+        grid.set_cell(
+            i,
+            0,
+            Cell {
+                value: CellValue(CellType(i as u8 % 4)),
+                born_at: 0,
+            },
+        );
     }
 
     c.bench_function("tag_20", |b| {
@@ -58,13 +72,25 @@ pub fn bench_conflict_free(c: &mut Criterion) {
         overflow: Default::default(),
         cam: None,
         tie_break: 0,
-        starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+        starvation_after: None,
+        feedback: None,
+        recursion: None,
+        memory: None,
+        max_activations: None,
+        cross_layer_reads: Vec::new(),
     };
     let rules = vec![rule; width];
     let rule_index = helpers::make_rule_index(rules);
     let mut grid = helpers::make_grid(width, 1);
     for x in 0..width {
-        grid.set_cell(x, 0, Cell { value: CellValue(CellType(1)), born_at: 0 });
+        grid.set_cell(
+            x,
+            0,
+            Cell {
+                value: CellValue(CellType(1)),
+                born_at: 0,
+            },
+        );
     }
 
     c.bench_function("conflict_free_32", |b| {
@@ -80,7 +106,14 @@ pub fn bench_worst_case(c: &mut Criterion) {
         let raw_rules = helpers::priority_conflict_rules(m);
         let rule_index = helpers::make_rule_index(raw_rules);
         let mut grid = helpers::make_grid(1, 1);
-        grid.set_cell(0, 0, Cell { value: CellValue(CellType(1)), born_at: 0 });
+        grid.set_cell(
+            0,
+            0,
+            Cell {
+                value: CellValue(CellType(1)),
+                born_at: 0,
+            },
+        );
 
         group.bench_function(format!("M_{}", m), |b| {
             b.iter(|| {

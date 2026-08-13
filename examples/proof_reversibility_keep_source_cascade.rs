@@ -74,7 +74,12 @@ fn emit_rule_front_gated(direction: Direction) -> HashMap<CellType, Vec<Rule>> {
         vec![Rule {
             id: vec![],
             pattern: vec![(0, 0, CellType(SRC)), (STEPS, 0, CellType(0))],
-            shifts: vec![vec![ShiftSpec { direction, steps: STEPS as u16, broadcast: false, keep_source: true }]],
+            shifts: vec![vec![ShiftSpec {
+                direction,
+                steps: STEPS as u16,
+                broadcast: false,
+                keep_source: true,
+            }]],
             changes: vec![],
             active_only: false,
             priority: 10,
@@ -85,7 +90,9 @@ fn emit_rule_front_gated(direction: Direction) -> HashMap<CellType, Vec<Rule>> {
             starvation_after: None,
             feedback: None,
             recursion: None,
-            memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
     idx
@@ -113,7 +120,9 @@ fn plain_eraser_rule() -> HashMap<CellType, Vec<Rule>> {
             starvation_after: None,
             feedback: None,
             recursion: None,
-            memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
     idx
@@ -121,9 +130,23 @@ fn plain_eraser_rule() -> HashMap<CellType, Vec<Rule>> {
 
 fn build_grid(src_x: usize, decoy_x: Option<usize>) -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
-    grid.set_cell(src_x, 0, Cell { value: CellValue(CellType(SRC)), born_at: 0 });
+    grid.set_cell(
+        src_x,
+        0,
+        Cell {
+            value: CellValue(CellType(SRC)),
+            born_at: 0,
+        },
+    );
     if let Some(dx) = decoy_x {
-        grid.set_cell(dx, 0, Cell { value: CellValue(CellType(DECOY)), born_at: 0 });
+        grid.set_cell(
+            dx,
+            0,
+            Cell {
+                value: CellValue(CellType(DECOY)),
+                born_at: 0,
+            },
+        );
     }
     grid
 }
@@ -132,24 +155,39 @@ fn grid_from_snapshot(snap: &[u8]) -> Grid<VecStorage> {
     let mut g = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
     for (x, &v) in snap.iter().enumerate() {
         if v != 0 {
-            g.set_cell(x, 0, Cell { value: CellValue(CellType(v)), born_at: 0 });
+            g.set_cell(
+                x,
+                0,
+                Cell {
+                    value: CellValue(CellType(v)),
+                    born_at: 0,
+                },
+            );
         }
     }
     g
 }
 
 fn snapshot(engine: &Engine<VecStorage>) -> Vec<u8> {
-    (0..WIDTH).map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+    (0..WIDTH)
+        .map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+        .collect()
 }
 
 fn occupied_src(snap: &[u8]) -> Vec<usize> {
-    snap.iter().enumerate().filter(|&(_, &v)| v == SRC).map(|(x, _)| x).collect()
+    snap.iter()
+        .enumerate()
+        .filter(|&(_, &v)| v == SRC)
+        .map(|(x, _)| x)
+        .collect()
 }
 
 fn main() {
     let initial_snapshot: Vec<u8> = {
         let g = build_grid(SOURCE_X, Some(DECOY_X));
-        (0..WIDTH).map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+        (0..WIDTH)
+            .map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+            .collect()
     };
     println!("Исходная решётка: {:?}", initial_snapshot);
     println!(
@@ -158,7 +196,10 @@ fn main() {
     );
 
     // ── Прямой прогон: каскад РАСТЁТ ровно на 1 клетку за тик ───────────────
-    let mut forward = Engine::new(build_grid(SOURCE_X, Some(DECOY_X)), emit_rule_front_gated(Direction::Right));
+    let mut forward = Engine::new(
+        build_grid(SOURCE_X, Some(DECOY_X)),
+        emit_rule_front_gated(Direction::Right),
+    );
     let mut wave_history: Vec<Vec<usize>> = vec![occupied_src(&initial_snapshot)];
     for t in 1..=TICKS {
         forward.run_tick();
@@ -169,12 +210,18 @@ fn main() {
     let final_snapshot = snapshot(&forward);
     let final_occ = occupied_src(&final_snapshot);
     println!("\nИтоговая решётка после {TICKS} тиков: {:?}", final_snapshot);
-    assert_eq!(final_snapshot[DECOY_X], DECOY, "декой обязан пережить прямой прогон — путь каскада вправо его не задевает");
+    assert_eq!(
+        final_snapshot[DECOY_X], DECOY,
+        "декой обязан пережить прямой прогон — путь каскада вправо его не задевает"
+    );
 
     // Каскад обязан вырасти РОВНО до TICKS+1 клеток (одна новая клетка за
     // тик, ни больше, ни меньше — фронт-гейт гарантирует ровно 1 матч/тик).
     let expected_occ: Vec<usize> = (SOURCE_X..=SOURCE_X + TICKS as usize).collect();
-    assert_eq!(final_occ, expected_occ, "фронт-гейт обязан давать ровно 1 новую клетку за тик, без пропусков и без застревания");
+    assert_eq!(
+        final_occ, expected_occ,
+        "фронт-гейт обязан давать ровно 1 новую клетку за тик, без пропусков и без застревания"
+    );
     println!(
         "\nКаскад РЕАЛЬНО растёт: за {TICKS} тиков популяция SRC выросла с 1 до {} клеток: {:?} — сплошная линия, \
 ровно по одной новой клетке за тик. Это НЕ то же самое, что \"наивный\" вариант правила (`id: [SRC]`, без \
@@ -195,12 +242,18 @@ age заново — самоподдерживающийся тупик. Фик
     // ── A) Наивный R⁻¹ (Теорема 9): тот же набор правил, направление
     // развёрнуто, TICKS тиков — ожидаемо НЕ восстанавливает (растёт в другую
     // сторону, а не схлопывается) ──────────────────────────────────────────
-    let mut naive_reverse = Engine::new(grid_from_snapshot(&final_snapshot), emit_rule_front_gated(reverse_direction(Direction::Right)));
+    let mut naive_reverse = Engine::new(
+        grid_from_snapshot(&final_snapshot),
+        emit_rule_front_gated(reverse_direction(Direction::Right)),
+    );
     for _ in 1..=TICKS {
         naive_reverse.run_tick();
     }
     let naive_snapshot = snapshot(&naive_reverse);
-    assert_ne!(naive_snapshot, initial_snapshot, "наивный реверс не должен был случайно восстановить решётку — иначе конструкцию нужно пересмотреть");
+    assert_ne!(
+        naive_snapshot, initial_snapshot,
+        "наивный реверс не должен был случайно восстановить решётку — иначе конструкцию нужно пересмотреть"
+    );
     println!(
         "\n[A: наивный реверс] После {TICKS} тиков: {:?} — НЕ совпадает с исходной, как и ожидалось (тот же \
 фронт-гейт правил, но развёрнутое направление, растит НОВУЮ цепочку влево от левого конца старой, а не \
@@ -216,9 +269,20 @@ age заново — самоподдерживающийся тупик. Фик
     println!("\n[C: плоский ластик, 1 тик] После 1 тика: {:?}", plain_snapshot);
     println!(
         "[C] Восстановленная решётка совпадает с исходной клетка в клетку: {}",
-        if plain_snapshot == initial_snapshot { "ДА" } else { "НЕТ" }
+        if plain_snapshot == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
-    println!("[C] Декой на x={DECOY_X} пережил: {}", if plain_snapshot[DECOY_X] == DECOY { "ДА" } else { "НЕТ" });
+    println!(
+        "[C] Декой на x={DECOY_X} пережил: {}",
+        if plain_snapshot[DECOY_X] == DECOY {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
+    );
     assert_eq!(
         plain_snapshot, initial_snapshot,
         "плоский ластик (без фронт-детектора), применённый ОДИН раз, обязан восстановить решётку целиком \

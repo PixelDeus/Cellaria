@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use cellaria::engine::run_tick;
-use cellaria::types::{Cell, CellType, CellValue, ChangeValue, Rule};
+use cellaria::types::{build_rule_index, Cell, CellType, CellValue, ChangeValue, Rule};
 use cellaria::{Grid, VecStorage};
 
 const ALIVE: u8 = 1;
@@ -44,11 +44,7 @@ const DEAD: u8 = 0;
 
 /// (dx, dy) всех 8 соседей в фиксированном порядке — важно для построения
 /// битовой маски конфигурации.
-const NEIGHBOR_OFFSETS: [(i8, i8); 8] = [
-    (-1, -1), (0, -1), (1, -1),
-    (-1, 0), (1, 0),
-    (-1, 1), (0, 1), (1, 1),
-];
+const NEIGHBOR_OFFSETS: [(i8, i8); 8] = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
 
 /// Построить полный набор правил GoL: по одному правилу на каждую
 /// конфигурацию 8 соседей (256 вариантов), для которой стандартное
@@ -83,19 +79,16 @@ fn build_gol_rules() -> Vec<Rule> {
                 overflow: Default::default(),
                 cam: None,
                 tie_break: 0,
-                starvation_after: None, feedback: None, recursion: None, memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                starvation_after: None,
+                feedback: None,
+                recursion: None,
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             });
         }
     }
     rules
-}
-
-fn build_rule_index(rules: Vec<Rule>) -> HashMap<CellType, Vec<Rule>> {
-    let mut index: HashMap<CellType, Vec<Rule>> = HashMap::new();
-    for rule in rules {
-        index.entry(rule.id[0]).or_default().push(rule);
-    }
-    index
 }
 
 // ============================================================================
@@ -112,7 +105,9 @@ fn seeded_fill(n: usize, density_percent: u64) -> Vec<u8> {
         state ^= state << 17;
         state
     };
-    (0..n * n).map(|_| if next() % 100 < density_percent { ALIVE } else { DEAD }).collect()
+    (0..n * n)
+        .map(|_| if next() % 100 < density_percent { ALIVE } else { DEAD })
+        .collect()
 }
 
 // ============================================================================
@@ -126,7 +121,14 @@ fn run_cellaria_gol_step(n: usize, seed: &[u8]) -> (u128, Vec<u8>) {
         for x in 0..n {
             let v = seed[y * n + x];
             if v != DEAD {
-                grid.set_cell(x, y, Cell { value: CellValue(CellType(v)), born_at: 0 });
+                grid.set_cell(
+                    x,
+                    y,
+                    Cell {
+                        value: CellValue(CellType(v)),
+                        born_at: 0,
+                    },
+                );
             }
         }
     }
@@ -139,7 +141,7 @@ fn run_cellaria_gol_step(n: usize, seed: &[u8]) -> (u128, Vec<u8>) {
     let mut result = vec![DEAD; n * n];
     for y in 0..n {
         for x in 0..n {
-            result[y * n + x] = grid.get_cell(x, y).map_or(DEAD, |c| c.value.0.0);
+            result[y * n + x] = grid.get_cell(x, y).map_or(DEAD, |c| c.value.0 .0);
         }
     }
     (elapsed, result)
@@ -174,7 +176,14 @@ fn build_gpu_engine(n: usize, seed: &[u8], rule_index: &HashMap<CellType, Vec<Ru
         for x in 0..n {
             let v = seed[y * n + x];
             if v != DEAD {
-                initial.push((x, y, Cell { value: CellValue(CellType(v)), born_at: 0 }));
+                initial.push((
+                    x,
+                    y,
+                    Cell {
+                        value: CellValue(CellType(v)),
+                        born_at: 0,
+                    },
+                ));
             }
         }
     }
@@ -251,19 +260,30 @@ fn main() {
         let seed0 = seeded_fill(n0, density);
         let (_, c_res) = run_cellaria_gol_step(n0, &seed0);
         let (_, n_res) = run_native_gol_step(n0, &seed0);
-        assert_eq!(c_res, n_res, "Cellaria и нативная реализация должны давать БИТ В БИТ одинаковый результат (плотность {}%)", density);
+        assert_eq!(
+            c_res, n_res,
+            "Cellaria и нативная реализация должны давать БИТ В БИТ одинаковый результат (плотность {}%)",
+            density
+        );
 
         #[cfg(feature = "gpu")]
         {
             let (_, g_res) = run_gpu_gol_step(n0, &seed0, &gpu_rule_index);
-            assert_eq!(c_res, g_res, "GPU и CPU-эталон должны давать БИТ В БИТ одинаковый результат (плотность {}%)", density);
+            assert_eq!(
+                c_res, g_res,
+                "GPU и CPU-эталон должны давать БИТ В БИТ одинаковый результат (плотность {}%)",
+                density
+            );
         }
     }
     println!("Корректность (N=20, плотности 10/30/50%): результаты идентичны побитово ✓\n");
 
     #[cfg(not(feature = "gpu"))]
     {
-        println!("{:>10} | {:>18} | {:>18} | {:>12}", "N (сторона)", "Cellaria (кл/с)", "Native (кл/с)", "во сколько раз");
+        println!(
+            "{:>10} | {:>18} | {:>18} | {:>12}",
+            "N (сторона)", "Cellaria (кл/с)", "Native (кл/с)", "во сколько раз"
+        );
         println!("{}", "-".repeat(68));
     }
     #[cfg(feature = "gpu")]

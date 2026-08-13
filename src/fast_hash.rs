@@ -37,15 +37,27 @@ impl Hasher for FxHasher {
     #[inline]
     fn write(&mut self, mut bytes: &[u8]) {
         while bytes.len() >= 8 {
-            self.add_to_hash(u64::from_ne_bytes(bytes[..8].try_into().unwrap()));
+            self.add_to_hash(u64::from_ne_bytes(
+                bytes[..8]
+                    .try_into()
+                    .expect("slice was just checked to have length >= 8"),
+            ));
             bytes = &bytes[8..];
         }
         if bytes.len() >= 4 {
-            self.add_to_hash(u32::from_ne_bytes(bytes[..4].try_into().unwrap()) as u64);
+            self.add_to_hash(u32::from_ne_bytes(
+                bytes[..4]
+                    .try_into()
+                    .expect("slice was just checked to have length >= 4"),
+            ) as u64);
             bytes = &bytes[4..];
         }
         if bytes.len() >= 2 {
-            self.add_to_hash(u16::from_ne_bytes(bytes[..2].try_into().unwrap()) as u64);
+            self.add_to_hash(u16::from_ne_bytes(
+                bytes[..2]
+                    .try_into()
+                    .expect("slice was just checked to have length >= 2"),
+            ) as u64);
             bytes = &bytes[2..];
         }
         if let Some(&b) = bytes.first() {

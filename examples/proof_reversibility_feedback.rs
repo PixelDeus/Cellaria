@@ -81,9 +81,14 @@ fn feedback_rules(normal: Direction, new_direction: Direction) -> HashMap<CellTy
             cam: None,
             tie_break: 0,
             starvation_after: None,
-            feedback: Some(FeedbackSpec { timeout: TIMEOUT, new_direction }),
+            feedback: Some(FeedbackSpec {
+                timeout: TIMEOUT,
+                new_direction,
+            }),
             recursion: None,
-            memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+            memory: None,
+            max_activations: None,
+            cross_layer_reads: Vec::new(),
         }],
     );
     idx
@@ -91,9 +96,23 @@ fn feedback_rules(normal: Direction, new_direction: Direction) -> HashMap<CellTy
 
 fn build_grid(token_x: usize, decoy_x: Option<usize>) -> Grid<VecStorage> {
     let mut grid = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
-    grid.set_cell(token_x, 0, Cell { value: CellValue(CellType(TOKEN)), born_at: 0 });
+    grid.set_cell(
+        token_x,
+        0,
+        Cell {
+            value: CellValue(CellType(TOKEN)),
+            born_at: 0,
+        },
+    );
     if let Some(dx) = decoy_x {
-        grid.set_cell(dx, 0, Cell { value: CellValue(CellType(DECOY)), born_at: 0 });
+        grid.set_cell(
+            dx,
+            0,
+            Cell {
+                value: CellValue(CellType(DECOY)),
+                born_at: 0,
+            },
+        );
     }
     grid
 }
@@ -102,14 +121,23 @@ fn grid_from_snapshot(snap: &[u8]) -> Grid<VecStorage> {
     let mut g = Grid::new(VecStorage::new(WIDTH, 1), Default::default());
     for (x, &v) in snap.iter().enumerate() {
         if v != 0 {
-            g.set_cell(x, 0, Cell { value: CellValue(CellType(v)), born_at: 0 });
+            g.set_cell(
+                x,
+                0,
+                Cell {
+                    value: CellValue(CellType(v)),
+                    born_at: 0,
+                },
+            );
         }
     }
     g
 }
 
 fn snapshot(engine: &Engine<VecStorage>) -> Vec<u8> {
-    (0..WIDTH).map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+    (0..WIDTH)
+        .map(|x| engine.grid().get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+        .collect()
 }
 
 fn token_x_of(snap: &[u8]) -> Option<usize> {
@@ -119,7 +147,9 @@ fn token_x_of(snap: &[u8]) -> Option<usize> {
 fn main() {
     let initial_snapshot: Vec<u8> = {
         let g = build_grid(START_X, Some(DECOY_X));
-        (0..WIDTH).map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0)).collect()
+        (0..WIDTH)
+            .map(|x| g.get_cell(x, 0).map(|c| c.value.0 .0).unwrap_or(0))
+            .collect()
     };
     println!("Исходная решётка:  {:?}", initial_snapshot);
     println!(
@@ -134,7 +164,10 @@ fn main() {
     // `feedback_counters`) — из последовательности позиций ниже выводится,
     // каким направлением реально шёл КАЖДЫЙ тик, без подглядывания в
     // внутренний счётчик ─────────────────────────────────────────────────
-    let mut forward = Engine::new(build_grid(START_X, Some(DECOY_X)), feedback_rules(Direction::Right, Direction::Left));
+    let mut forward = Engine::new(
+        build_grid(START_X, Some(DECOY_X)),
+        feedback_rules(Direction::Right, Direction::Left),
+    );
     let mut positions: Vec<usize> = vec![START_X];
     for _ in 1..=TICKS {
         forward.run_tick();
@@ -146,7 +179,10 @@ fn main() {
     println!(
         "Токен: x={START_X} -> x={final_token_x} (путь прямого прогона: x∈[15,25], декой на x={DECOY_X} НЕ затронут — вне этого диапазона)."
     );
-    assert_eq!(final_snapshot[DECOY_X], DECOY, "декой обязан пережить прямой прогон нетронутым — прямой путь токена никогда не заходит на x=12");
+    assert_eq!(
+        final_snapshot[DECOY_X], DECOY,
+        "декой обязан пережить прямой прогон нетронутым — прямой путь токена никогда не заходит на x=12"
+    );
 
     // ── Наивный R⁻¹: направления развёрнуты (тот же приём, что и в
     // proof_reversibility.rs), timeout тот же, свежий Engine (счётчик
@@ -164,11 +200,19 @@ fn main() {
     println!(
         "Токен вернулся на исходный x={START_X}: {} (позиция токена — это ЧИСТОЕ 1D-перемещение, сумма шагов \
 коммутативна независимо от порядка направлений, поэтому чистая позиция может случайно совпасть)",
-        match recovered_token_x { Some(x) if x == START_X => "ДА".to_string(), Some(x) => format!("НЕТ (x={x})"), None => "НЕТ (токен потерян)".to_string() }
+        match recovered_token_x {
+            Some(x) if x == START_X => "ДА".to_string(),
+            Some(x) => format!("НЕТ (x={x})"),
+            None => "НЕТ (токен потерян)".to_string(),
+        }
     );
     println!(
         "Декой на x={DECOY_X} пережил обратный прогон: {} — {}",
-        if recovered_snapshot[DECOY_X] == DECOY { "ДА" } else { "НЕТ" },
+        if recovered_snapshot[DECOY_X] == DECOY {
+            "ДА"
+        } else {
+            "НЕТ"
+        },
         if recovered_snapshot[DECOY_X] == DECOY {
             "неожиданно — обратный путь не должен был пересечь x=12 в этом прогоне"
         } else {
@@ -180,7 +224,11 @@ fn main() {
     );
     println!(
         "\nВосстановленная решётка совпадает с исходной клетка в клетку: {}",
-        if recovered_snapshot == initial_snapshot { "ДА" } else { "НЕТ" }
+        if recovered_snapshot == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
     assert_ne!(
         recovered_snapshot, initial_snapshot,
@@ -228,7 +276,9 @@ fn main() {
                 starvation_after: None,
                 feedback: None,
                 recursion: None,
-                memory: None, max_activations: None, cross_layer_reads: Vec::new(),
+                memory: None,
+                max_activations: None,
+                cross_layer_reads: Vec::new(),
             }],
         );
         idx
@@ -237,15 +287,29 @@ fn main() {
     let mut smart_snapshot = final_snapshot.clone();
     for i in (1..=TICKS as usize).rev() {
         let forward_dx = positions[i] as i32 - positions[i - 1] as i32;
-        let forward_direction = if forward_dx > 0 { Direction::Right } else { Direction::Left };
-        let mut step_engine = Engine::new(grid_from_snapshot(&smart_snapshot), single_direction_rule(reverse_direction(forward_direction)));
+        let forward_direction = if forward_dx > 0 {
+            Direction::Right
+        } else {
+            Direction::Left
+        };
+        let mut step_engine = Engine::new(
+            grid_from_snapshot(&smart_snapshot),
+            single_direction_rule(reverse_direction(forward_direction)),
+        );
         step_engine.run_tick();
         smart_snapshot = snapshot(&step_engine);
     }
-    println!("\nПосле {TICKS} тиков УМНОГО реверса (записанная история направлений, без feedback в обратном проходе): {:?}", smart_snapshot);
+    println!(
+        "\nПосле {TICKS} тиков УМНОГО реверса (записанная история направлений, без feedback в обратном проходе): {:?}",
+        smart_snapshot
+    );
     println!(
         "Восстановленная решётка совпадает с исходной клетка в клетку: {}",
-        if smart_snapshot == initial_snapshot { "ДА" } else { "НЕТ" }
+        if smart_snapshot == initial_snapshot {
+            "ДА"
+        } else {
+            "НЕТ"
+        }
     );
     assert_eq!(
         smart_snapshot, initial_snapshot,

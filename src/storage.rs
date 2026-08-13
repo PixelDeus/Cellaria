@@ -7,16 +7,17 @@ use serde::{Deserialize, Serialize};
 /// Позволяет реализовать как конечную решётку фиксированного размера
 /// ([`VecStorage`]), так и бесконечную, разбитую на чанки ([`ChunkStorage`]).
 pub trait GridStorage: Sync {
-    /// Получить ссылку на ячейку по координатам.
     fn get(&self, x: usize, y: usize) -> Option<&Cell>;
     /// Установить значение ячейки по координатам.
     ///
     /// Единственный способ гарантировать корректную синхронизацию
     /// `non_default_count` в [`ChunkStorage`].
     fn set(&mut self, x: usize, y: usize, cell: Cell);
-    /// Ширина решётки. Для бесконечной — [`usize::MAX`].
+    /// Ширина решётки. Для бесконечной — [`u32::MAX`] (не [`usize::MAX`] —
+    /// см. doc-комментарий [`ChunkStorage`]'s `width()` про то, почему
+    /// координаты в реальности ограничены `u32`, а не полным `usize`).
     fn width(&self) -> usize;
-    /// Высота решётки. Для бесконечной — [`usize::MAX`].
+    /// Высота решётки. Для бесконечной — [`u32::MAX`].
     fn height(&self) -> usize;
     /// Итератор по координатам активных (не-дефолтных) ячеек.
     fn active_cells(&self) -> Box<dyn Iterator<Item = (usize, usize)> + '_>;
@@ -32,11 +33,8 @@ pub trait GridStorage: Sync {
 /// Индексация: `index = y * width + x`.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct VecStorage {
-    /// Плоский вектор всех ячеек решётки.
     pub cells: Vec<Cell>,
-    /// Ширина решётки.
     pub width: usize,
-    /// Высота решётки.
     pub height: usize,
 }
 
@@ -47,7 +45,6 @@ impl Default for VecStorage {
 }
 
 impl VecStorage {
-    /// Создать новую решётку заданного размера со значениями по умолчанию.
     pub fn new(width: usize, height: usize) -> Self {
         Self {
             cells: vec![Cell::default(); width * height],
@@ -86,20 +83,13 @@ impl GridStorage for VecStorage {
 
     fn active_cells(&self) -> Box<dyn Iterator<Item = (usize, usize)> + '_> {
         let default = Cell::default();
-        Box::new(
-            self.cells
-                .iter()
-                .enumerate()
-                .filter_map(move |(idx, cell)| {
-                    if cell.value != default.value
-                        || cell.born_at != default.born_at
-                    {
-                        Some((idx % self.width, idx / self.width))
-                    } else {
-                        None
-                    }
-                }),
-        )
+        Box::new(self.cells.iter().enumerate().filter_map(move |(idx, cell)| {
+            if cell.value != default.value || cell.born_at != default.born_at {
+                Some((idx % self.width, idx / self.width))
+            } else {
+                None
+            }
+        }))
     }
 
     fn bounds(&self) -> Option<(usize, usize)> {
@@ -126,7 +116,6 @@ struct Chunk {
 }
 
 impl Chunk {
-    /// Создать новый пустой чанк (все ячейки `None`).
     fn new(chunk_size: usize) -> Self {
         Self {
             cells: vec![None; chunk_size * chunk_size],
@@ -134,17 +123,14 @@ impl Chunk {
         }
     }
 
-    /// Преобразовать локальные координаты в индекс внутри чанка.
     fn index(lx: usize, ly: usize, chunk_size: usize) -> usize {
         ly * chunk_size + lx
     }
 
-    /// Есть ли в чанке хоть одна не-дефолтная ячейка?
     fn has_non_default(&self) -> bool {
         self.non_default_count > 0
     }
 
-    /// Проверить, является ли ячейка дефолтной.
     fn is_default(cell: &Option<Cell>) -> bool {
         match cell {
             None => true,
@@ -181,15 +167,18 @@ impl Default for ChunkStorage {
 
 impl ChunkStorage {
     /// Создать пустое хранилище с размером чанка по умолчанию
-    /// ([`DEFAULT_CHUNK_SIZE`]).
+    /// (`DEFAULT_CHUNK_SIZE`).
     pub fn new() -> Self {
         Self::with_chunk_size(DEFAULT_CHUNK_SIZE)
     }
 
     /// Как [`ChunkStorage::new`], но с явным размером чанка вместо
-    /// [`DEFAULT_CHUNK_SIZE`].
+    /// `DEFAULT_CHUNK_SIZE`.
     pub fn with_chunk_size(chunk_size: usize) -> Self {
-        assert!(chunk_size > 0, "ChunkStorage::with_chunk_size: chunk_size должен быть > 0");
+        assert!(
+            chunk_size > 0,
+            "ChunkStorage::with_chunk_size: chunk_size должен быть > 0"
+        );
         Self {
             chunks: FxHashMap::default(),
             default_cell: Cell::default(),
@@ -205,25 +194,19 @@ impl ChunkStorage {
             .map(|(&coords, _)| coords)
     }
 
-    /// Преобразовать глобальные координаты в координаты чанка.
     fn chunk_coords(&self, x: usize, y: usize) -> (usize, usize) {
         (x / self.chunk_size, y / self.chunk_size)
     }
 
-    /// Преобразовать глобальные координаты в локальные внутри чанка.
     fn local_coords(&self, x: usize, y: usize) -> (usize, usize) {
         (x % self.chunk_size, y % self.chunk_size)
     }
 
-    /// Получить или создать чанк по координатам.
     fn ensure_chunk(&mut self, cx: usize, cy: usize) -> &mut Chunk {
         let chunk_size = self.chunk_size;
         self.chunks.entry((cx, cy)).or_insert_with(|| Chunk::new(chunk_size))
     }
 
-    /// Заменить содержимое ячейки, проверяя, нужно ли обновить счётчик.
-    ///
-    /// Возвращает старое значение ячейки (опционально).
     fn replace_cell(&mut self, x: usize, y: usize, cell: Cell) -> Option<Cell> {
         let (cx, cy) = self.chunk_coords(x, y);
         let (lx, ly) = self.local_coords(x, y);
@@ -274,32 +257,41 @@ impl GridStorage for ChunkStorage {
         self.replace_cell(x, y, cell);
     }
 
+    /// РЕАЛЬНАЯ ПРОБЛЕМА, найденная целенаправленной попыткой сломать
+    /// движок: раньше здесь стоял `usize::MAX`, но `RuleMatch::x`/`y` —
+    /// `u32` (см. её doc-комментарий про экономию памяти на hot path), а
+    /// координата строится через `cx as u32` в `matcher.rs` без проверки
+    /// диапазона. Для координаты вида `k·2³² + r` (`k ≥ 1`) это ТИХО
+    /// усекается до `r` — правило матчится на клетке за пределами
+    /// `u32::MAX`, но применяет результат по координатам СОВЕРШЕННО ДРУГОЙ,
+    /// far-меньшей клетки (молчаливая порча данных, не паника).
+    /// Воспроизведено конструктивно: клетка на `x = 2³²` получала write,
+    /// адресованный на `x = 1` вместо `x = 2³² + 1`. `u32::MAX` здесь —
+    /// честный, а не оптимистичный предел: выше него `Grid::set_cell`
+    /// теперь паникует СРАЗУ (см. её doc-комментарий), не позволяя
+    /// молчаливому усечению произойти вообще.
     fn width(&self) -> usize {
-        usize::MAX
+        u32::MAX as usize
     }
     fn height(&self) -> usize {
-        usize::MAX
+        u32::MAX as usize
     }
 
     fn active_cells(&self) -> Box<dyn Iterator<Item = (usize, usize)> + '_> {
         let default = &self.default_cell;
         let chunk_size = self.chunk_size;
         Box::new(self.chunks.iter().flat_map(move |(&(cx, cy), chunk)| {
-            chunk
-                .cells
-                .iter()
-                .enumerate()
-                .filter_map(move |(idx, cell)| {
-                    cell.as_ref().and_then(|c| {
-                        if c.value != default.value || c.born_at != default.born_at {
-                            let lx = idx % chunk_size;
-                            let ly = idx / chunk_size;
-                            Some((cx * chunk_size + lx, cy * chunk_size + ly))
-                        } else {
-                            None
-                        }
-                    })
+            chunk.cells.iter().enumerate().filter_map(move |(idx, cell)| {
+                cell.as_ref().and_then(|c| {
+                    if c.value != default.value || c.born_at != default.born_at {
+                        let lx = idx % chunk_size;
+                        let ly = idx / chunk_size;
+                        Some((cx * chunk_size + lx, cy * chunk_size + ly))
+                    } else {
+                        None
+                    }
                 })
+            })
         }))
     }
 }
@@ -307,4 +299,3 @@ impl GridStorage for ChunkStorage {
 #[cfg(test)]
 #[path = "storage_tests.rs"]
 mod tests;
-

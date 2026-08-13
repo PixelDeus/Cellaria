@@ -31,9 +31,16 @@ use std::collections::HashMap;
 /// паттерна) — и завышал число ложных конфликтов ровно для них.
 fn effective_pattern(rule: &Rule) -> Vec<(i32, i32, CellType)> {
     if !rule.pattern.is_empty() {
-        rule.pattern.iter().map(|&(dx, dy, ct)| (dx as i32, dy as i32, ct)).collect()
+        rule.pattern
+            .iter()
+            .map(|&(dx, dy, ct)| (dx as i32, dy as i32, ct))
+            .collect()
     } else {
-        rule.id.iter().enumerate().map(|(i, &ct)| (i as i32, 0i32, ct)).collect()
+        rule.id
+            .iter()
+            .enumerate()
+            .map(|(i, &ct)| (i as i32, 0i32, ct))
+            .collect()
     }
 }
 
@@ -62,7 +69,10 @@ pub struct GridContext<'a> {
 /// края, а не одну.
 fn boundary_exempt(rule: &Rule, grid: Option<&GridContext>) -> bool {
     let Some(grid) = grid else { return false };
-    rule.shifts.iter().flatten().all(|spec| edge_fully_boundary_covered(spec.direction, grid))
+    rule.shifts
+        .iter()
+        .flatten()
+        .all(|spec| edge_fully_boundary_covered(spec.direction, grid))
 }
 
 fn edge_fully_boundary_covered(direction: Direction, grid: &GridContext) -> bool {
@@ -304,7 +314,12 @@ pub fn analyze_conflicts(rule_index: &HashMap<CellType, Vec<Rule>>) -> ConflictR
         .map(|&(i, j)| {
             let (head_a, rule_idx_a) = origin_of_rule[i];
             let (head_b, rule_idx_b) = origin_of_rule[j];
-            ConflictingPair { head_a, rule_idx_a, head_b, rule_idx_b }
+            ConflictingPair {
+                head_a,
+                rule_idx_a,
+                head_b,
+                rule_idx_b,
+            }
         })
         .collect();
     ConflictReport { conflicts }
@@ -340,13 +355,11 @@ pub fn build_rule_data_cache(rule_index: &HashMap<crate::types::CellType, Vec<Ru
     cache
 }
 
-/// Получить RuleData из кэша по голове id правила и позиции в rule_index[head].
-pub fn get_rule_data<'a>(
-    cache: &'a RuleDataCache,
-    head_type: crate::types::CellType,
-    rule_idx: usize,
-) -> Option<&'a RuleData> {
-    cache[head_type.0 as usize].as_ref().and_then(|rules| rules.get(rule_idx))
+/// Получить RuleData из кэша по голове id правила и позиции в `rule_index[head]`.
+pub fn get_rule_data(cache: &RuleDataCache, head_type: crate::types::CellType, rule_idx: usize) -> Option<&RuleData> {
+    cache[head_type.0 as usize]
+        .as_ref()
+        .and_then(|rules| rules.get(rule_idx))
 }
 
 // ============================================================================
@@ -459,7 +472,9 @@ pub fn compute_rule_data(rule: &Rule) -> RuleData {
     let mut affected_cells = compute_affected_cells(rule);
     let pattern_cells: Vec<(i32, i32)> = effective_pattern(rule).iter().map(|&(dx, dy, _)| (dx, dy)).collect();
     let shift_targets = compute_shift_targets(rule);
-    let total_shift = shift_targets.iter().fold((0, 0), |(ax, ay), &(dx, dy)| (ax + dx, ay + dy));
+    let total_shift = shift_targets
+        .iter()
+        .fold((0, 0), |(ax, ay), &(dx, dy)| (ax + dx, ay + dy));
     let mut write_cells = compute_write_cells(rule, &shift_targets);
 
     // `Rule::feedback` (см. Лемму 4, `paper/paper4.md` §8, Corollary C):
@@ -733,12 +748,7 @@ fn compute_bbox(cells: &[(i32, i32)]) -> (i32, i32, i32, i32) {
 /// Возвращает true, если существует такая пара позиций на решётке,
 /// при которой оба правила могут совпасть одновременно, и их
 /// affected regions пересекаются.
-fn rules_conflict(
-    rule_i: &Rule,
-    rule_j: &Rule,
-    data_i: &RuleData,
-    data_j: &RuleData,
-) -> bool {
+fn rules_conflict(rule_i: &Rule, rule_j: &Rule, data_i: &RuleData, data_j: &RuleData) -> bool {
     let (bb_min_x_i, bb_max_x_i, bb_min_y_i, bb_max_y_i) = data_i.bbox;
     let (bb_min_x_j, bb_max_x_j, bb_min_y_j, bb_max_y_j) = data_j.bbox;
 
@@ -891,12 +901,7 @@ fn get_pattern_type(rule: &Rule, x: i32, y: i32) -> u8 {
 /// пересечение ЧТЕНИЙ (или чтения одного правила с записью другого) не
 /// может вызвать гонку — оба видят одно и то же старое состояние
 /// независимо от того, что решит арбитраж.
-fn affected_regions_overlap(
-    data_i: &RuleData,
-    data_j: &RuleData,
-    dx: i32,
-    dy: i32,
-) -> bool {
+fn affected_regions_overlap(data_i: &RuleData, data_j: &RuleData, dx: i32, dy: i32) -> bool {
     // Если bounding box'ы (по affected_cells, надмножество write_cells) не
     // пересекаются — точно не пересекаются и write_cells.
     let (bb_min_x_i, bb_max_x_i, bb_min_y_i, bb_max_y_i) = data_i.bbox;

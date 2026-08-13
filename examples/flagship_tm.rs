@@ -20,11 +20,25 @@ fn build_cellaria_tape(n: usize) -> Grid<VecStorage> {
     let storage = VecStorage::new(n + 2, 1);
     let mut grid = Grid::new(storage, Default::default());
     // Головка (тип 10) в состоянии Q0 на позиции 0.
-    grid.set_cell(0, 0, Cell { value: CellValue(CellType(10)), born_at: 0 });
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            value: CellValue(CellType(10)),
+            born_at: 0,
+        },
+    );
     // Лента: чередующиеся биты 1/2 (символы "1"/"0"), длина n.
     for i in 0..n {
         let bit = if i % 2 == 0 { 1u8 } else { 2u8 };
-        grid.set_cell(i + 1, 0, Cell { value: CellValue(CellType(bit)), born_at: 0 });
+        grid.set_cell(
+            i + 1,
+            0,
+            Cell {
+                value: CellValue(CellType(bit)),
+                born_at: 0,
+            },
+        );
     }
     grid
 }
@@ -120,14 +134,20 @@ fn run_native_tm(n: usize) -> (u128, u64) {
 
 fn main() {
     println!("Машина Тьюринга (инвертирование бит) — Cellaria vs прямой интерпретатор\n");
-    println!("{:>10} | {:>18} | {:>18} | {:>12}", "N (длина)", "Cellaria (шаг/с)", "Native (шаг/с)", "во сколько раз");
+    println!(
+        "{:>10} | {:>18} | {:>18} | {:>12}",
+        "N (длина)", "Cellaria (шаг/с)", "Native (шаг/с)", "во сколько раз"
+    );
     println!("{}", "-".repeat(68));
 
     for &n in &[10usize, 100, 1_000, 10_000, 100_000] {
         let (c_ns, c_steps) = run_cellaria_tm(n);
         // Валидация эквивалентности — ОДИН прогон, до усреднения повторами.
         let (_, n_steps_once) = run_native_tm_once(n);
-        assert_eq!(c_steps, n_steps_once, "число шагов должно совпадать — иначе машины не эквивалентны");
+        assert_eq!(
+            c_steps, n_steps_once,
+            "число шагов должно совпадать — иначе машины не эквивалентны"
+        );
 
         let (n_ns, n_steps) = run_native_tm(n);
 
